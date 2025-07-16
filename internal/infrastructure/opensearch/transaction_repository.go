@@ -90,6 +90,57 @@ func (r *TransactionRepository) Search(ctx context.Context, index string, query 
 	return results, nil
 }
 
+// SearchWithVersions searches for documents and includes version tracking information
+func (r *TransactionRepository) SearchWithVersions(ctx context.Context, index string, query map[string]any) ([]repositories.VersionedDocument, error) {
+	queryBytes, err := json.Marshal(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal query: %w", err)
+	}
+
+	req := opensearchapi.SearchRequest{
+		Index: []string{index},
+		Body:  strings.NewReader(string(queryBytes)),
+		// Note: seq_no and primary_term are included by default in OpenSearch responses
+	}
+
+	res, err := req.Do(ctx, r.client)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search with versions: %w", err)
+	}
+	defer res.Body.Close()
+
+	if res.IsError() {
+		return nil, fmt.Errorf("search with versions failed: %s", res.Status())
+	}
+
+	var response struct {
+		Hits struct {
+			Hits []struct {
+				ID          string                 `json:"_id"`
+				SeqNo       *int64                 `json:"_seq_no"`
+				PrimaryTerm *int64                 `json:"_primary_term"`
+				Source      map[string]interface{} `json:"_source"`
+			} `json:"hits"`
+		} `json:"hits"`
+	}
+
+	if err := json.NewDecoder(res.Body).Decode(&response); err != nil {
+		return nil, fmt.Errorf("failed to decode search response with versions: %w", err)
+	}
+
+	var results []repositories.VersionedDocument
+	for _, hit := range response.Hits.Hits {
+		results = append(results, repositories.VersionedDocument{
+			ID:          hit.ID,
+			SeqNo:       hit.SeqNo,
+			PrimaryTerm: hit.PrimaryTerm,
+			Source:      hit.Source,
+		})
+	}
+
+	return results, nil
+}
+
 // Update updates a document in OpenSearch
 func (r *TransactionRepository) Update(ctx context.Context, index string, docID string, body io.Reader) error {
 	req := opensearchapi.UpdateRequest{
@@ -110,6 +161,55 @@ func (r *TransactionRepository) Update(ctx context.Context, index string, docID 
 	}
 
 	log.Printf("Updated document %s in index %s", docID, index)
+	return nil
+}
+
+// UpdateWithOptimisticLock updates a document with optimistic concurrency control
+func (r *TransactionRepository) UpdateWithOptimisticLock(ctx context.Context, index, docID string, body io.Reader, params *repositories.OptimisticUpdateParams) error {
+	req := opensearchapi.UpdateRequest{
+		Index:      index,
+		DocumentID: docID,
+		Body:       body,
+		Refresh:    "true",
+	}
+
+	// Add optimistic concurrency parameters if provided
+	if params != nil {
+		if params.SeqNo != nil {
+			seqNo := int(*params.SeqNo)
+			req.IfSeqNo = &seqNo
+		}
+		if params.PrimaryTerm != nil {
+			primaryTerm := int(*params.PrimaryTerm)
+			req.IfPrimaryTerm = &primaryTerm
+		}
+	}
+
+	res, err := req.Do(ctx, r.client)
+	if err != nil {
+		// Check for version conflict in the error
+		if strings.Contains(err.Error(), "version_conflict_engine_exception") {
+			return &repositories.VersionConflictError{
+				DocumentID: docID,
+				Err:        err,
+			}
+		}
+		return fmt.Errorf("failed to update document with optimistic lock: %w", err)
+	}
+	defer res.Body.Close()
+
+	if res.IsError() {
+		// Check for version conflict status code
+		if res.StatusCode == 409 {
+			return &repositories.VersionConflictError{
+				DocumentID: docID,
+				Err:        fmt.Errorf("version conflict: %s", res.Status()),
+			}
+		}
+		return fmt.Errorf("update with optimistic lock failed: %s", res.Status())
+	}
+
+	log.Printf("Updated document %s in index %s with optimistic lock", docID, index)
 	return nil
 }
 

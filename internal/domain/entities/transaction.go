@@ -1,11 +1,11 @@
 package entities
 
 import (
+	"fmt"
 	"time"
 )
 
-// TransactionBody represents the OpenSearch document generated for any
-// given LFX Transaction that will be stored into our resources index.
+// TransactionBody represents the OpenSearch document structure
 type TransactionBody struct {
 	ObjectRef            string         `json:"object_ref,omitempty"`
 	ObjectType           string         `json:"object_type,omitempty"`
@@ -64,46 +64,41 @@ type LFXTransaction struct {
 	// V1Data contains the raw Platform DB record data from LFX v1.
 	V1Data map[string]any `json:"v1_data,omitempty"`
 
-	// Parsed and validated principals.
-	ParsedPrincipals []Principal `json:"-"`
-
 	// Capture timestamp at ingest time.
 	Timestamp time.Time `json:"-"`
+
+	// Enhanced fields for improved validation and processing
+	IsV1             bool        `json:"-"`
+	ParsedPrincipals []Principal `json:"-"`
 }
 
-// ContactBody represents contact information within a transaction
-type ContactBody struct {
-	LfxPrincipal string         `json:"lfx_principal,omitempty"`
-	Name         string         `json:"name,omitempty"`
-	Emails       []string       `json:"emails,omitempty"`
-	Bot          *bool          `json:"bot,omitempty"`
-	Profile      map[string]any `json:"profile,omitempty"`
+// Action Helper Methods
+//
+// The LFX indexer processes transactions from two different sources:
+// 1. Regular LFX services: send "created"/"updated"/"deleted" (past-tense)
+// 2. v1-sync-helper service: sends "create"/"update"/"delete" (present-tense)
+//
+// These helper methods handle both formats to provide a unified interface
+// for business logic that doesn't need to distinguish between sources.
+
+// IsCreateAction returns true if this is a create action (both V1 and V2)
+func (t *LFXTransaction) IsCreateAction() bool {
+	return t.Action == "create" || t.Action == "created"
 }
 
-// Principal represents an authenticated principal with their email
-type Principal struct {
-	Principal string
-	Email     string
+// IsUpdateAction returns true if this is an update action (both V1 and V2)
+func (t *LFXTransaction) IsUpdateAction() bool {
+	return t.Action == "update" || t.Action == "updated"
 }
 
-// IsCreate checks if the transaction is a create action
-func (t *LFXTransaction) IsCreate() bool {
-	return t.Action == "create"
+// IsDeleteAction returns true if this is a delete action (both V1 and V2)
+func (t *LFXTransaction) IsDeleteAction() bool {
+	return t.Action == "delete" || t.Action == "deleted"
 }
 
-// IsUpdate checks if the transaction is an update action
-func (t *LFXTransaction) IsUpdate() bool {
-	return t.Action == "update"
-}
-
-// IsDelete checks if the transaction is a delete action
-func (t *LFXTransaction) IsDelete() bool {
-	return t.Action == "delete"
-}
-
-// IsV1Transaction checks if this is a V1 transaction
+// IsV1Transaction returns true if this transaction originated from V1 system
 func (t *LFXTransaction) IsV1Transaction() bool {
-	return t.V1Data != nil
+	return t.IsV1
 }
 
 // GetObjectID returns the parsed object ID
@@ -121,12 +116,87 @@ func (t *LFXTransaction) GetParsedData() map[string]any {
 	return t.ParsedData
 }
 
-// GetPrincipals returns the parsed principals
-func (t *LFXTransaction) GetPrincipals() []Principal {
+// GetParsedPrincipals returns the parsed principals
+func (t *LFXTransaction) GetParsedPrincipals() []Principal {
 	return t.ParsedPrincipals
 }
 
 // GetTimestamp returns the transaction timestamp
 func (t *LFXTransaction) GetTimestamp() time.Time {
 	return t.Timestamp
+}
+
+// GetCanonicalAction returns the canonical (past-tense) action for indexing
+func (t *LFXTransaction) GetCanonicalAction() string {
+	switch t.Action {
+	case "create", "created":
+		return "created"
+	case "update", "updated":
+		return "updated"
+	case "delete", "deleted":
+		return "deleted"
+	default:
+		return t.Action
+	}
+}
+
+// ValidateAction validates the transaction action based on transaction source
+func (t *LFXTransaction) ValidateAction() error {
+	if t.IsV1 {
+		// V1 transactions are sent by the v1-sync-helper service
+		// These use present-tense actions to match the original V1 API format
+		// Subject pattern: lfx.v1.index.{object_type}
+		switch t.Action {
+		case "create", "update", "delete":
+			return nil
+		default:
+			return fmt.Errorf("invalid transaction action: %s", t.Action)
+		}
+	} else {
+		// V2 transactions are sent by regular LFX services
+		// These use past-tense actions to indicate completed operations
+		// Subject pattern: lfx.index.{object_type}
+		switch t.Action {
+		case "created", "updated", "deleted":
+			return nil
+		default:
+			return fmt.Errorf("invalid transaction action: %s", t.Action)
+		}
+	}
+}
+
+// ValidateObjectType checks if an object type is supported (domain business rule)
+func (t *LFXTransaction) ValidateObjectType() error {
+	switch t.ObjectType {
+	case "project":
+		return nil
+	default:
+		return fmt.Errorf("unsupported object type: %s", t.ObjectType)
+	}
+}
+
+// ContactBody represents contact information within a transaction
+type ContactBody struct {
+	LfxPrincipal string         `json:"lfx_principal,omitempty"`
+	Name         string         `json:"name,omitempty"`
+	Emails       []string       `json:"emails,omitempty"`
+	Bot          *bool          `json:"bot,omitempty"`
+	Profile      map[string]any `json:"profile,omitempty"`
+}
+
+// Principal is used to temporarily store parsed Heimdall authorization tokens.
+type Principal struct {
+	Principal string
+	Email     string
+}
+
+// ProcessingResult represents the result of processing a transaction
+type ProcessingResult struct {
+	Success      bool
+	Error        error
+	ProcessedAt  time.Time
+	Duration     time.Duration
+	MessageID    string
+	DocumentID   string
+	IndexSuccess bool
 }

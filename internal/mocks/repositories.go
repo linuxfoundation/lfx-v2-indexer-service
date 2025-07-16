@@ -2,6 +2,9 @@ package mocks
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/json"
+	"fmt"
 	"io"
 	"sync"
 
@@ -9,31 +12,40 @@ import (
 	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/repositories"
 )
 
-// MockTransactionRepository implements the TransactionRepository interface for testing
+// MockTransactionRepository implements the repositories.TransactionRepository interface for testing
 type MockTransactionRepository struct {
 	mu sync.RWMutex
 
-	// Mock data
-	IndexedDocuments map[string]map[string]interface{} // index -> docID -> document
-	SearchResults    map[string][]map[string]any       // query hash -> results
+	// Mock state
+	IndexedDocuments map[string]map[string]interface{}
 
-	// Mock behavior
-	IndexError     error
-	SearchError    error
-	UpdateError    error
-	DeleteError    error
-	BulkIndexError error
-	HealthError    error
+	// Mock responses
+	SearchResults map[string][]map[string]any
+	SearchError   error
+	IndexError    error
+	UpdateError   error
+	DeleteError   error
+	BulkError     error
+	HealthError   error
 
 	// Call tracking
-	IndexCalls     []IndexCall
-	SearchCalls    []SearchCall
-	UpdateCalls    []UpdateCall
-	DeleteCalls    []DeleteCall
-	BulkIndexCalls []BulkIndexCall
-	HealthCalls    int
+	IndexCalls  []IndexCall
+	SearchCalls []SearchCall
+	UpdateCalls []UpdateCall
+	DeleteCalls []DeleteCall
+	BulkCalls   []BulkCall
+
+	// Mock responses for new methods
+	SearchWithVersionsResults     map[string][]repositories.VersionedDocument
+	SearchWithVersionsError       error
+	UpdateWithOptimisticLockError error
+
+	// Call tracking for new methods
+	SearchWithVersionsCalls       []SearchWithVersionsCall
+	UpdateWithOptimisticLockCalls []UpdateWithOptimisticLockCall
 }
 
+// Call tracking structures
 type IndexCall struct {
 	Index string
 	DocID string
@@ -56,20 +68,35 @@ type DeleteCall struct {
 	DocID string
 }
 
-type BulkIndexCall struct {
+type BulkCall struct {
 	Operations []repositories.BulkOperation
+}
+
+type SearchWithVersionsCall struct {
+	Index string
+	Query map[string]any
+}
+
+type UpdateWithOptimisticLockCall struct {
+	Index  string
+	DocID  string
+	Body   string
+	Params *repositories.OptimisticUpdateParams
 }
 
 // NewMockTransactionRepository creates a new mock transaction repository
 func NewMockTransactionRepository() *MockTransactionRepository {
 	return &MockTransactionRepository{
-		IndexedDocuments: make(map[string]map[string]interface{}),
-		SearchResults:    make(map[string][]map[string]any),
-		IndexCalls:       make([]IndexCall, 0),
-		SearchCalls:      make([]SearchCall, 0),
-		UpdateCalls:      make([]UpdateCall, 0),
-		DeleteCalls:      make([]DeleteCall, 0),
-		BulkIndexCalls:   make([]BulkIndexCall, 0),
+		IndexedDocuments:              make(map[string]map[string]interface{}),
+		SearchResults:                 make(map[string][]map[string]any),
+		SearchWithVersionsResults:     make(map[string][]repositories.VersionedDocument),
+		IndexCalls:                    make([]IndexCall, 0),
+		SearchCalls:                   make([]SearchCall, 0),
+		UpdateCalls:                   make([]UpdateCall, 0),
+		DeleteCalls:                   make([]DeleteCall, 0),
+		BulkCalls:                     make([]BulkCall, 0),
+		SearchWithVersionsCalls:       make([]SearchWithVersionsCall, 0),
+		UpdateWithOptimisticLockCalls: make([]UpdateWithOptimisticLockCall, 0),
 	}
 }
 
@@ -129,6 +156,31 @@ func (m *MockTransactionRepository) Search(ctx context.Context, index string, qu
 	return []map[string]any{}, nil
 }
 
+// SearchWithVersions mocks searching for documents with version information
+func (m *MockTransactionRepository) SearchWithVersions(ctx context.Context, index string, query map[string]any) ([]repositories.VersionedDocument, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.SearchWithVersionsError != nil {
+		return nil, m.SearchWithVersionsError
+	}
+
+	// Track the call
+	m.SearchWithVersionsCalls = append(m.SearchWithVersionsCalls, SearchWithVersionsCall{
+		Index: index,
+		Query: query,
+	})
+
+	// Return pre-configured results
+	queryHash := m.hashQuery(query)
+	if results, exists := m.SearchWithVersionsResults[queryHash]; exists {
+		return results, nil
+	}
+
+	// Return empty results if no pre-configured results
+	return []repositories.VersionedDocument{}, nil
+}
+
 // Update mocks updating a document
 func (m *MockTransactionRepository) Update(ctx context.Context, index string, docID string, body io.Reader) error {
 	m.mu.Lock()
@@ -154,6 +206,32 @@ func (m *MockTransactionRepository) Update(ctx context.Context, index string, do
 	return nil
 }
 
+// UpdateWithOptimisticLock mocks updating a document with optimistic concurrency control
+func (m *MockTransactionRepository) UpdateWithOptimisticLock(ctx context.Context, index, docID string, body io.Reader, params *repositories.OptimisticUpdateParams) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.UpdateWithOptimisticLockError != nil {
+		return m.UpdateWithOptimisticLockError
+	}
+
+	// Read the body
+	bodyBytes, err := io.ReadAll(body)
+	if err != nil {
+		return err
+	}
+
+	// Track the call
+	m.UpdateWithOptimisticLockCalls = append(m.UpdateWithOptimisticLockCalls, UpdateWithOptimisticLockCall{
+		Index:  index,
+		DocID:  docID,
+		Body:   string(bodyBytes),
+		Params: params,
+	})
+
+	return nil
+}
+
 // Delete mocks deleting a document
 func (m *MockTransactionRepository) Delete(ctx context.Context, index string, docID string) error {
 	m.mu.Lock()
@@ -169,11 +247,6 @@ func (m *MockTransactionRepository) Delete(ctx context.Context, index string, do
 		DocID: docID,
 	})
 
-	// Remove from indexed documents
-	if docs, exists := m.IndexedDocuments[index]; exists {
-		delete(docs, docID)
-	}
-
 	return nil
 }
 
@@ -182,72 +255,117 @@ func (m *MockTransactionRepository) BulkIndex(ctx context.Context, operations []
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.BulkIndexError != nil {
-		return m.BulkIndexError
+	if m.BulkError != nil {
+		return m.BulkError
 	}
 
 	// Track the call
-	m.BulkIndexCalls = append(m.BulkIndexCalls, BulkIndexCall{
+	m.BulkCalls = append(m.BulkCalls, BulkCall{
 		Operations: operations,
 	})
 
 	return nil
 }
 
-// HealthCheck mocks health check
+// HealthCheck mocks health checking
 func (m *MockTransactionRepository) HealthCheck(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	m.HealthCalls++
 
 	return m.HealthError
 }
 
 // Helper methods for testing
-func (m *MockTransactionRepository) SetSearchResults(query map[string]any, results []map[string]any) {
+
+// SetSearchResult sets a search result for a specific query
+func (m *MockTransactionRepository) SetSearchResult(query map[string]any, result []map[string]any) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	queryHash := m.hashQuery(query)
-	m.SearchResults[queryHash] = results
+	m.SearchResults[queryHash] = result
 }
 
-func (m *MockTransactionRepository) GetIndexedDocument(index, docID string) (interface{}, bool) {
+// SetSearchWithVersionsResult sets a search result for a specific query with version information
+func (m *MockTransactionRepository) SetSearchWithVersionsResult(query map[string]any, result []repositories.VersionedDocument) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	queryHash := m.hashQuery(query)
+	m.SearchWithVersionsResults[queryHash] = result
+}
+
+// GetIndexCalls returns all index calls
+func (m *MockTransactionRepository) GetIndexCalls() []IndexCall {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	if docs, exists := m.IndexedDocuments[index]; exists {
-		if doc, exists := docs[docID]; exists {
-			return doc, true
-		}
-	}
-	return nil, false
+	calls := make([]IndexCall, len(m.IndexCalls))
+	copy(calls, m.IndexCalls)
+	return calls
 }
 
+// GetSearchCalls returns all search calls
+func (m *MockTransactionRepository) GetSearchCalls() []SearchCall {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	calls := make([]SearchCall, len(m.SearchCalls))
+	copy(calls, m.SearchCalls)
+	return calls
+}
+
+// GetSearchWithVersionsCalls returns all search with versions calls
+func (m *MockTransactionRepository) GetSearchWithVersionsCalls() []SearchWithVersionsCall {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	calls := make([]SearchWithVersionsCall, len(m.SearchWithVersionsCalls))
+	copy(calls, m.SearchWithVersionsCalls)
+	return calls
+}
+
+// GetUpdateWithOptimisticLockCalls returns all optimistic update calls
+func (m *MockTransactionRepository) GetUpdateWithOptimisticLockCalls() []UpdateWithOptimisticLockCall {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	calls := make([]UpdateWithOptimisticLockCall, len(m.UpdateWithOptimisticLockCalls))
+	copy(calls, m.UpdateWithOptimisticLockCalls)
+	return calls
+}
+
+// Reset clears all call tracking and state
 func (m *MockTransactionRepository) Reset() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	m.IndexedDocuments = make(map[string]map[string]interface{})
 	m.SearchResults = make(map[string][]map[string]any)
+	m.SearchWithVersionsResults = make(map[string][]repositories.VersionedDocument)
+
+	m.SearchError = nil
+	m.IndexError = nil
+	m.UpdateError = nil
+	m.DeleteError = nil
+	m.BulkError = nil
+	m.HealthError = nil
+	m.SearchWithVersionsError = nil
+	m.UpdateWithOptimisticLockError = nil
+
 	m.IndexCalls = make([]IndexCall, 0)
 	m.SearchCalls = make([]SearchCall, 0)
 	m.UpdateCalls = make([]UpdateCall, 0)
 	m.DeleteCalls = make([]DeleteCall, 0)
-	m.BulkIndexCalls = make([]BulkIndexCall, 0)
-	m.HealthCalls = 0
-	m.IndexError = nil
-	m.SearchError = nil
-	m.UpdateError = nil
-	m.DeleteError = nil
-	m.BulkIndexError = nil
-	m.HealthError = nil
+	m.BulkCalls = make([]BulkCall, 0)
+	m.SearchWithVersionsCalls = make([]SearchWithVersionsCall, 0)
+	m.UpdateWithOptimisticLockCalls = make([]UpdateWithOptimisticLockCall, 0)
 }
 
+// hashQuery creates a hash of the query for lookup
 func (m *MockTransactionRepository) hashQuery(query map[string]any) string {
-	// Simple hash for query - in real implementation, would use proper hashing
-	return "query_hash"
+	queryBytes, _ := json.Marshal(query)
+	return fmt.Sprintf("%x", md5.Sum(queryBytes))
 }
 
 // MockMessageRepository implements the MessageRepository interface for testing
@@ -388,26 +506,14 @@ func (m *MockMessageRepository) Reset() {
 	m.HealthError = nil
 }
 
-// MockAuthRepository implements the AuthRepository interface for testing
+// MockAuthRepository provides a mock implementation of AuthRepository
 type MockAuthRepository struct {
-	mu sync.RWMutex
-
-	// Mock data
-	ValidTokens map[string]*entities.Principal
-
-	// Mock behavior
-	ValidateError        error
+	ValidTokens          map[string]*entities.Principal
 	ParsePrincipalsError error
-	HealthError          error
 
 	// Call tracking
-	ValidateCalls        []ValidateCall
 	ParsePrincipalsCalls []ParsePrincipalsCall
-	HealthCalls          int
-}
-
-type ValidateCall struct {
-	Token string
+	mu                   sync.Mutex
 }
 
 type ParsePrincipalsCall struct {
@@ -418,24 +524,20 @@ type ParsePrincipalsCall struct {
 func NewMockAuthRepository() *MockAuthRepository {
 	return &MockAuthRepository{
 		ValidTokens:          make(map[string]*entities.Principal),
-		ValidateCalls:        make([]ValidateCall, 0),
+		ParsePrincipalsError: nil,
 		ParsePrincipalsCalls: make([]ParsePrincipalsCall, 0),
 	}
 }
 
-// ValidateToken mocks token validation
+// ValidateToken validates a JWT token and returns principal information
 func (m *MockAuthRepository) ValidateToken(ctx context.Context, token string) (*entities.Principal, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.ValidateError != nil {
-		return nil, m.ValidateError
+	// Check for validation errors first
+	if m.ParsePrincipalsError != nil {
+		return nil, m.ParsePrincipalsError
 	}
-
-	// Track the call
-	m.ValidateCalls = append(m.ValidateCalls, ValidateCall{
-		Token: token,
-	})
 
 	// Return pre-configured principal
 	if principal, exists := m.ValidTokens[token]; exists {
@@ -449,7 +551,7 @@ func (m *MockAuthRepository) ValidateToken(ctx context.Context, token string) (*
 	}, nil
 }
 
-// ParsePrincipals mocks parsing principals from headers
+// ParsePrincipals mocks parsing principals from headers with delegation support
 func (m *MockAuthRepository) ParsePrincipals(ctx context.Context, headers map[string]string) ([]entities.Principal, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -463,26 +565,18 @@ func (m *MockAuthRepository) ParsePrincipals(ctx context.Context, headers map[st
 		Headers: headers,
 	})
 
-	// Return default principals
-	return []entities.Principal{
-		{
-			Principal: "test_user",
-			Email:     "test@example.com",
-		},
-	}, nil
+	// Return simple list of principals (deployment pattern)
+	principal := entities.Principal{
+		Principal: "test_user",
+		Email:     "test@example.com",
+	}
+
+	return []entities.Principal{principal}, nil
 }
 
-// HealthCheck mocks health check
-func (m *MockAuthRepository) HealthCheck(ctx context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+// Test helper methods
 
-	m.HealthCalls++
-
-	return m.HealthError
-}
-
-// Helper methods for testing
+// SetValidToken configures a valid token for testing
 func (m *MockAuthRepository) SetValidToken(token string, principal *entities.Principal) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -490,15 +584,20 @@ func (m *MockAuthRepository) SetValidToken(token string, principal *entities.Pri
 	m.ValidTokens[token] = principal
 }
 
+// Reset clears all mock data
 func (m *MockAuthRepository) Reset() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	m.ValidTokens = make(map[string]*entities.Principal)
-	m.ValidateCalls = make([]ValidateCall, 0)
 	m.ParsePrincipalsCalls = make([]ParsePrincipalsCall, 0)
-	m.HealthCalls = 0
-	m.ValidateError = nil
 	m.ParsePrincipalsError = nil
-	m.HealthError = nil
+}
+
+// SetParseError configures the mock to return an error
+func (m *MockAuthRepository) SetParseError(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.ParsePrincipalsError = err
 }

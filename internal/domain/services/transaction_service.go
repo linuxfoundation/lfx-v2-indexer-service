@@ -1,289 +1,295 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/entities"
 	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/repositories"
-	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/valueobjects"
 )
 
 const machineUserPrefix = "clients@"
 
-// TransactionService handles transaction processing logic
+// TransactionService handles transaction processing
 type TransactionService struct {
 	transactionRepo repositories.TransactionRepository
 	authRepo        repositories.AuthRepository
 }
 
 // NewTransactionService creates a new transaction service
-func NewTransactionService(
-	transactionRepo repositories.TransactionRepository,
-	authRepo repositories.AuthRepository,
-) *TransactionService {
+func NewTransactionService(transactionRepo repositories.TransactionRepository, authRepo repositories.AuthRepository) *TransactionService {
 	return &TransactionService{
 		transactionRepo: transactionRepo,
 		authRepo:        authRepo,
 	}
 }
 
-// ParseTransaction parses a transaction from message data
-func (s *TransactionService) ParseTransaction(ctx context.Context, data []byte, subject string) (*entities.LFXTransaction, error) {
-	var transaction entities.LFXTransaction
-	if err := json.Unmarshal(data, &transaction); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal transaction: %w", err)
+// EnrichTransaction enriches a transaction with additional data and validation
+func (s *TransactionService) EnrichTransaction(ctx context.Context, transaction *entities.LFXTransaction) error {
+	// Validate action based on transaction source
+	if err := transaction.ValidateAction(); err != nil {
+		return fmt.Errorf("transaction validation failed: %w", err)
 	}
 
-	// Extract object type from subject
-	parts := strings.Split(subject, ".")
-	if len(parts) < 3 {
-		return nil, fmt.Errorf("invalid subject format: %s", subject)
+	// ObjectType and IsV1 are already set by IndexingUseCase from NATS subject parsing
+	// No need to parse subject again - this was causing the duplicate parsing error
+
+	// Validate object type using domain business rule
+	if err := transaction.ValidateObjectType(); err != nil {
+		return fmt.Errorf("object type validation failed: %w", err)
 	}
-	transaction.ObjectType = parts[2]
 
 	// Parse data based on action
-	switch transaction.Action {
-	case "delete":
-		// For delete actions, data is just the object ID
-		if objectID, ok := transaction.Data.(string); ok {
-			transaction.ParsedObjectID = objectID
-		} else {
-			return nil, errors.New("invalid delete data format")
+	if err := s.parseTransactionData(transaction); err != nil {
+		return fmt.Errorf("failed to parse transaction data: %w", err)
+	}
+
+	// Parse principals based on transaction type
+	if transaction.IsV1 {
+		transaction.ParsedPrincipals = s.parseV1Principals(transaction)
+	} else {
+		// Parse principals using auth repository with delegation support
+		principals, err := s.authRepo.ParsePrincipals(ctx, transaction.Headers)
+		if err != nil {
+			return fmt.Errorf("failed to parse principals: %w", err)
 		}
-	case "create", "update":
-		// For create/update actions, data is the object data
-		if dataMap, ok := transaction.Data.(map[string]any); ok {
-			transaction.ParsedData = dataMap
-		} else {
-			return nil, errors.New("invalid create/update data format")
-		}
-	default:
-		return nil, fmt.Errorf("unknown action: %s", transaction.Action)
-	}
-
-	// Parse principals
-	principals, err := s.authRepo.ParsePrincipals(ctx, transaction.Headers)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse principals: %w", err)
-	}
-	transaction.ParsedPrincipals = principals
-
-	// Set timestamp
-	transaction.Timestamp = time.Now()
-
-	return &transaction, nil
-}
-
-// ParseV1Transaction parses a V1 transaction from message data
-func (s *TransactionService) ParseV1Transaction(ctx context.Context, data []byte, subject string) (*entities.LFXTransaction, error) {
-	var transaction entities.LFXTransaction
-	if err := json.Unmarshal(data, &transaction); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal V1 transaction: %w", err)
-	}
-
-	// Extract object type from subject
-	parts := strings.Split(subject, ".")
-	if len(parts) < 4 {
-		return nil, fmt.Errorf("invalid V1 subject format: %s", subject)
-	}
-	transaction.ObjectType = parts[3]
-
-	// For V1 transactions, parse differently
-	if transaction.V1Data != nil {
-		transaction.ParsedData = transaction.V1Data
-	}
-
-	// Parse V1 principals
-	transaction.ParsedPrincipals = s.parseV1Principals(&transaction)
-
-	// Set timestamp
-	transaction.Timestamp = time.Now()
-
-	return &transaction, nil
-}
-
-// GenerateIndexBody generates the OpenSearch index body for a transaction
-func (s *TransactionService) GenerateIndexBody(ctx context.Context, transaction *entities.LFXTransaction) (string, io.Reader, error) {
-	body := &entities.TransactionBody{
-		ObjectType: transaction.ObjectType,
-		Data:       transaction.ParsedData,
-		V1Data:     transaction.V1Data,
-	}
-
-	// Set common fields based on action
-	switch transaction.Action {
-	case "create":
-		body.CreatedAt = toTimePointer(transaction.Timestamp)
-		body.Latest = toBoolPointer(true)
-		s.setPrincipalFields(body, transaction.ParsedPrincipals, "created")
-	case "update":
-		body.UpdatedAt = toTimePointer(transaction.Timestamp)
-		body.Latest = toBoolPointer(true)
-		s.setPrincipalFields(body, transaction.ParsedPrincipals, "updated")
-	case "delete":
-		body.DeletedAt = toTimePointer(transaction.Timestamp)
-		body.Latest = toBoolPointer(false)
-		s.setPrincipalFields(body, transaction.ParsedPrincipals, "deleted")
-	}
-
-	// Enrich based on object type
-	if err := s.enrichTransaction(ctx, body); err != nil {
-		return "", nil, fmt.Errorf("failed to enrich transaction: %w", err)
-	}
-
-	// Generate document ID
-	docID := s.generateDocumentID(body)
-
-	// Marshal to JSON
-	bodyBytes, err := json.Marshal(body)
-	if err != nil {
-		return "", nil, fmt.Errorf("failed to marshal transaction body: %w", err)
-	}
-
-	return docID, strings.NewReader(string(bodyBytes)), nil
-}
-
-// ProcessTransaction processes a complete transaction
-func (s *TransactionService) ProcessTransaction(ctx context.Context, transaction *entities.LFXTransaction, index string) (*valueobjects.ProcessingResult, error) {
-	startTime := time.Now()
-	result := &valueobjects.ProcessingResult{
-		ProcessedAt: startTime,
-		MessageID:   s.generateMessageID(transaction),
-	}
-
-	// Generate index body
-	docID, body, err := s.GenerateIndexBody(ctx, transaction)
-	if err != nil {
-		result.Success = false
-		result.Error = err
-		result.Duration = time.Since(startTime)
-		return result, err
-	}
-
-	result.DocumentID = docID
-
-	// Index the document
-	if err := s.transactionRepo.Index(ctx, index, docID, body); err != nil {
-		result.Success = false
-		result.Error = err
-		result.Duration = time.Since(startTime)
-		return result, err
-	}
-
-	result.Success = true
-	result.IndexSuccess = true
-	result.Duration = time.Since(startTime)
-
-	return result, nil
-}
-
-// enrichTransaction enriches a transaction based on its object type
-func (s *TransactionService) enrichTransaction(ctx context.Context, body *entities.TransactionBody) error {
-	switch body.ObjectType {
-	case "project":
-		return s.enrichProject(body)
-	default:
-		return fmt.Errorf("unsupported object type for enrichment: %s", body.ObjectType)
-	}
-}
-
-// enrichProject enriches a project transaction
-func (s *TransactionService) enrichProject(body *entities.TransactionBody) error {
-	// Extract resource name.
-	var ok bool
-	if body.ObjectID, ok = body.Data["uid"].(string); !ok {
-		return errors.New("error mapping `uid` to `object_id`")
-	}
-
-	// Access control attributes.
-	if body.Public, ok = body.Data["public"].(bool); !ok {
-		return errors.New("error mapping `public` attribute")
-	}
-	body.AccessCheckObject = fmt.Sprintf("project:%s", body.ObjectID)
-	body.AccessCheckRelation = "viewer"
-	body.HistoryCheckObject = body.AccessCheckObject
-	body.HistoryCheckRelation = "writer"
-
-	// Additional enrichment.
-	if parentUID, ok := body.Data["parent_uid"].(string); ok && parentUID != "" {
-		body.ParentRefs = append(body.ParentRefs, "project:"+parentUID)
-	}
-	if name, ok := body.Data["name"].(string); ok && name != "" {
-		body.SortName = name
-		body.NameAndAliases = append(body.NameAndAliases, name)
-	}
-	if slug, ok := body.Data["slug"].(string); ok && slug != "" {
-		body.NameAndAliases = append(body.NameAndAliases, slug)
-	}
-	if description, ok := body.Data["description"].(string); ok && description != "" {
-		body.Fulltext = description
+		transaction.ParsedPrincipals = principals
 	}
 
 	return nil
 }
 
-// Helper functions
-func toBoolPointer(b bool) *bool {
-	return &b
-}
-
-func toTimePointer(t time.Time) *time.Time {
-	return &t
-}
-
-func (s *TransactionService) setPrincipalFields(body *entities.TransactionBody, principals []entities.Principal, action string) {
-	var principalsList []string
-	var emailsList []string
-
-	for _, p := range principals {
-		principalsList = append(principalsList, p.Principal)
-		if p.Email != "" {
-			emailsList = append(emailsList, p.Email)
-		}
+// GenerateTransactionBody creates a transaction body for indexing
+func (s *TransactionService) GenerateTransactionBody(ctx context.Context, transaction *entities.LFXTransaction) (*entities.TransactionBody, error) {
+	body := &entities.TransactionBody{
+		ObjectType: transaction.ObjectType,
+		V1Data:     transaction.V1Data,
 	}
 
-	switch action {
+	// Set latest flag
+	latest := true
+	body.Latest = &latest
+
+	// Set fields based on action
+	canonicalAction := transaction.GetCanonicalAction()
+	switch canonicalAction {
 	case "created":
-		body.CreatedByPrincipals = principalsList
-		body.CreatedByEmails = emailsList
+		body.CreatedAt = &transaction.Timestamp
+		body.UpdatedAt = body.CreatedAt // For search sorting
+		s.setPrincipalFields(body, transaction.ParsedPrincipals, "created")
+		body.Data = transaction.ParsedData
 	case "updated":
-		body.UpdatedByPrincipals = principalsList
-		body.UpdatedByEmails = emailsList
+		body.UpdatedAt = &transaction.Timestamp
+		s.setPrincipalFields(body, transaction.ParsedPrincipals, "updated")
+		body.Data = transaction.ParsedData
 	case "deleted":
-		body.DeletedByPrincipals = principalsList
-		body.DeletedByEmails = emailsList
+		body.DeletedAt = &transaction.Timestamp
+		s.setPrincipalFields(body, transaction.ParsedPrincipals, "deleted")
+		body.ObjectID = transaction.ParsedObjectID
+		body.ObjectRef = transaction.ObjectType + ":" + transaction.ParsedObjectID
+
+		// Early return for delete transactions (no enrichment needed)
+		return body, nil
+	default:
+		return nil, fmt.Errorf("unsupported action: %s", canonicalAction)
+	}
+
+	// Enrich data for create/update actions
+	if err := s.enrichTransactionData(body, transaction); err != nil {
+		return nil, fmt.Errorf("failed to enrich transaction data: %w", err)
+	}
+
+	// Set object reference
+	body.ObjectRef = transaction.ObjectType + ":" + body.ObjectID
+
+	return body, nil
+}
+
+// ProcessTransaction processes a complete transaction
+func (s *TransactionService) ProcessTransaction(ctx context.Context, transaction *entities.LFXTransaction, index string) (*entities.ProcessingResult, error) {
+	startTime := time.Now()
+	result := &entities.ProcessingResult{
+		ProcessedAt: startTime,
+		MessageID:   s.generateMessageID(transaction),
+	}
+
+	// Enrich the transaction
+	if err := s.EnrichTransaction(ctx, transaction); err != nil {
+		result.Error = err
+		result.Success = false
+		result.Duration = time.Since(startTime)
+		return result, err
+	}
+
+	// Generate transaction body
+	body, err := s.GenerateTransactionBody(ctx, transaction)
+	if err != nil {
+		result.Error = err
+		result.Success = false
+		result.Duration = time.Since(startTime)
+		return result, err
+	}
+
+	// Convert body to JSON for indexing
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+		result.Error = fmt.Errorf("failed to marshal body: %w", err)
+		result.Success = false
+		result.Duration = time.Since(startTime)
+		return result, err
+	}
+
+	// Index the transaction
+	err = s.transactionRepo.Index(ctx, index, body.ObjectRef, bytes.NewReader(bodyBytes))
+	if err != nil {
+		result.Error = err
+		result.Success = false
+		result.IndexSuccess = false
+		result.Duration = time.Since(startTime)
+		return result, err
+	}
+
+	// Success
+	result.Success = true
+	result.IndexSuccess = true
+	result.DocumentID = body.ObjectRef
+	result.Duration = time.Since(startTime)
+
+	return result, nil
+}
+
+// setPrincipalFields sets principal-related fields on the transaction body following deployment pattern
+func (s *TransactionService) setPrincipalFields(body *entities.TransactionBody, principals []entities.Principal, action string) {
+	for _, principal := range principals {
+		principalRef := fmt.Sprintf("%s <%s>", principal.Principal, principal.Email)
+
+		switch action {
+		case "created":
+			body.CreatedBy = append(body.CreatedBy, principalRef)
+			body.CreatedByPrincipals = append(body.CreatedByPrincipals, principal.Principal)
+			if principal.Email != "" {
+				body.CreatedByEmails = append(body.CreatedByEmails, principal.Email)
+			}
+		case "updated":
+			body.UpdatedBy = append(body.UpdatedBy, principalRef)
+			body.UpdatedByPrincipals = append(body.UpdatedByPrincipals, principal.Principal)
+			if principal.Email != "" {
+				body.UpdatedByEmails = append(body.UpdatedByEmails, principal.Email)
+			}
+		case "deleted":
+			body.DeletedBy = append(body.DeletedBy, principalRef)
+			body.DeletedByPrincipals = append(body.DeletedByPrincipals, principal.Principal)
+			if principal.Email != "" {
+				body.DeletedByEmails = append(body.DeletedByEmails, principal.Email)
+			}
+		}
 	}
 }
 
-func (s *TransactionService) generateDocumentID(body *entities.TransactionBody) string {
-	return fmt.Sprintf("%s:%s", body.ObjectType, body.ObjectID)
-}
-
-func (s *TransactionService) generateMessageID(transaction *entities.LFXTransaction) string {
-	return fmt.Sprintf("%s:%s:%d", transaction.ObjectType, transaction.Action, transaction.Timestamp.UnixNano())
-}
-
+// parseV1Principals converts V1 headers to Principal structure (deployment pattern)
 func (s *TransactionService) parseV1Principals(transaction *entities.LFXTransaction) []entities.Principal {
-	var principals []entities.Principal
+	var principal entities.Principal
 
-	// Extract principals from V1 data format
-	if transaction.V1Data != nil {
-		if userID, ok := transaction.V1Data["user_id"].(string); ok && userID != "" {
-			principal := entities.Principal{
-				Principal: userID,
-			}
-			if email, ok := transaction.V1Data["user_email"].(string); ok {
-				principal.Email = email
-			}
-			principals = append(principals, principal)
+	for header, value := range transaction.Headers {
+		header = strings.ToLower(header)
+		switch header {
+		case "x-username":
+			principal.Principal = value
+		case "x-email":
+			principal.Email = value
 		}
 	}
 
-	return principals
+	// If there was no X-Username header, return empty set
+	if principal.Principal == "" {
+		return nil
+	}
+
+	// Return the parsed principal as a slice of 1
+	return []entities.Principal{principal}
+}
+
+// parseTransactionData parses the transaction data based on action
+func (s *TransactionService) parseTransactionData(transaction *entities.LFXTransaction) error {
+	switch {
+	case transaction.IsCreateAction() || transaction.IsUpdateAction():
+		parsedData, ok := transaction.Data.(map[string]any)
+		if !ok {
+			return fmt.Errorf("invalid data for action %s: expected object", transaction.Action)
+		}
+		transaction.ParsedData = parsedData
+	case transaction.IsDeleteAction():
+		objectID, ok := transaction.Data.(string)
+		if !ok {
+			return fmt.Errorf("invalid data for action %s: expected string", transaction.Action)
+		}
+		transaction.ParsedObjectID = objectID
+	default:
+		return fmt.Errorf("unsupported action: %s", transaction.Action)
+	}
+
+	return nil
+}
+
+// enrichTransactionData enriches transaction data based on object type
+func (s *TransactionService) enrichTransactionData(body *entities.TransactionBody, transaction *entities.LFXTransaction) error {
+	switch transaction.ObjectType {
+	case "project":
+		return s.enrichProjectData(body, transaction)
+	default:
+		return fmt.Errorf("unsupported object type: %s", transaction.ObjectType)
+	}
+}
+
+// enrichProjectData enriches project-specific data
+func (s *TransactionService) enrichProjectData(body *entities.TransactionBody, transaction *entities.LFXTransaction) error {
+	data := transaction.ParsedData
+
+	// Extract project ID
+	if projectID, ok := data["id"].(string); ok {
+		body.ObjectID = projectID
+	} else {
+		return fmt.Errorf("missing or invalid project ID")
+	}
+
+	// Extract project name for sorting
+	if name, ok := data["name"].(string); ok {
+		body.SortName = name
+		body.NameAndAliases = []string{name}
+	}
+
+	// Extract slug as additional alias
+	if slug, ok := data["slug"].(string); ok && slug != "" {
+		body.NameAndAliases = append(body.NameAndAliases, slug)
+	}
+
+	// Set public flag
+	if public, ok := data["public"].(bool); ok {
+		body.Public = public
+	}
+
+	// Build fulltext search content
+	var fulltext []string
+	if body.SortName != "" {
+		fulltext = append(fulltext, body.SortName)
+	}
+	for _, alias := range body.NameAndAliases {
+		if alias != body.SortName {
+			fulltext = append(fulltext, alias)
+		}
+	}
+	body.Fulltext = strings.Join(fulltext, " ")
+
+	return nil
+}
+
+// generateMessageID generates a unique message ID for tracking
+func (s *TransactionService) generateMessageID(transaction *entities.LFXTransaction) string {
+	timestamp := strconv.FormatInt(transaction.Timestamp.UnixNano(), 10)
+	return fmt.Sprintf("%s-%s-%s", transaction.ObjectType, transaction.Action, timestamp)
 }

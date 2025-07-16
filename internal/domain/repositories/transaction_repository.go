@@ -2,10 +2,38 @@ package repositories
 
 import (
 	"context"
+	"fmt"
 	"io"
 
 	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/entities"
 )
+
+// OptimisticUpdateParams contains parameters for optimistic concurrency control
+type OptimisticUpdateParams struct {
+	SeqNo       *int64
+	PrimaryTerm *int64
+}
+
+// VersionedDocument represents a document with version tracking information
+type VersionedDocument struct {
+	ID          string                 `json:"_id"`
+	SeqNo       *int64                 `json:"_seq_no"`
+	PrimaryTerm *int64                 `json:"_primary_term"`
+	Source      map[string]interface{} `json:"_source"`
+}
+
+// VersionConflictError represents a version conflict during update operations
+type VersionConflictError struct {
+	DocumentID  string
+	CurrentSeq  int64
+	ExpectedSeq int64
+	Err         error
+}
+
+func (e *VersionConflictError) Error() string {
+	return fmt.Sprintf("version conflict for document %s: current_seq=%d, expected_seq=%d: %v",
+		e.DocumentID, e.CurrentSeq, e.ExpectedSeq, e.Err)
+}
 
 // TransactionRepository defines the interface for transaction data access
 type TransactionRepository interface {
@@ -26,6 +54,12 @@ type TransactionRepository interface {
 
 	// HealthCheck checks the health of the OpenSearch connection
 	HealthCheck(ctx context.Context) error
+
+	// UpdateWithOptimisticLock updates a document with optimistic concurrency control
+	UpdateWithOptimisticLock(ctx context.Context, index, docID string, body io.Reader, params *OptimisticUpdateParams) error
+
+	// SearchWithVersions searches for documents and includes version tracking information
+	SearchWithVersions(ctx context.Context, index string, query map[string]any) ([]VersionedDocument, error)
 }
 
 // BulkOperation represents a bulk operation for indexing
@@ -44,6 +78,9 @@ type MessageRepository interface {
 	// QueueSubscribe subscribes to NATS messages with queue group for load balancing
 	QueueSubscribe(ctx context.Context, subject string, queue string, handler MessageHandler) error
 
+	// QueueSubscribeWithReply subscribes to NATS messages with queue group and reply support
+	QueueSubscribeWithReply(ctx context.Context, subject string, queue string, handler MessageHandlerWithReply) error
+
 	// Publish publishes a message to NATS
 	Publish(ctx context.Context, subject string, data []byte) error
 
@@ -59,16 +96,18 @@ type MessageHandler interface {
 	Handle(ctx context.Context, data []byte, subject string) error
 }
 
-// AuthRepository defines the interface for authentication operations
+// MessageHandlerWithReply defines the interface for handling messages with reply support
+type MessageHandlerWithReply interface {
+	HandleWithReply(ctx context.Context, data []byte, subject string, reply func([]byte) error) error
+}
+
+// AuthRepository handles authentication and principal parsing
 type AuthRepository interface {
-	// ValidateToken validates a JWT token
+	// ValidateToken validates a JWT token and returns principal information
 	ValidateToken(ctx context.Context, token string) (*entities.Principal, error)
 
-	// ParsePrincipals parses principals from headers
+	// ParsePrincipals parses principals from HTTP headers with delegation support
 	ParsePrincipals(ctx context.Context, headers map[string]string) ([]entities.Principal, error)
-
-	// HealthCheck checks the health of the auth service
-	HealthCheck(ctx context.Context) error
 }
 
 // ConfigRepository defines the interface for configuration operations

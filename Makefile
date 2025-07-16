@@ -116,19 +116,19 @@ build: ## Build the application
 	@echo "Building application..."
 	CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) go build \
 		-ldflags "-X main.version=$(VERSION) -X main.buildTime=$(BUILD_TIME) -X main.gitCommit=$(GIT_COMMIT)" \
-		-o bin/$(APP_NAME) .
+		-o bin/$(APP_NAME) ./cmd/lfx-indexer
 
 .PHONY: build-local
 build-local: ## Build the application for local OS
 	@echo "Building application for local development..."
 	go build \
 		-ldflags "-X main.version=$(VERSION) -X main.buildTime=$(BUILD_TIME) -X main.gitCommit=$(GIT_COMMIT)" \
-		-o bin/$(APP_NAME) .
+		-o bin/$(APP_NAME) ./cmd/lfx-indexer
 
 .PHONY: run
 run: ## Run the application locally
 	@echo "Running application..."
-	go run .
+	go run ./cmd/lfx-indexer
 
 .PHONY: clean
 clean: ## Clean build artifacts

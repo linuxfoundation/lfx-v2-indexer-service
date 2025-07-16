@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/auth0/go-jwt-middleware/v2/jwks"
 	"github.com/auth0/go-jwt-middleware/v2/validator"
@@ -32,31 +33,39 @@ func (c *HeimdallClaims) Validate(ctx context.Context) error {
 type AuthRepository struct {
 	validator *validator.Validator
 	issuer    string
-	audience  string
+	audiences []string // Support multiple audiences
 }
 
 // NewAuthRepository creates a new JWT auth repository
-func NewAuthRepository(issuer, audience string) (*AuthRepository, error) {
+func NewAuthRepository(issuer string, audiences []string, jwksURL string, clockSkew time.Duration) (*AuthRepository, error) {
 	// Parse the issuer URL
 	issuerURL, err := url.Parse(issuer)
 	if err != nil {
 		return nil, fmt.Errorf("invalid issuer URL: %w", err)
 	}
 
-	// Set up the JWT validator
-	provider := jwks.NewCachingProvider(issuerURL, 5*60) // 5 minute cache
+	// Parse JWKS URL
+	jwksURLParsed, err := url.Parse(jwksURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid JWKS URL: %w", err)
+	}
+
+	// Set up JWKS provider with 5 minute cache
+	provider := jwks.NewCachingProvider(issuerURL, 5*time.Minute, jwks.WithCustomJWKSURI(jwksURLParsed))
 
 	// Factory for custom JWT claims target
 	customClaims := func() validator.CustomClaims {
 		return &HeimdallClaims{}
 	}
 
+	// Set up JWT validator with PS256 and configuration
 	jwtValidator, err := validator.New(
 		provider.KeyFunc,
 		validator.PS256,
 		issuer,
-		[]string{audience},
+		audiences,
 		validator.WithCustomClaims(customClaims),
+		validator.WithAllowedClockSkew(clockSkew),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create JWT validator: %w", err)
@@ -65,14 +74,17 @@ func NewAuthRepository(issuer, audience string) (*AuthRepository, error) {
 	return &AuthRepository{
 		validator: jwtValidator,
 		issuer:    issuer,
-		audience:  audience,
+		audiences: audiences, // Store audiences array
 	}, nil
 }
 
 // ValidateToken validates a JWT token
 func (r *AuthRepository) ValidateToken(ctx context.Context, token string) (*entities.Principal, error) {
-	// Remove "Bearer " prefix if present
-	token = strings.TrimPrefix(token, "Bearer ")
+	// Trim any leading, case-insensitive "bearer " prefix
+	// Not using strings.TrimPrefix() because that function is case-sensitive
+	if len(token) > 7 && strings.ToLower(token[:7]) == "bearer " {
+		token = token[7:]
+	}
 
 	// Validate the token
 	validatedClaims, err := r.validator.ValidateToken(ctx, token)
@@ -89,37 +101,85 @@ func (r *AuthRepository) ValidateToken(ctx context.Context, token string) (*enti
 	return principal, nil
 }
 
-// ParsePrincipals parses principals from HTTP headers
+// ParsePrincipals extracts direct and indirect LFX principals from the
+// Authorization and X-On-Behalf-Of header JWT bearer tokens. As the
+// X-On-Behalf-Of header is not validated or pruned by the API gateway, this
+// function also provides the enforcement that "on behalf of" data is only used
+// if the authorized principal is a machine user.
 func (r *AuthRepository) ParsePrincipals(ctx context.Context, headers map[string]string) ([]entities.Principal, error) {
-	var principals []entities.Principal
+	// This will be set to `true` if the authorization header contains a machine
+	// user principal.
+	var isMachineUser bool
 
-	// Look for authenticated principal headers
-	if principalHeader, ok := headers["authenticated-principal"]; ok {
-		principal, err := r.parsePrincipal(principalHeader)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse authenticated principal: %w", err)
-		}
-		principals = append(principals, *principal)
-	}
+	var authorizedPrincipals []entities.Principal
+	var onBehalfOfPrincipals []entities.Principal
 
-	// Look for other principal headers
-	for key, value := range headers {
-		if strings.HasPrefix(key, "principal-") {
-			principal, err := r.parsePrincipal(value)
+	for header, value := range headers {
+		header = strings.ToLower(header)
+		switch header {
+		case "authorization":
+			principal, email, err := r.parsePrincipalAndEmail(ctx, value)
 			if err != nil {
-				// Log the error but don't fail the entire parsing
+				// Log warning but continue processing
+				// TODO: Add structured logging
 				continue
 			}
-			principals = append(principals, *principal)
+			authorizedPrincipals = append(authorizedPrincipals, entities.Principal{
+				Principal: principal,
+				Email:     email,
+			})
+			if strings.HasPrefix(principal, machineUserPrefix) {
+				isMachineUser = true
+			}
+		case "x-on-behalf-of":
+			// Split by commas.
+			forwardedJWTs := strings.Split(value, ",")
+			errCount := 0
+			var err, lastError error
+			for _, jwt := range forwardedJWTs {
+				var principal, email string
+				// Trim spaces when parsing individual comma-separated values. This
+				// allows for a multi-header value, as ...
+				//
+				//  X-On-Behalf-Of: jwt1
+				//  X-On-Behalf-Of: jwt2
+				//
+				// ... is equivalent to:
+				//
+				//  X-On-Behalf-Of: jwt1, jwt2
+				//
+				principal, email, err = r.parsePrincipalAndEmail(ctx, strings.TrimSpace(jwt))
+				if err != nil {
+					// Increment the error counter. Only the final error seen will be
+					// logged, after the `forwardedJWTs` loop completes.
+					errCount++
+					lastError = err
+					// This continues to the next comma-separated on-behalf-of value, not
+					// the next request header.
+					continue
+				}
+				onBehalfOfPrincipals = append(onBehalfOfPrincipals, entities.Principal{
+					Principal: principal,
+					Email:     email,
+				})
+			}
+			// TODO: Add structured logging for errors
+			if lastError != nil {
+				// Log the number of errors encountered, as well as the
+				// final/last error seen
+				_ = errCount  // Placeholder for logging
+				_ = lastError // Placeholder for logging
+			}
 		}
 	}
 
-	// If no principals found, return empty list (not an error)
-	if len(principals) == 0 {
-		return []entities.Principal{}, nil
+	if isMachineUser {
+		// If the authenticated principal is a machine user, we will use the "on
+		// behalf of" claims as well.
+		authorizedPrincipals = append(authorizedPrincipals, onBehalfOfPrincipals...)
 	}
 
-	return principals, nil
+	return authorizedPrincipals, nil
 }
 
 // HealthCheck checks the health of the auth service
@@ -132,6 +192,38 @@ func (r *AuthRepository) HealthCheck(ctx context.Context) error {
 	// In a more complete implementation, we might try to validate a test token
 	// or check connectivity to the JWKS endpoint
 	return nil
+}
+
+// parsePrincipalAndEmail extracts the principal and email from the JWT claims
+func (r *AuthRepository) parsePrincipalAndEmail(ctx context.Context, token string) (string, string, error) {
+	if r.validator == nil {
+		return "", "", errors.New("JWT validator is not set up")
+	}
+
+	// Trim any leading, case-insensitive "bearer " prefix
+	// Not using strings.TrimPrefix() because that function is case-sensitive
+	if len(token) > 7 && strings.ToLower(token[:7]) == "bearer " {
+		token = token[7:]
+	}
+
+	parsedJWT, err := r.validator.ValidateToken(ctx, token)
+	if err != nil {
+		return "", "", err
+	}
+
+	claims, ok := parsedJWT.(*validator.ValidatedClaims)
+	if !ok {
+		// This should never happen
+		return "", "", errors.New("failed to get validated authorization claims")
+	}
+
+	customClaims, ok := claims.CustomClaims.(*HeimdallClaims)
+	if !ok {
+		// This should never happen
+		return "", "", errors.New("failed to get custom authorization claims")
+	}
+
+	return customClaims.Principal, customClaims.Email, nil
 }
 
 // extractPrincipalFromClaims extracts principal information from JWT claims
@@ -163,33 +255,12 @@ func (r *AuthRepository) extractPrincipalFromClaims(claims interface{}) (*entiti
 	return principal, nil
 }
 
-// parsePrincipal parses a principal from a header value
-func (r *AuthRepository) parsePrincipal(value string) (*entities.Principal, error) {
-	if value == "" {
-		return nil, errors.New("empty principal value")
-	}
-
-	// For now, assume the value is just the principal ID
-	// In a more complete implementation, this might parse a more complex format
-	principal := &entities.Principal{
-		Principal: value,
-	}
-
-	// Check if it's a machine user (starts with "clients@")
-	if strings.HasPrefix(value, machineUserPrefix) {
-		// For machine users, the principal is the full value
-		principal.Principal = value
-	}
-
-	return principal, nil
-}
-
 // GetIssuer returns the JWT issuer
 func (r *AuthRepository) GetIssuer() string {
 	return r.issuer
 }
 
-// GetAudience returns the JWT audience
-func (r *AuthRepository) GetAudience() string {
-	return r.audience
+// GetAudiences returns all JWT audiences
+func (r *AuthRepository) GetAudiences() []string {
+	return r.audiences
 }

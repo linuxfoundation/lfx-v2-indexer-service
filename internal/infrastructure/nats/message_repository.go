@@ -75,6 +75,40 @@ func (r *MessageRepository) QueueSubscribe(ctx context.Context, subject string, 
 	return nil
 }
 
+// QueueSubscribeWithReply subscribes to NATS messages with queue group and reply support
+func (r *MessageRepository) QueueSubscribeWithReply(ctx context.Context, subject string, queue string, handler repositories.MessageHandlerWithReply) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Create the NATS message handler with reply support
+	natsHandler := func(msg *nats.Msg) {
+		// Create reply function if message has reply subject
+		var replyFunc func([]byte) error
+		if msg.Reply != "" {
+			replyFunc = func(data []byte) error {
+				return msg.Respond(data)
+			}
+		}
+
+		// Handle the message with reply support
+		if err := handler.HandleWithReply(ctx, msg.Data, msg.Subject, replyFunc); err != nil {
+			log.Printf("Error handling message with reply from subject %s (queue %s): %v", msg.Subject, queue, err)
+		}
+	}
+
+	// Subscribe to the subject with queue group
+	sub, err := r.conn.QueueSubscribe(subject, queue, natsHandler)
+	if err != nil {
+		return fmt.Errorf("failed to queue subscribe with reply to subject %s with queue %s: %w", subject, queue, err)
+	}
+
+	// Store the subscription for cleanup
+	r.subscriptions = append(r.subscriptions, sub)
+
+	log.Printf("Queue subscribed with reply to NATS subject: %s (queue: %s)", subject, queue)
+	return nil
+}
+
 // Publish publishes a message to NATS
 func (r *MessageRepository) Publish(ctx context.Context, subject string, data []byte) error {
 	if err := r.conn.Publish(subject, data); err != nil {

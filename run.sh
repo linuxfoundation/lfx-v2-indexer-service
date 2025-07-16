@@ -4,7 +4,7 @@
 
 set -e
 
-go build -o bin/lfx-indexer .
+go build -o bin/lfx-indexer ./cmd/lfx-indexer
 
 export NATS_URL="nats://nats.lfx.svc.cluster.local:4222"
 export OPENSEARCH_URL="http://opensearch-cluster-master.lfx.svc.cluster.local:9200"

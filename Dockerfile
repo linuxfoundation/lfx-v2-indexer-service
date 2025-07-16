@@ -21,8 +21,8 @@ RUN go mod download
 # Copy the code into the container
 COPY . .
 
-# Build the packages from root directory (main.go is now in root)
-RUN go build -o /go/bin/lfx-indexer -trimpath -ldflags="-w -s" .
+# Build the packages from cmd directory
+RUN go build -o /go/bin/lfx-indexer -trimpath -ldflags="-w -s" ./cmd/lfx-indexer
 
 # Run our go binary standalone
 FROM cgr.dev/chainguard/static:latest
