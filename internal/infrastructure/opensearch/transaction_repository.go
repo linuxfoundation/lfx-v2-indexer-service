@@ -1,6 +1,7 @@
 package opensearch
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -57,7 +58,7 @@ func (r *TransactionRepository) Search(ctx context.Context, index string, query 
 
 	req := opensearchapi.SearchRequest{
 		Index: []string{index},
-		Body:  strings.NewReader(string(queryBytes)),
+		Body:  bytes.NewReader(queryBytes),
 	}
 
 	res, err := req.Do(ctx, r.client)
@@ -99,7 +100,7 @@ func (r *TransactionRepository) SearchWithVersions(ctx context.Context, index st
 
 	req := opensearchapi.SearchRequest{
 		Index: []string{index},
-		Body:  strings.NewReader(string(queryBytes)),
+		Body:  bytes.NewReader(queryBytes),
 		// Note: seq_no and primary_term are included by default in OpenSearch responses
 	}
 

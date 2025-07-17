@@ -16,6 +16,7 @@ type AppConfig struct {
 	JWT        JWTConfig        `json:"jwt"`
 	Logging    LoggingConfig    `json:"logging"`
 	Janitor    JanitorConfig    `json:"janitor"`
+	Health     HealthConfig     `json:"health"`
 }
 
 // ServerConfig contains minimal server configuration for health checks
@@ -65,6 +66,13 @@ type JanitorConfig struct {
 	Enabled bool `json:"enabled"`
 }
 
+// HealthConfig contains health check configuration
+type HealthConfig struct {
+	CheckTimeout           time.Duration `json:"check_timeout"`
+	CacheDuration          time.Duration `json:"cache_duration"`
+	EnableDetailedResponse bool          `json:"enable_detailed_response"`
+}
+
 // LoadConfig loads configuration from environment variables
 func LoadConfig() (*AppConfig, error) {
 	config := &AppConfig{
@@ -109,6 +117,11 @@ func LoadConfig() (*AppConfig, error) {
 		Janitor: JanitorConfig{
 			Enabled: getEnvBool("JANITOR_ENABLED", true),
 		},
+		Health: HealthConfig{
+			CheckTimeout:           getEnvDuration("HEALTH_CHECK_TIMEOUT", 5*time.Second),
+			CacheDuration:          getEnvDuration("HEALTH_CACHE_DURATION", 5*time.Second),
+			EnableDetailedResponse: getEnvBool("HEALTH_DETAILED_RESPONSE", true),
+		},
 	}
 
 	return config, nil
@@ -139,6 +152,10 @@ func (c *AppConfig) Validate() error {
 
 	if err := c.validateJanitor(); err != nil {
 		return fmt.Errorf("janitor configuration: %w", err)
+	}
+
+	if err := c.validateHealth(); err != nil {
+		return fmt.Errorf("health configuration: %w", err)
 	}
 
 	return nil
@@ -289,6 +306,25 @@ func getEnvDuration(key string, defaultValue time.Duration) time.Duration {
 		}
 	}
 	return defaultValue
+}
+
+// validateHealth validates health configuration
+func (c *AppConfig) validateHealth() error {
+	if c.Health.CheckTimeout <= 0 {
+		return fmt.Errorf("health check timeout must be positive, got: %v", c.Health.CheckTimeout)
+	}
+
+	if c.Health.CacheDuration < 0 {
+		return fmt.Errorf("health cache duration must be non-negative, got: %v", c.Health.CacheDuration)
+	}
+
+	// Cache duration should typically be shorter than check timeout to be effective
+	if c.Health.CacheDuration > c.Health.CheckTimeout {
+		return fmt.Errorf("health cache duration (%v) should not exceed check timeout (%v)",
+			c.Health.CacheDuration, c.Health.CheckTimeout)
+	}
+
+	return nil
 }
 
 // Helper function for slice contains check

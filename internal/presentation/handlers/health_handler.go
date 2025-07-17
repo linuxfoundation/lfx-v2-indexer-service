@@ -3,47 +3,78 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+
+	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/services"
 )
 
 // HealthHandler handles Kubernetes health check requests
 type HealthHandler struct {
+	healthService *services.HealthService
 }
 
-// NewHealthHandler creates a new health handler
-func NewHealthHandler() *HealthHandler {
-	return &HealthHandler{}
+// NewHealthHandler creates a new health handler with the health service
+func NewHealthHandler(healthService *services.HealthService) *HealthHandler {
+	return &HealthHandler{
+		healthService: healthService,
+	}
 }
 
 // HandleLiveness handles Kubernetes liveness probe requests
 func (h *HealthHandler) HandleLiveness(w http.ResponseWriter, r *http.Request) {
-	// Simple liveness check - always return OK if the service is running
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"status":"ok","probe":"liveness"}`))
+	ctx := r.Context()
+	status := h.healthService.CheckLiveness(ctx)
+
+	h.writeHealthResponse(w, status, http.StatusOK) // Liveness always returns 200
 }
 
 // HandleReadiness handles Kubernetes readiness probe requests
 func (h *HealthHandler) HandleReadiness(w http.ResponseWriter, r *http.Request) {
-	// Simple readiness check - always return OK if the service is running
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	response := map[string]interface{}{
-		"status": "ready",
-		"probe":  "readiness",
+	ctx := r.Context()
+	status := h.healthService.CheckReadiness(ctx)
+
+	var statusCode int
+	switch status.Status {
+	case "healthy":
+		statusCode = http.StatusOK
+	case "degraded", "unhealthy":
+		statusCode = http.StatusServiceUnavailable
+	default:
+		statusCode = http.StatusInternalServerError
 	}
-	json.NewEncoder(w).Encode(response)
+
+	h.writeHealthResponse(w, status, statusCode)
 }
 
 // HandleHealthCheck handles general health check requests
 func (h *HealthHandler) HandleHealthCheck(w http.ResponseWriter, r *http.Request) {
-	// Simple health check - always return OK if the service is running
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	response := map[string]interface{}{
-		"status": "healthy",
-		"probe":  "health",
+	ctx := r.Context()
+	status := h.healthService.CheckHealth(ctx)
+
+	var statusCode int
+	switch status.Status {
+	case "healthy":
+		statusCode = http.StatusOK
+	case "degraded":
+		statusCode = http.StatusOK // Accept degraded for general health
+	case "unhealthy":
+		statusCode = http.StatusServiceUnavailable
+	default:
+		statusCode = http.StatusInternalServerError
 	}
-	json.NewEncoder(w).Encode(response)
+
+	h.writeHealthResponse(w, status, statusCode)
+}
+
+// writeHealthResponse writes the health status as JSON response
+func (h *HealthHandler) writeHealthResponse(w http.ResponseWriter, status *services.HealthStatus, statusCode int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+
+	if err := json.NewEncoder(w).Encode(status); err != nil {
+		// Fallback to simple response if JSON encoding fails
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
 }
 
 // RegisterRoutes registers the health check routes

@@ -184,8 +184,8 @@ func (j *JanitorService) processItem(ctx context.Context, objectRef *string) {
 			if err != nil {
 				log.Printf("Janitor: unmarshal error for object_ref %s, _id %s: %v",
 					*objectRef, doc.ID, err)
-				// Skip this entire resource.
-				return
+				// Skip this document and continue with the next one.
+				continue
 			}
 
 			// Check if the hit has a `deleted_at` field (deletion priority)

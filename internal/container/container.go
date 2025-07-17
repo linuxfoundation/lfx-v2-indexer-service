@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 
 	natsgo "github.com/nats-io/nats.go"
 	opensearchgo "github.com/opensearch-project/opensearch-go/v2"
@@ -35,6 +36,7 @@ type Container struct {
 	// Services
 	TransactionService *services.TransactionService
 	JanitorService     *janitor.JanitorService
+	HealthService      *services.HealthService
 
 	// Use Cases
 	IndexingUseCase          *usecases.IndexingUseCase
@@ -159,6 +161,15 @@ func (c *Container) initializeServices() error {
 		c.Config.OpenSearch.Index,
 	)
 
+	// Initialize health service with repository dependencies
+	c.HealthService = services.NewHealthService(
+		c.TransactionRepository,
+		c.MessageRepository,
+		c.AuthRepository,
+		c.Config.Health.CheckTimeout,
+		c.Config.Health.CacheDuration,
+	)
+
 	return nil
 }
 
@@ -183,8 +194,8 @@ func (c *Container) initializeUseCases() error {
 
 // initializeHandlers initializes presentation layer
 func (c *Container) initializeHandlers() error {
-	// Initialize health handler
-	c.HealthHandler = handlers.NewHealthHandler()
+	// Initialize health handler with health service
+	c.HealthHandler = handlers.NewHealthHandler(c.HealthService)
 
 	// Initialize message handlers (presentation layer)
 	c.IndexingMessageHandler = handlers.NewIndexingMessageHandler(c.MessageProcessingUseCase)
@@ -245,21 +256,22 @@ func (c *Container) SetupNATSSubscriptions(ctx context.Context) error {
 	return nil
 }
 
-// HealthCheck performs a health check on all services
+// HealthCheck performs a comprehensive health check on all services using the health service
 func (c *Container) HealthCheck(ctx context.Context) error {
-	// Check NATS connection
-	if c.NATSConnection == nil || !c.NATSConnection.IsConnected() {
-		return fmt.Errorf("NATS connection is not healthy")
+	if c.HealthService == nil {
+		return fmt.Errorf("health service is not initialized")
 	}
 
-	// Check OpenSearch connection
-	if err := c.TransactionRepository.HealthCheck(ctx); err != nil {
-		return fmt.Errorf("OpenSearch health check failed: %w", err)
-	}
+	status := c.HealthService.CheckReadiness(ctx)
 
-	// Check Message repository (NATS subscriptions)
-	if err := c.MessageRepository.HealthCheck(ctx); err != nil {
-		return fmt.Errorf("message repository health check failed: %w", err)
+	if status.Status == "unhealthy" {
+		var errors []string
+		for name, check := range status.Checks {
+			if check.Status == "unhealthy" {
+				errors = append(errors, fmt.Sprintf("%s: %s", name, check.Error))
+			}
+		}
+		return fmt.Errorf("health check failed: %s", strings.Join(errors, "; "))
 	}
 
 	return nil

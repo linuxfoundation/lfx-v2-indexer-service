@@ -574,6 +574,15 @@ func (m *MockAuthRepository) ParsePrincipals(ctx context.Context, headers map[st
 	return []entities.Principal{principal}, nil
 }
 
+// HealthCheck mocks health checking for auth repository
+func (m *MockAuthRepository) HealthCheck(ctx context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Return the configured error (if any)
+	return m.ParsePrincipalsError
+}
+
 // Test helper methods
 
 // SetValidToken configures a valid token for testing

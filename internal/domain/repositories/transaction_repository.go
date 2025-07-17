@@ -108,6 +108,9 @@ type AuthRepository interface {
 
 	// ParsePrincipals parses principals from HTTP headers with delegation support
 	ParsePrincipals(ctx context.Context, headers map[string]string) ([]entities.Principal, error)
+
+	// HealthCheck checks the health of the auth service
+	HealthCheck(ctx context.Context) error
 }
 
 // ConfigRepository defines the interface for configuration operations
