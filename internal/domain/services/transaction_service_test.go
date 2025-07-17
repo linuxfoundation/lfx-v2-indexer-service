@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/entities"
+	"github.com/linuxfoundation/lfx-indexer-service/internal/infrastructure/logging"
 	"github.com/linuxfoundation/lfx-indexer-service/internal/mocks"
 )
 
@@ -13,7 +14,8 @@ func TestTransactionService_ProcessTransaction_Success(t *testing.T) {
 	// Setup
 	mockRepo := mocks.NewMockTransactionRepository()
 	mockAuth := mocks.NewMockAuthRepository()
-	service := NewTransactionService(mockRepo, mockAuth)
+	logger, _ := logging.TestLogger(t)
+	service := NewTransactionService(mockRepo, mockAuth, logger)
 
 	// Test data
 	transaction := &entities.LFXTransaction{
@@ -56,7 +58,8 @@ func TestTransactionService_ProcessTransaction_ValidationError(t *testing.T) {
 	// Setup
 	mockRepo := mocks.NewMockTransactionRepository()
 	mockAuth := mocks.NewMockAuthRepository()
-	service := NewTransactionService(mockRepo, mockAuth)
+	logger, _ := logging.TestLogger(t)
+	service := NewTransactionService(mockRepo, mockAuth, logger)
 
 	// Test data with invalid action
 	transaction := &entities.LFXTransaction{
@@ -95,7 +98,8 @@ func TestTransactionService_ProcessTransaction_DeleteAction(t *testing.T) {
 	// Setup
 	mockRepo := mocks.NewMockTransactionRepository()
 	mockAuth := mocks.NewMockAuthRepository()
-	service := NewTransactionService(mockRepo, mockAuth)
+	logger, _ := logging.TestLogger(t)
+	service := NewTransactionService(mockRepo, mockAuth, logger)
 
 	// Test data for delete action
 	transaction := &entities.LFXTransaction{

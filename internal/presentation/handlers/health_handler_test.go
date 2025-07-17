@@ -12,6 +12,7 @@ import (
 	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/entities"
 	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/repositories"
 	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/services"
+	"github.com/linuxfoundation/lfx-indexer-service/internal/infrastructure/logging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -23,10 +24,12 @@ func TestHealthHandler_HandleReadiness_HealthyDependencies(t *testing.T) {
 	mockAuthRepo := &MockAuthRepo{}
 
 	// Create health service
+	logger, _ := logging.TestLogger(t)
 	healthService := services.NewHealthService(
 		mockTransactionRepo,
 		mockMessageRepo,
 		mockAuthRepo,
+		logger,
 		5*time.Second,
 		1*time.Second,
 	)
@@ -65,10 +68,12 @@ func TestHealthHandler_HandleReadiness_UnhealthyDependencies(t *testing.T) {
 	mockAuthRepo := &MockAuthRepo{}
 
 	// Create health service
+	logger, _ := logging.TestLogger(t)
 	healthService := services.NewHealthService(
 		mockTransactionRepo,
 		mockMessageRepo,
 		mockAuthRepo,
+		logger,
 		5*time.Second,
 		1*time.Second,
 	)
@@ -107,10 +112,12 @@ func TestHealthHandler_HandleLiveness_AlwaysHealthy(t *testing.T) {
 	mockAuthRepo := &MockAuthRepo{healthError: assert.AnError}
 
 	// Create health service
+	logger, _ := logging.TestLogger(t)
 	healthService := services.NewHealthService(
 		mockTransactionRepo,
 		mockMessageRepo,
 		mockAuthRepo,
+		logger,
 		5*time.Second,
 		1*time.Second,
 	)

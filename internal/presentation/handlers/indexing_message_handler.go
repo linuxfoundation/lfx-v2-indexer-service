@@ -32,13 +32,13 @@ func (h *IndexingMessageHandler) HandleWithReply(ctx context.Context, data []byt
 	err := h.messageProcessingUseCase.ProcessIndexingMessage(ctx, data, subject)
 
 	if err != nil {
-		// Handle error response using shared base handler method
-		h.RespondError(reply, err, "error processing indexing message")
+		// Handle error response using shared base handler method with context
+		h.RespondErrorWithContext(ctx, reply, err, "error processing indexing message", subject)
 		return err
 	}
 
-	// Send success response using shared base handler method
-	h.RespondSuccess(reply, subject)
+	// Send success response using shared base handler method with context
+	h.RespondSuccessWithContext(ctx, reply, subject)
 	return nil
 }
 
@@ -68,12 +68,12 @@ func (h *V1IndexingMessageHandler) HandleWithReply(ctx context.Context, data []b
 	err := h.messageProcessingUseCase.ProcessV1IndexingMessage(ctx, data, subject)
 
 	if err != nil {
-		// Handle error response using shared base handler method
-		h.RespondError(reply, err, "error processing V1 indexing message")
+		// Handle error response using shared base handler method with context
+		h.RespondErrorWithContext(ctx, reply, err, "error processing V1 indexing message", subject)
 		return err
 	}
 
-	// Send success response using shared base handler method
-	h.RespondSuccess(reply, subject)
+	// Send success response using shared base handler method with context
+	h.RespondSuccessWithContext(ctx, reply, subject)
 	return nil
 }

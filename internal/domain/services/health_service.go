@@ -2,10 +2,12 @@ package services
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/repositories"
+	"github.com/linuxfoundation/lfx-indexer-service/internal/infrastructure/logging"
 )
 
 // HealthService coordinates health checks across all dependencies with inline caching
@@ -13,6 +15,7 @@ type HealthService struct {
 	transactionRepo repositories.TransactionRepository
 	messageRepo     repositories.MessageRepository
 	authRepo        repositories.AuthRepository
+	logger          *slog.Logger
 	timeout         time.Duration
 
 	// Inline cache fields - much simpler than separate HealthCache!
@@ -51,6 +54,7 @@ func NewHealthService(
 	transactionRepo repositories.TransactionRepository,
 	messageRepo repositories.MessageRepository,
 	authRepo repositories.AuthRepository,
+	logger *slog.Logger,
 	timeout time.Duration,
 	cacheDuration time.Duration,
 ) *HealthService {
@@ -58,6 +62,7 @@ func NewHealthService(
 		transactionRepo: transactionRepo,
 		messageRepo:     messageRepo,
 		authRepo:        authRepo,
+		logger:          logging.WithComponent(logger, "health_service"),
 		timeout:         timeout,
 		cacheDuration:   cacheDuration,
 	}
@@ -65,14 +70,19 @@ func NewHealthService(
 
 // CheckReadiness performs readiness checks with inline caching
 func (s *HealthService) CheckReadiness(ctx context.Context) *HealthStatus {
+	logger := s.logger
+
 	// Simple inline cache check
 	s.mu.RLock()
 	if s.lastReadiness != nil && time.Since(s.lastReadiness.timestamp) < s.cacheDuration {
 		cached := s.lastReadiness.status
 		s.mu.RUnlock()
+		logger.Debug("Health readiness check served from cache")
 		return cached
 	}
 	s.mu.RUnlock()
+
+	logger.Debug("Health readiness check started")
 
 	// Perform actual health check
 	status := s.performReadinessCheck(ctx)
@@ -81,6 +91,11 @@ func (s *HealthService) CheckReadiness(ctx context.Context) *HealthStatus {
 	s.mu.Lock()
 	s.lastReadiness = &cachedResult{status: status, timestamp: time.Now()}
 	s.mu.Unlock()
+
+	logger.Info("Health readiness check completed",
+		"status", status.Status,
+		"error_count", status.ErrorCount,
+		"duration", status.Duration)
 
 	return status
 }

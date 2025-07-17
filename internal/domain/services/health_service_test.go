@@ -8,6 +8,7 @@ import (
 
 	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/entities"
 	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/repositories"
+	"github.com/linuxfoundation/lfx-indexer-service/internal/infrastructure/logging"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -20,10 +21,12 @@ func TestHealthService_CacheWorksCorrectly(t *testing.T) {
 		},
 	}
 
+	logger, _ := logging.TestLogger(t)
 	healthService := NewHealthService(
 		mockRepo,
 		&TestMessageRepo{},
 		&TestAuthRepo{},
+		logger,
 		5*time.Second,
 		100*time.Millisecond, // Very short cache duration for testing
 	)
@@ -48,12 +51,20 @@ func TestHealthService_CacheWorksCorrectly(t *testing.T) {
 }
 
 func TestHealthService_ClearCache(t *testing.T) {
+	mockRepo := &TestTransactionRepo{
+		healthCheckFunc: func(ctx context.Context) error {
+			return nil
+		},
+	}
+
+	logger, _ := logging.TestLogger(t)
 	healthService := NewHealthService(
-		&TestTransactionRepo{},
+		mockRepo,
 		&TestMessageRepo{},
 		&TestAuthRepo{},
+		logger,
 		5*time.Second,
-		1*time.Hour, // Long cache duration
+		100*time.Millisecond, // Very short cache duration for testing
 	)
 
 	// Populate cache

@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/entities"
 	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/repositories"
+	"github.com/linuxfoundation/lfx-indexer-service/internal/infrastructure/logging"
 )
 
 const machineUserPrefix = "clients@"
@@ -19,13 +21,15 @@ const machineUserPrefix = "clients@"
 type TransactionService struct {
 	transactionRepo repositories.TransactionRepository
 	authRepo        repositories.AuthRepository
+	logger          *slog.Logger
 }
 
 // NewTransactionService creates a new transaction service
-func NewTransactionService(transactionRepo repositories.TransactionRepository, authRepo repositories.AuthRepository) *TransactionService {
+func NewTransactionService(transactionRepo repositories.TransactionRepository, authRepo repositories.AuthRepository, logger *slog.Logger) *TransactionService {
 	return &TransactionService{
 		transactionRepo: transactionRepo,
 		authRepo:        authRepo,
+		logger:          logging.WithComponent(logger, "transaction_service"),
 	}
 }
 
@@ -112,14 +116,23 @@ func (s *TransactionService) GenerateTransactionBody(ctx context.Context, transa
 
 // ProcessTransaction processes a complete transaction
 func (s *TransactionService) ProcessTransaction(ctx context.Context, transaction *entities.LFXTransaction, index string) (*entities.ProcessingResult, error) {
+	logger := logging.FromContext(ctx, s.logger)
+
 	startTime := time.Now()
 	result := &entities.ProcessingResult{
 		ProcessedAt: startTime,
 		MessageID:   s.generateMessageID(transaction),
 	}
 
+	logger.Info("Processing transaction",
+		"action", transaction.Action,
+		"object_type", transaction.ObjectType,
+		"is_v1", transaction.IsV1,
+		"index", index)
+
 	// Enrich the transaction
 	if err := s.EnrichTransaction(ctx, transaction); err != nil {
+		logging.LogError(logger, "Failed to enrich transaction", err)
 		result.Error = err
 		result.Success = false
 		result.Duration = time.Since(startTime)
@@ -129,6 +142,7 @@ func (s *TransactionService) ProcessTransaction(ctx context.Context, transaction
 	// Generate transaction body
 	body, err := s.GenerateTransactionBody(ctx, transaction)
 	if err != nil {
+		logging.LogError(logger, "Failed to generate transaction body", err)
 		result.Error = err
 		result.Success = false
 		result.Duration = time.Since(startTime)
