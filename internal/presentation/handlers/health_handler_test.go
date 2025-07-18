@@ -35,7 +35,7 @@ func TestHealthHandler_HandleReadiness_HealthyDependencies(t *testing.T) {
 	)
 
 	// Create handler
-	handler := NewHealthHandler(healthService)
+	handler := NewHealthHandler(healthService, false) // Use JSON responses for testing
 
 	// Create request
 	req := httptest.NewRequest("GET", "/readyz", nil)
@@ -79,7 +79,7 @@ func TestHealthHandler_HandleReadiness_UnhealthyDependencies(t *testing.T) {
 	)
 
 	// Create handler
-	handler := NewHealthHandler(healthService)
+	handler := NewHealthHandler(healthService, false) // Use JSON responses for testing
 
 	// Create request
 	req := httptest.NewRequest("GET", "/readyz", nil)
@@ -123,7 +123,7 @@ func TestHealthHandler_HandleLiveness_AlwaysHealthy(t *testing.T) {
 	)
 
 	// Create handler
-	handler := NewHealthHandler(healthService)
+	handler := NewHealthHandler(healthService, false) // Use JSON responses for testing
 
 	// Create request
 	req := httptest.NewRequest("GET", "/livez", nil)

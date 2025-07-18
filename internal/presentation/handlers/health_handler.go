@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/services"
@@ -9,13 +10,15 @@ import (
 
 // HealthHandler handles Kubernetes health check requests
 type HealthHandler struct {
-	healthService *services.HealthService
+	healthService  *services.HealthService
+	simpleResponse bool
 }
 
 // NewHealthHandler creates a new health handler with the health service
-func NewHealthHandler(healthService *services.HealthService) *HealthHandler {
+func NewHealthHandler(healthService *services.HealthService, simpleResponse bool) *HealthHandler {
 	return &HealthHandler{
-		healthService: healthService,
+		healthService:  healthService,
+		simpleResponse: simpleResponse,
 	}
 }
 
@@ -65,8 +68,21 @@ func (h *HealthHandler) HandleHealthCheck(w http.ResponseWriter, r *http.Request
 	h.writeHealthResponse(w, status, statusCode)
 }
 
-// writeHealthResponse writes the health status as JSON response
+// writeHealthResponse writes the health status as JSON or simple response
 func (h *HealthHandler) writeHealthResponse(w http.ResponseWriter, status *services.HealthStatus, statusCode int) {
+	if h.simpleResponse {
+		// Simple response for K8s compatibility
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(statusCode)
+		if statusCode == http.StatusOK {
+			fmt.Fprintf(w, "OK\n")
+		} else {
+			fmt.Fprintf(w, "UNHEALTHY\n")
+		}
+		return
+	}
+
+	// Default JSON response
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 

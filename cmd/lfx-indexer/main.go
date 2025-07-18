@@ -2,12 +2,9 @@ package main
 
 import (
 	"context"
-	"flag"
-	"fmt"
-	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -16,73 +13,48 @@ import (
 )
 
 func main() {
-	// Initialize structured logger immediately (JSON by default)
-	logger := logging.NewLogger()
-	slog.SetDefault(logger) // Set as default for any slog.Default() calls
+	// Parse CLI flags
+	flags := parseCLIFlags()
+
+	// Initialize logger using existing infrastructure
+	logger := logging.NewLogger(flags.Debug)
+
+	// Handle early exits (help, version, config-check)
+	handleEarlyExits(flags, logger)
+
+	// Log configuration with sources for transparency
+	logger.Info("Configuration loaded",
+		"port", flags.Port,
+		"debug", flags.Debug,
+		"bind", flags.Bind,
+		"no_janitor", flags.NoJanitor,
+		"simple_health", flags.SimpleHealth,
+		"version", "v2.0.0")
 
 	startupTime := time.Now()
 	logger.Info("LFX Indexer Service startup initiated", "version", "v2.0.0")
-
-	// Parse command line flags
-	var (
-		configCheck = flag.Bool("check-config", false, "Check configuration and exit")
-		version     = flag.Bool("version", false, "Print version and exit")
-		help        = flag.Bool("help", false, "Show help")
-	)
-	flag.Parse()
-
-	logger.Info("Command line flags parsed",
-		"config_check", *configCheck,
-		"version", *version,
-		"help", *help)
-
-	// Handle help flag
-	if *help {
-		fmt.Println("LFX Indexer Service")
-		fmt.Println("Usage:")
-		flag.PrintDefaults()
-		os.Exit(0)
-	}
-
-	// Handle version flag
-	if *version {
-		fmt.Println("LFX Indexer Service v2.0.0")
-		os.Exit(0)
-	}
 
 	// Initialize dependency injection container
 	logger.Info("Initializing dependency injection container...")
 	containerStartTime := time.Now()
 
-	container, err := container.NewContainer(logger)
+	// CLI config is already the right type - no conversion needed
+	container, err := container.NewContainer(logger, flags)
 	if err != nil {
 		logger.Error("Failed to initialize container",
 			"duration", time.Since(containerStartTime),
 			"error", err.Error())
 		os.Exit(1)
 	}
-	defer func() {
-		logger.Info("Initiating graceful shutdown...")
-		if err := container.GracefulShutdown(); err != nil {
-			logger.Error("Graceful shutdown completed with errors", "error", err.Error())
-		} else {
-			logger.Info("Graceful shutdown completed successfully")
-		}
-	}()
 
 	logger.Info("Container initialized successfully", "duration", time.Since(containerStartTime))
-
-	// Handle config check flag
-	if *configCheck {
-		logger.Info("Configuration check requested")
-		fmt.Println("Configuration is valid")
-		logger.Info("Configuration check completed successfully")
-		os.Exit(0)
-	}
 
 	// Create context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Create WaitGroup for coordinated shutdown
+	gracefulCloseWG := &sync.WaitGroup{}
 
 	// Perform health check
 	logger.Info("Performing initial health check...")
@@ -99,11 +71,11 @@ func main() {
 			"duration", time.Since(healthCheckStart))
 	}
 
-	// Start background services
+	// Start background services with WaitGroup coordination
 	logger.Info("Starting background services...")
 	servicesStartTime := time.Now()
 
-	if err := container.StartServices(ctx); err != nil {
+	if err := container.StartServicesWithWaitGroup(ctx, gracefulCloseWG); err != nil {
 		logger.Error("Failed to start background services",
 			"duration", time.Since(servicesStartTime),
 			"error", err.Error())
@@ -112,32 +84,10 @@ func main() {
 
 	logger.Info("Background services started successfully", "duration", time.Since(servicesStartTime))
 
-	// Setup minimal HTTP server for Kubernetes health checks only
+	// Setup and start HTTP server
 	logger.Info("Setting up health check HTTP server...")
-	mux := http.NewServeMux()
-	container.HealthHandler.RegisterRoutes(mux)
-
-	// Create HTTP server
-	server := &http.Server{
-		Addr:         fmt.Sprintf(":%d", container.Config.Server.Port),
-		Handler:      mux,
-		ReadTimeout:  container.Config.Server.ReadTimeout,
-		WriteTimeout: container.Config.Server.WriteTimeout,
-	}
-
-	// Start HTTP server in a goroutine
-	go func() {
-		logger.Info("Starting health check HTTP server", "port", container.Config.Server.Port)
-		logger.Info("Health endpoints available",
-			"health", fmt.Sprintf("http://localhost:%d/health", container.Config.Server.Port),
-			"livez", fmt.Sprintf("http://localhost:%d/livez", container.Config.Server.Port),
-			"readyz", fmt.Sprintf("http://localhost:%d/readyz", container.Config.Server.Port))
-
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error("Health check server error", "error", err.Error())
-			os.Exit(1)
-		}
-	}()
+	server := createHTTPServer(container, flags.Bind)
+	startHTTPServer(server, container, flags.Bind, logger)
 
 	// Wait for shutdown signal
 	sigChan := make(chan os.Signal, 1)
@@ -161,13 +111,28 @@ func main() {
 	logger.Info("Shutdown signal received", "signal", receivedSignal)
 	logger.Info("Initiating graceful shutdown sequence...")
 
-	// Cancel context to stop background services
-	logger.Info("Stopping background services...")
+	// Cancel context to signal shutdown
+	logger.Info("Signaling background services to stop...")
 	cancel()
 
-	// Shutdown HTTP server gracefully
+	// Wait for background services to complete gracefully with timeout
+	logger.Info("Waiting for background services to complete...")
+	waitDone := make(chan struct{})
+	go func() {
+		gracefulCloseWG.Wait()
+		close(waitDone)
+	}()
+
+	select {
+	case <-waitDone:
+		logger.Info("All background services completed gracefully")
+	case <-time.After(30 * time.Second):
+		logger.Warn("Background services shutdown timeout reached")
+	}
+
+	// Now shutdown HTTP server after all other services are stopped
 	logger.Info("Shutting down health check HTTP server...")
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), container.Config.Server.ShutdownTimeout)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 
 	if err := server.Shutdown(shutdownCtx); err != nil {

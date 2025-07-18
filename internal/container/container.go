@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
+	"sync"
 
 	natsgo "github.com/nats-io/nats.go"
 	opensearchgo "github.com/opensearch-project/opensearch-go/v2"
@@ -51,12 +53,42 @@ type Container struct {
 	V1IndexingMessageHandler *handlers.V1IndexingMessageHandler
 }
 
-// NewContainer creates a new dependency injection container
-func NewContainer(logger *slog.Logger) (*Container, error) {
-	// Load configuration
+// NewContainer creates a new dependency injection container with CLI overrides
+func NewContainer(logger *slog.Logger, cliConfig *config.CLIConfig) (*Container, error) {
+	// Load base configuration
 	config, err := config.LoadConfig()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load configuration: %w", err)
+	}
+
+	// Apply CLI overrides to configuration
+	if cliConfig != nil {
+		if cliConfig.Port != "" {
+			if port, err := strconv.Atoi(cliConfig.Port); err == nil {
+				config.Server.Port = port
+				logger.Info("Port overridden by CLI flag", "port", port)
+			}
+		}
+
+		if cliConfig.NoJanitor {
+			config.Janitor.Enabled = false
+			logger.Info("Janitor disabled by CLI flag")
+		}
+
+		if cliConfig.Debug {
+			config.Logging.Level = "debug"
+			logger.Info("Debug logging enabled by CLI flag")
+		}
+
+		if cliConfig.SimpleHealth {
+			config.Health.EnableDetailedResponse = false
+			logger.Info("Simple health responses enabled by CLI flag")
+		}
+
+		// Note: bind address is handled at HTTP server level, not in config
+		if cliConfig.Bind != "*" && cliConfig.Bind != "" {
+			logger.Info("Bind address set by CLI flag", "bind", cliConfig.Bind)
+		}
 	}
 
 	// Validate configuration
@@ -106,52 +138,90 @@ func (c *Container) initializeInfrastructure() error {
 		"connection_timeout", c.Config.NATS.ConnectionTimeout,
 		"drain_timeout", c.Config.NATS.DrainTimeout)
 
-	// Create error handler for NATS connection issues
+	// Create error handler for NATS connection issues with enhanced context
 	errorHandler := natsgo.ErrorHandler(func(conn *natsgo.Conn, sub *natsgo.Subscription, err error) {
+		// Get connection statistics for context
+		stats := conn.Stats()
+
 		if sub != nil {
 			pending, _, _ := sub.Pending()
 			delivered, _ := sub.Delivered()
-			c.Logger.Error("NATS subscription error",
+			c.Logger.Error("NATS subscription error with full context",
 				"error", err.Error(),
 				"subject", sub.Subject,
 				"queue", sub.Queue,
 				"pending_messages", pending,
-				"delivered_messages", delivered)
+				"delivered_messages", delivered,
+				"connection_status", conn.Status(),
+				"connected_url", conn.ConnectedUrl(),
+				"reconnects", stats.Reconnects,
+				"in_msgs", stats.InMsgs,
+				"out_msgs", stats.OutMsgs,
+				"in_bytes", stats.InBytes,
+				"out_bytes", stats.OutBytes)
 		} else {
-			c.Logger.Error("NATS connection error",
+			c.Logger.Error("NATS connection error with full context",
 				"error", err.Error(),
-				"status", conn.Status(),
-				"connected_url", conn.ConnectedUrl())
+				"connection_status", conn.Status(),
+				"connected_url", conn.ConnectedUrl(),
+				"connected_server", conn.ConnectedServerName(),
+				"reconnects", stats.Reconnects,
+				"in_msgs", stats.InMsgs,
+				"out_msgs", stats.OutMsgs,
+				"in_bytes", stats.InBytes,
+				"out_bytes", stats.OutBytes,
+				"last_error", conn.LastError())
 		}
 	})
 
-	// Create closed handler for connection recovery
+	// Create closed handler for connection recovery with enhanced monitoring
 	closedHandler := natsgo.ClosedHandler(func(conn *natsgo.Conn) {
 		// Check if this is a graceful shutdown or unexpected closure
 		status := conn.Status()
-		c.Logger.Error("NATS connection closed",
+		stats := conn.Stats()
+		lastError := conn.LastError()
+
+		c.Logger.Error("NATS connection closed with full context",
 			"status", status,
-			"last_error", conn.LastError())
+			"last_error", lastError,
+			"reconnects", stats.Reconnects,
+			"total_in_msgs", stats.InMsgs,
+			"total_out_msgs", stats.OutMsgs,
+			"total_in_bytes", stats.InBytes,
+			"total_out_bytes", stats.OutBytes,
+			"connected_server", conn.ConnectedServerName())
 
 		if status == natsgo.CLOSED {
-			c.Logger.Error("NATS max reconnects exhausted - connection permanently closed")
+			c.Logger.Error("NATS max reconnects exhausted - connection permanently closed",
+				"max_reconnects_reached", c.Config.NATS.MaxReconnects,
+				"actual_reconnects", stats.Reconnects,
+				"final_error", lastError)
 			// In a production system, you might want to trigger application shutdown
 			// or implement additional recovery logic here
 		}
 	})
 
-	// Create disconnect handler for connection state tracking
+	// Create disconnect handler for connection state tracking with timing
 	disconnectHandler := natsgo.DisconnectErrHandler(func(conn *natsgo.Conn, err error) {
-		c.Logger.Warn("NATS connection disconnected",
+		stats := conn.Stats()
+		c.Logger.Warn("NATS connection disconnected with context",
 			"error", err.Error(),
-			"status", conn.Status())
+			"status", conn.Status(),
+			"connected_server", conn.ConnectedServerName(),
+			"reconnects_so_far", stats.Reconnects,
+			"msgs_processed", stats.InMsgs,
+			"next_reconnect_wait", c.Config.NATS.ReconnectWait)
 	})
 
-	// Create reconnect handler for connection state tracking
+	// Create reconnect handler for connection state tracking with success metrics
 	reconnectHandler := natsgo.ReconnectHandler(func(conn *natsgo.Conn) {
-		c.Logger.Info("NATS connection reconnected",
+		stats := conn.Stats()
+		c.Logger.Info("NATS connection reconnected successfully",
 			"connected_url", conn.ConnectedUrl(),
-			"status", conn.Status())
+			"connected_server", conn.ConnectedServerName(),
+			"status", conn.Status(),
+			"total_reconnects", stats.Reconnects,
+			"messages_since_start", stats.InMsgs)
 	})
 
 	natsConn, err := natsgo.Connect(
@@ -306,8 +376,9 @@ func (c *Container) initializeUseCases() error {
 
 // initializeHandlers initializes presentation layer
 func (c *Container) initializeHandlers() error {
-	// Initialize health handler with health service
-	c.HealthHandler = handlers.NewHealthHandler(c.HealthService)
+	// Initialize health handler with health service and simple response setting
+	simpleResponse := !c.Config.Health.EnableDetailedResponse
+	c.HealthHandler = handlers.NewHealthHandler(c.HealthService, simpleResponse)
 
 	// Initialize message handlers (presentation layer)
 	c.IndexingMessageHandler = handlers.NewIndexingMessageHandler(c.MessageProcessingUseCase)
@@ -332,6 +403,54 @@ func (c *Container) StartServices(ctx context.Context) error {
 	}
 
 	c.Logger.Info("NATS message processing services started successfully")
+	return nil
+}
+
+// StartServicesWithWaitGroup starts all background services with WaitGroup coordination
+func (c *Container) StartServicesWithWaitGroup(ctx context.Context, wg *sync.WaitGroup) error {
+	c.Logger.Info("Starting NATS message processing services with WaitGroup coordination...")
+
+	// Setup NATS subscriptions
+	if err := c.SetupNATSSubscriptions(ctx); err != nil {
+		return fmt.Errorf("failed to setup NATS subscriptions: %w", err)
+	}
+
+	// Add NATS to WaitGroup for shutdown coordination
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		c.Logger.Debug("NATS shutdown coordinator started")
+		<-ctx.Done() // Wait for shutdown signal
+		c.Logger.Info("NATS shutdown initiated...")
+
+		// Drain NATS connections
+		if c.MessageRepository != nil {
+			if err := c.MessageRepository.DrainWithTimeout(); err != nil {
+				c.Logger.Error("Failed to drain NATS connections", "error", err.Error())
+			} else {
+				c.Logger.Info("NATS connections drained successfully")
+			}
+		}
+		c.Logger.Info("NATS shutdown completed")
+	}()
+
+	// Start production janitor service with WaitGroup coordination
+	if c.Config.Janitor.Enabled && c.JanitorService != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c.Logger.Debug("Janitor shutdown coordinator started")
+			<-ctx.Done() // Wait for shutdown signal
+			c.Logger.Info("Janitor service shutdown initiated...")
+			c.JanitorService.Shutdown()
+			c.Logger.Info("Janitor service shutdown completed")
+		}()
+
+		c.JanitorService.StartItemLoop(ctx)
+		c.Logger.Info("janitor service started with WaitGroup coordination")
+	}
+
+	c.Logger.Info("NATS message processing services started successfully with WaitGroup coordination")
 	return nil
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"log/slog"
 	"os"
+	"strconv"
 )
 
 type contextKey string
@@ -24,15 +25,21 @@ func NewRequestID() string {
 
 // NewLogger creates a logger with container-optimized defaults (JSON, Info level)
 // Reads LOG_FORMAT and LOG_LEVEL from environment variables
-func NewLogger() *slog.Logger {
+// Optional debug parameter overrides environment LOG_LEVEL and enables AddSource
+func NewLogger(debug ...bool) *slog.Logger {
 	// Default to JSON format (container-friendly)
-	format := getEnvOrDefault("LOG_FORMAT", "json")
+	format := GetEnvOrDefault("LOG_FORMAT", "json")
 
-	// Default to Info level (not too verbose)
-	level := getEnvOrDefault("LOG_LEVEL", "info")
+	opts := &slog.HandlerOptions{}
 
-	opts := &slog.HandlerOptions{
-		Level: parseLogLevel(level),
+	// Check if debug override is provided
+	if len(debug) > 0 && debug[0] {
+		opts.Level = slog.LevelDebug
+		opts.AddSource = true // Enable source location in debug mode
+	} else {
+		// Use configured log level from environment
+		level := GetEnvOrDefault("LOG_LEVEL", "info")
+		opts.Level = parseLogLevel(level)
 	}
 
 	var handler slog.Handler
@@ -42,13 +49,25 @@ func NewLogger() *slog.Logger {
 		handler = slog.NewTextHandler(os.Stdout, opts)
 	}
 
-	return slog.New(handler)
+	logger := slog.New(handler)
+	slog.SetDefault(logger) // Set as default for any slog.Default() calls
+	return logger
 }
 
-// getEnvOrDefault returns environment variable value or default if not set
-func getEnvOrDefault(key, defaultValue string) string {
+// GetEnvOrDefault returns environment variable value or default if not set
+func GetEnvOrDefault(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
+	}
+	return defaultValue
+}
+
+// GetEnvBool returns environment variable as boolean or default if not set/invalid
+func GetEnvBool(key string, defaultValue bool) bool {
+	if value := os.Getenv(key); value != "" {
+		if boolValue, err := strconv.ParseBool(value); err == nil {
+			return boolValue
+		}
 	}
 	return defaultValue
 }
