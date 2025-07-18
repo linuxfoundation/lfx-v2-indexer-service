@@ -7,13 +7,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/repositories"
-	"github.com/linuxfoundation/lfx-indexer-service/internal/infrastructure/logging"
+	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/contracts"
+	"github.com/linuxfoundation/lfx-indexer-service/pkg/logging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
 
-// MockTransactionRepository implements the repositories.TransactionRepository interface for testing
+// MockTransactionRepository implements the contracts.TransactionRepository interface for testing
 type MockTransactionRepository struct {
 	mock.Mock
 }
@@ -38,7 +38,7 @@ func (m *MockTransactionRepository) Delete(ctx context.Context, index string, do
 	return args.Error(0)
 }
 
-func (m *MockTransactionRepository) BulkIndex(ctx context.Context, operations []repositories.BulkOperation) error {
+func (m *MockTransactionRepository) BulkIndex(ctx context.Context, operations []contracts.BulkOperation) error {
 	args := m.Called(ctx, operations)
 	return args.Error(0)
 }
@@ -48,14 +48,14 @@ func (m *MockTransactionRepository) HealthCheck(ctx context.Context) error {
 	return args.Error(0)
 }
 
-func (m *MockTransactionRepository) UpdateWithOptimisticLock(ctx context.Context, index, docID string, body io.Reader, params *repositories.OptimisticUpdateParams) error {
+func (m *MockTransactionRepository) UpdateWithOptimisticLock(ctx context.Context, index, docID string, body io.Reader, params *contracts.OptimisticUpdateParams) error {
 	args := m.Called(ctx, index, docID, body, params)
 	return args.Error(0)
 }
 
-func (m *MockTransactionRepository) SearchWithVersions(ctx context.Context, index string, query map[string]any) ([]repositories.VersionedDocument, error) {
+func (m *MockTransactionRepository) SearchWithVersions(ctx context.Context, index string, query map[string]any) ([]contracts.VersionedDocument, error) {
 	args := m.Called(ctx, index, query)
-	return args.Get(0).([]repositories.VersionedDocument), args.Error(1)
+	return args.Get(0).([]contracts.VersionedDocument), args.Error(1)
 }
 
 func TestNewJanitorService(t *testing.T) {
@@ -94,7 +94,7 @@ func TestJanitorService_CheckItem(t *testing.T) {
 		},
 	}
 
-	mockDocs := []repositories.VersionedDocument{
+	mockDocs := []contracts.VersionedDocument{
 		{
 			ID:          "doc1",
 			SeqNo:       &[]int64{1}[0],
@@ -123,7 +123,7 @@ func TestJanitorService_ProcessItemWithError(t *testing.T) {
 	objectRef := "test-object-ref"
 
 	// Set up mock to return an error
-	mockRepo.On("SearchWithVersions", mock.Anything, mock.Anything, mock.Anything).Return([]repositories.VersionedDocument{}, fmt.Errorf("search error"))
+	mockRepo.On("SearchWithVersions", mock.Anything, mock.Anything, mock.Anything).Return([]contracts.VersionedDocument{}, fmt.Errorf("search error"))
 
 	// Process the item - should not panic
 	service.processItem(ctx, &objectRef)
@@ -170,7 +170,7 @@ func TestJanitorService_ProcessMultipleHits(t *testing.T) {
 	seqNo1, primaryTerm1 := int64(1), int64(1)
 	seqNo2, primaryTerm2 := int64(2), int64(1)
 
-	mockDocs := []repositories.VersionedDocument{
+	mockDocs := []contracts.VersionedDocument{
 		{
 			ID:          "doc1",
 			SeqNo:       &seqNo1,
@@ -192,7 +192,7 @@ func TestJanitorService_ProcessMultipleHits(t *testing.T) {
 	mockRepo.On("SearchWithVersions", ctx, "test-index", expectedQuery).Return(mockDocs, nil)
 
 	// Expect the newer document (doc1) to be preserved and the older (doc2) to be updated
-	updateParams := &repositories.OptimisticUpdateParams{
+	updateParams := &contracts.OptimisticUpdateParams{
 		SeqNo:       &seqNo2,
 		PrimaryTerm: &primaryTerm2,
 	}
@@ -216,7 +216,7 @@ func TestJanitorService_ProcessVersionConflict(t *testing.T) {
 	seqNo1, primaryTerm1 := int64(1), int64(1)
 	seqNo2, primaryTerm2 := int64(2), int64(1)
 
-	mockDocs := []repositories.VersionedDocument{
+	mockDocs := []contracts.VersionedDocument{
 		{
 			ID:          "doc1",
 			SeqNo:       &seqNo1,
@@ -249,11 +249,11 @@ func TestJanitorService_ProcessVersionConflict(t *testing.T) {
 	mockRepo.On("SearchWithVersions", ctx, "test-index", expectedQuery).Return(mockDocs, nil)
 
 	// Mock version conflict error
-	updateParams := &repositories.OptimisticUpdateParams{
+	updateParams := &contracts.OptimisticUpdateParams{
 		SeqNo:       &seqNo2,
 		PrimaryTerm: &primaryTerm2,
 	}
-	mockRepo.On("UpdateWithOptimisticLock", ctx, "test-index", "doc2", mock.Anything, updateParams).Return(&repositories.VersionConflictError{
+	mockRepo.On("UpdateWithOptimisticLock", ctx, "test-index", "doc2", mock.Anything, updateParams).Return(&contracts.VersionConflictError{
 		DocumentID: "doc2",
 		Err:        fmt.Errorf("version conflict"),
 	})
@@ -277,7 +277,7 @@ func TestJanitorService_ProcessWithMarshalError(t *testing.T) {
 	primaryTerm1 := int64(1)
 
 	// Create document with source that can't be marshaled properly
-	mockDocs := []repositories.VersionedDocument{
+	mockDocs := []contracts.VersionedDocument{
 		{
 			ID:          "doc1",
 			SeqNo:       &seqNo1,

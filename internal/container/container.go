@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -11,14 +12,16 @@ import (
 	natsgo "github.com/nats-io/nats.go"
 	opensearchgo "github.com/opensearch-project/opensearch-go/v2"
 
-	"github.com/linuxfoundation/lfx-indexer-service/internal/application/usecases"
+	"github.com/linuxfoundation/lfx-indexer-service/internal/application"
 	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/services"
+	"github.com/linuxfoundation/lfx-indexer-service/internal/infrastructure/auth"
 	"github.com/linuxfoundation/lfx-indexer-service/internal/infrastructure/config"
 	"github.com/linuxfoundation/lfx-indexer-service/internal/infrastructure/janitor"
-	"github.com/linuxfoundation/lfx-indexer-service/internal/infrastructure/jwt"
-	natspkg "github.com/linuxfoundation/lfx-indexer-service/internal/infrastructure/nats"
-	opensearchpkg "github.com/linuxfoundation/lfx-indexer-service/internal/infrastructure/opensearch"
+	"github.com/linuxfoundation/lfx-indexer-service/internal/infrastructure/messaging"
+	"github.com/linuxfoundation/lfx-indexer-service/internal/infrastructure/storage"
 	"github.com/linuxfoundation/lfx-indexer-service/internal/presentation/handlers"
+	"github.com/linuxfoundation/lfx-indexer-service/pkg/constants"
+	"github.com/linuxfoundation/lfx-indexer-service/pkg/logging"
 )
 
 // Container holds all dependencies
@@ -33,28 +36,30 @@ type Container struct {
 	NATSConnection   *natsgo.Conn
 	OpenSearchClient *opensearchgo.Client
 
-	// Repositories
-	TransactionRepository *opensearchpkg.TransactionRepository
-	MessageRepository     *natspkg.MessageRepository
-	AuthRepository        *jwt.AuthRepository
+	// Repositories (consolidated)
+	StorageRepository   *storage.StorageRepository
+	MessagingRepository *messaging.MessagingRepository
+	AuthRepository      *auth.AuthRepository
 
-	// Services
-	TransactionService *services.TransactionService
-	JanitorService     *janitor.JanitorService
-	HealthService      *services.HealthService
+	// Services (consolidated)
+	IndexerService *services.IndexerService
+	JanitorService *janitor.JanitorService
 
-	// Use Cases
-	IndexingUseCase          *usecases.IndexingUseCase
-	MessageProcessingUseCase *usecases.MessageProcessingUseCase
+	// Application Layer (consolidated)
+	MessageProcessor *application.MessageProcessor
 
-	// Handlers
-	HealthHandler            *handlers.HealthHandler
-	IndexingMessageHandler   *handlers.IndexingMessageHandler
-	V1IndexingMessageHandler *handlers.V1IndexingMessageHandler
+	// Handlers (consolidated)
+	HealthHandler          *handlers.HealthHandler
+	IndexingMessageHandler *handlers.IndexingMessageHandler // Unified handler for both V2 and V1
 }
 
 // NewContainer creates a new dependency injection container with CLI overrides
 func NewContainer(logger *slog.Logger, cliConfig *config.CLIConfig) (*Container, error) {
+	// Validate required parameters
+	if logger == nil {
+		return nil, fmt.Errorf("logger cannot be nil")
+	}
+
 	// Load base configuration
 	config, err := config.LoadConfig()
 	if err != nil {
@@ -64,10 +69,12 @@ func NewContainer(logger *slog.Logger, cliConfig *config.CLIConfig) (*Container,
 	// Apply CLI overrides to configuration
 	if cliConfig != nil {
 		if cliConfig.Port != "" {
-			if port, err := strconv.Atoi(cliConfig.Port); err == nil {
-				config.Server.Port = port
-				logger.Info("Port overridden by CLI flag", "port", port)
+			port, err := strconv.Atoi(cliConfig.Port)
+			if err != nil {
+				return nil, fmt.Errorf("invalid port value from CLI: %s - %w", cliConfig.Port, err)
 			}
+			config.Server.Port = port
+			logger.Info("Port overridden by CLI flag", "port", port)
 		}
 
 		if cliConfig.NoJanitor {
@@ -114,8 +121,8 @@ func NewContainer(logger *slog.Logger, cliConfig *config.CLIConfig) (*Container,
 		return nil, fmt.Errorf("failed to initialize services: %w", err)
 	}
 
-	if err := container.initializeUseCases(); err != nil {
-		return nil, fmt.Errorf("failed to initialize use cases: %w", err)
+	if err := container.initializeApplication(); err != nil {
+		return nil, fmt.Errorf("failed to initialize application layer: %w", err)
 	}
 
 	if err := container.initializeHandlers(); err != nil {
@@ -128,25 +135,34 @@ func NewContainer(logger *slog.Logger, cliConfig *config.CLIConfig) (*Container,
 
 // initializeInfrastructure initializes infrastructure layer
 func (c *Container) initializeInfrastructure() error {
-	c.Logger.Info("Infrastructure initialization started")
+	logger := logging.WithComponent(c.Logger, constants.ComponentContainer)
+	logger.Info("Infrastructure initialization started")
 
 	// Initialize NATS connection with error handlers
-	c.Logger.Info("Connecting to NATS server",
+	logger.Info("Connecting to NATS server",
 		"url", c.Config.NATS.URL,
 		"max_reconnects", c.Config.NATS.MaxReconnects,
 		"reconnect_wait", c.Config.NATS.ReconnectWait,
 		"connection_timeout", c.Config.NATS.ConnectionTimeout,
 		"drain_timeout", c.Config.NATS.DrainTimeout)
 
+	// Validate NATS URL format
+	if err := validateNATSURL(c.Config.NATS.URL); err != nil {
+		logger.Error("Failed to connect to NATS - invalid URL",
+			"url", c.Config.NATS.URL,
+			"error", err.Error())
+		return fmt.Errorf("failed to connect to NATS: %w", err)
+	}
+
 	// Create error handler for NATS connection issues with enhanced context
-	errorHandler := natsgo.ErrorHandler(func(conn *natsgo.Conn, sub *natsgo.Subscription, err error) {
+	errorHandler := func(conn *natsgo.Conn, sub *natsgo.Subscription, err error) {
 		// Get connection statistics for context
 		stats := conn.Stats()
 
 		if sub != nil {
 			pending, _, _ := sub.Pending()
 			delivered, _ := sub.Delivered()
-			c.Logger.Error("NATS subscription error with full context",
+			logger.Error("NATS subscription error with full context",
 				"error", err.Error(),
 				"subject", sub.Subject,
 				"queue", sub.Queue,
@@ -160,7 +176,7 @@ func (c *Container) initializeInfrastructure() error {
 				"in_bytes", stats.InBytes,
 				"out_bytes", stats.OutBytes)
 		} else {
-			c.Logger.Error("NATS connection error with full context",
+			logger.Error("NATS connection error with full context",
 				"error", err.Error(),
 				"connection_status", conn.Status(),
 				"connected_url", conn.ConnectedUrl(),
@@ -172,16 +188,16 @@ func (c *Container) initializeInfrastructure() error {
 				"out_bytes", stats.OutBytes,
 				"last_error", conn.LastError())
 		}
-	})
+	}
 
 	// Create closed handler for connection recovery with enhanced monitoring
-	closedHandler := natsgo.ClosedHandler(func(conn *natsgo.Conn) {
+	closedHandler := func(conn *natsgo.Conn) {
 		// Check if this is a graceful shutdown or unexpected closure
 		status := conn.Status()
 		stats := conn.Stats()
 		lastError := conn.LastError()
 
-		c.Logger.Error("NATS connection closed with full context",
+		logger.Error("NATS connection closed with full context",
 			"status", status,
 			"last_error", lastError,
 			"reconnects", stats.Reconnects,
@@ -192,204 +208,210 @@ func (c *Container) initializeInfrastructure() error {
 			"connected_server", conn.ConnectedServerName())
 
 		if status == natsgo.CLOSED {
-			c.Logger.Error("NATS max reconnects exhausted - connection permanently closed",
+			logger.Error("NATS max reconnects exhausted - connection permanently closed",
 				"max_reconnects_reached", c.Config.NATS.MaxReconnects,
 				"actual_reconnects", stats.Reconnects,
 				"final_error", lastError)
-			// In a production system, you might want to trigger application shutdown
-			// or implement additional recovery logic here
 		}
-	})
+	}
 
-	// Create disconnect handler for connection state tracking with timing
-	disconnectHandler := natsgo.DisconnectErrHandler(func(conn *natsgo.Conn, err error) {
+	// Create reconnect handler for recovery monitoring
+	reconnectedHandler := func(conn *natsgo.Conn) {
 		stats := conn.Stats()
-		c.Logger.Warn("NATS connection disconnected with context",
-			"error", err.Error(),
-			"status", conn.Status(),
-			"connected_server", conn.ConnectedServerName(),
-			"reconnects_so_far", stats.Reconnects,
-			"msgs_processed", stats.InMsgs,
-			"next_reconnect_wait", c.Config.NATS.ReconnectWait)
-	})
-
-	// Create reconnect handler for connection state tracking with success metrics
-	reconnectHandler := natsgo.ReconnectHandler(func(conn *natsgo.Conn) {
-		stats := conn.Stats()
-		c.Logger.Info("NATS connection reconnected successfully",
+		logger.Info("NATS reconnected successfully",
 			"connected_url", conn.ConnectedUrl(),
 			"connected_server", conn.ConnectedServerName(),
-			"status", conn.Status(),
 			"total_reconnects", stats.Reconnects,
-			"messages_since_start", stats.InMsgs)
-	})
+			"status", conn.Status())
+	}
 
-	natsConn, err := natsgo.Connect(
-		c.Config.NATS.URL,
+	natsOptions := []natsgo.Option{
 		natsgo.MaxReconnects(c.Config.NATS.MaxReconnects),
 		natsgo.ReconnectWait(c.Config.NATS.ReconnectWait),
 		natsgo.Timeout(c.Config.NATS.ConnectionTimeout),
 		natsgo.DrainTimeout(c.Config.NATS.DrainTimeout),
-		errorHandler,
-		closedHandler,
-		disconnectHandler,
-		reconnectHandler,
-	)
+		natsgo.ErrorHandler(errorHandler),
+		natsgo.ClosedHandler(closedHandler),
+		natsgo.ReconnectHandler(reconnectedHandler),
+		natsgo.RetryOnFailedConnect(true),
+	}
+
+	natsConn, err := natsgo.Connect(c.Config.NATS.URL, natsOptions...)
 	if err != nil {
-		c.Logger.Error("Failed to connect to NATS",
+		logger.Error("Failed to connect to NATS",
 			"url", c.Config.NATS.URL,
-			"error", err.Error(),
-			"max_reconnects", c.Config.NATS.MaxReconnects)
+			"error", err.Error())
 		return fmt.Errorf("failed to connect to NATS: %w", err)
 	}
 	c.NATSConnection = natsConn
-	c.Logger.Info("NATS connection established successfully",
+	logger.Info("NATS connection established successfully",
 		"url", c.Config.NATS.URL,
-		"status", natsConn.Status(),
-		"connected_url", natsConn.ConnectedUrl(),
-		"server_info", natsConn.ConnectedServerName())
+		"connected_server", natsConn.ConnectedServerName(),
+		"status", natsConn.Status())
 
 	// Initialize OpenSearch client
-	c.Logger.Info("Creating OpenSearch client",
+	logger.Info("Creating OpenSearch client",
 		"url", c.Config.OpenSearch.URL,
 		"index", c.Config.OpenSearch.Index)
 
+	// Validate OpenSearch URL format
+	if err := validateOpenSearchURL(c.Config.OpenSearch.URL); err != nil {
+		logger.Error("Failed to create OpenSearch client - invalid URL",
+			"url", c.Config.OpenSearch.URL,
+			"error", err.Error())
+		return fmt.Errorf("failed to create OpenSearch client: %w", err)
+	}
+
 	opensearchConfig := opensearchgo.Config{
 		Addresses: []string{c.Config.OpenSearch.URL},
-		/*Username:  c.Config.OpenSearch.Username,
-		Password:  c.Config.OpenSearch.Password,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true,
-			},
-		},*/
 	}
 	opensearchClient, err := opensearchgo.NewClient(opensearchConfig)
 	if err != nil {
-		c.Logger.Error("Failed to create OpenSearch client",
+		logger.Error("Failed to create OpenSearch client",
 			"url", c.Config.OpenSearch.URL,
 			"error", err.Error())
 		return fmt.Errorf("failed to create OpenSearch client: %w", err)
 	}
 	c.OpenSearchClient = opensearchClient
-	c.Logger.Info("OpenSearch client created successfully",
+	logger.Info("OpenSearch client created successfully",
 		"url", c.Config.OpenSearch.URL)
 
-	c.Logger.Info("Infrastructure initialization completed successfully")
+	logger.Info("Infrastructure initialization completed successfully")
 	return nil
 }
 
-// initializeRepositories initializes repository layer
+// initializeRepositories initializes repository layer with consolidated interfaces
 func (c *Container) initializeRepositories() error {
-	c.Logger.Info("Repository initialization started")
+	logger := logging.WithComponent(c.Logger, constants.ComponentContainer)
+	logger.Info("Repository initialization started")
 
-	// Initialize transaction repository
-	c.Logger.Debug("Creating transaction repository",
-		"opensearch_url", c.Config.OpenSearch.URL)
-	c.TransactionRepository = opensearchpkg.NewTransactionRepository(c.OpenSearchClient, c.Logger)
-	c.Logger.Info("Transaction repository initialized")
-
-	// Initialize message repository
-	c.Logger.Debug("Creating message repository",
-		"nats_url", c.Config.NATS.URL,
-		"drain_timeout", c.Config.NATS.DrainTimeout)
-	c.MessageRepository = natspkg.NewMessageRepository(c.NATSConnection, c.Logger, c.Config.NATS.DrainTimeout)
-	c.Logger.Info("Message repository initialized", "drain_timeout", c.Config.NATS.DrainTimeout)
-
-	// Initialize auth repository
-	c.Logger.Info("Creating auth repository",
+	// Initialize auth repository first (needed by messaging repository)
+	logger.Info("Creating auth repository",
 		"issuer", c.Config.JWT.Issuer,
 		"audiences", c.Config.JWT.Audiences,
 		"jwks_url", c.Config.JWT.JWKSURL,
 		"clock_skew", c.Config.JWT.ClockSkew)
 
-	authRepo, err := jwt.NewAuthRepository(
+	authRepo, err := auth.NewAuthRepository(
 		c.Config.JWT.Issuer,
-		c.Config.JWT.Audiences, // Use audiences array from config
-		c.Config.JWT.JWKSURL,   // JWKS URL for key provider
-		c.Config.JWT.ClockSkew, // Clock skew tolerance
+		c.Config.JWT.Audiences,
+		c.Config.JWT.JWKSURL,
+		c.Config.JWT.ClockSkew,
+		logger,
 	)
 	if err != nil {
-		c.Logger.Error("Failed to create auth repository",
+		logger.Error("Failed to create auth repository",
 			"issuer", c.Config.JWT.Issuer,
 			"jwks_url", c.Config.JWT.JWKSURL,
 			"error", err.Error())
 		return fmt.Errorf("failed to create auth repository: %w", err)
 	}
 	c.AuthRepository = authRepo
-	c.Logger.Info("Auth repository initialized successfully",
+	logger.Info("Auth repository initialized successfully",
 		"issuer", c.Config.JWT.Issuer,
 		"audience_count", len(c.Config.JWT.Audiences))
 
-	c.Logger.Info("Repository initialization completed successfully")
+	// Initialize storage repository
+	logger.Debug("Creating storage repository",
+		"opensearch_url", c.Config.OpenSearch.URL)
+	c.StorageRepository = storage.NewStorageRepository(c.OpenSearchClient, c.Logger)
+	logger.Info("Storage repository initialized")
+
+	// Initialize messaging repository
+	logger.Debug("Creating messaging repository",
+		"nats_url", c.Config.NATS.URL,
+		"drain_timeout", c.Config.NATS.DrainTimeout)
+	c.MessagingRepository = messaging.NewMessagingRepository(
+		c.NATSConnection,
+		c.AuthRepository,
+		c.Logger,
+		c.Config.NATS.DrainTimeout,
+	)
+	logger.Info("Messaging repository initialized with auth delegation",
+		"drain_timeout", c.Config.NATS.DrainTimeout)
+
+	logger.Info("Repository initialization completed successfully")
 	return nil
 }
 
 // initializeServices initializes service layer
 func (c *Container) initializeServices() error {
-	// Initialize transaction service
-	c.TransactionService = services.NewTransactionService(
-		c.TransactionRepository,
-		c.AuthRepository,
+	logger := logging.WithComponent(c.Logger, constants.ComponentContainer)
+	logger.Info("Service initialization started")
+
+	// Initialize indexer service
+	c.IndexerService = services.NewIndexerService(
+		c.StorageRepository,
+		c.MessagingRepository,
 		c.Logger,
 	)
+	logger.Info("Indexer service initialized")
 
-	// Initialize janitor service
+	// Initialize janitor service (kept separate as domain service)
 	c.JanitorService = janitor.NewJanitorService(
-		c.TransactionRepository,
+		c.StorageRepository,
 		c.Logger,
 		c.Config.OpenSearch.Index,
 	)
+	logger.Info("Janitor service initialized")
 
-	// Initialize health service with repository dependencies
-	c.HealthService = services.NewHealthService(
-		c.TransactionRepository,
-		c.MessageRepository,
-		c.AuthRepository,
-		c.Logger,
-		c.Config.Health.CheckTimeout,
-		c.Config.Health.CacheDuration,
-	)
-
+	logger.Info("Service initialization completed successfully")
 	return nil
 }
 
-// initializeUseCases initializes use case layer
-func (c *Container) initializeUseCases() error {
-	// Initialize indexing use case
-	c.IndexingUseCase = usecases.NewIndexingUseCase(
-		c.TransactionService,
-		c.MessageRepository,
+// initializeApplication initializes application layer
+func (c *Container) initializeApplication() error {
+	logger := logging.WithComponent(c.Logger, constants.ComponentContainer)
+	logger.Info("Application layer initialization started")
+
+	// Initialize message processor
+	c.MessageProcessor = application.NewMessageProcessor(
+		c.IndexerService,
+		c.MessagingRepository,
+		c.JanitorService,
 		c.Logger,
-		c.Config.OpenSearch.Index,
-		c.Config.NATS.Queue,
 	)
+	logger.Info("Message processor initialized")
 
-	// Initialize message processing use case (application layer coordination)
-	c.MessageProcessingUseCase = usecases.NewMessageProcessingUseCase(
-		c.IndexingUseCase,
-		c.JanitorService, // JanitorService implements JanitorServiceInterface
-	)
-
+	logger.Info("Application layer initialization completed successfully")
 	return nil
 }
 
 // initializeHandlers initializes presentation layer
 func (c *Container) initializeHandlers() error {
-	// Initialize health handler with health service and simple response setting
+	logger := logging.WithComponent(c.Logger, constants.ComponentContainer)
+	logger.Info("Handler initialization started")
+
+	// Check for required dependencies
+	if c.IndexerService == nil {
+		return fmt.Errorf("indexer service is not initialized")
+	}
+	if c.MessageProcessor == nil {
+		return fmt.Errorf("message processor is not initialized")
+	}
+
+	// Initialize health handler with indexer service
 	simpleResponse := !c.Config.Health.EnableDetailedResponse
-	c.HealthHandler = handlers.NewHealthHandler(c.HealthService, simpleResponse)
+	c.HealthHandler = handlers.NewHealthHandler(c.IndexerService, simpleResponse)
+	logger.Info("Health handler initialized", "simple_response", simpleResponse)
 
-	// Initialize message handlers (presentation layer)
-	c.IndexingMessageHandler = handlers.NewIndexingMessageHandler(c.MessageProcessingUseCase)
-	c.V1IndexingMessageHandler = handlers.NewV1IndexingMessageHandler(c.MessageProcessingUseCase)
+	// Initialize unified message handler (handles both V2 and V1)
+	c.IndexingMessageHandler = handlers.NewIndexingMessageHandler(c.MessageProcessor)
+	logger.Info("Unified message handler initialized (handles both V2 and V1)")
 
+	logger.Info("Handler initialization completed successfully")
 	return nil
 }
 
 // StartServices starts all background services
 func (c *Container) StartServices(ctx context.Context) error {
-	c.Logger.Info("Starting NATS message processing services...")
+	logger := logging.WithComponent(c.Logger, constants.ComponentContainer)
+	logger.Info("Starting NATS message processing services...")
+
+	// Check for required components
+	if c.Config == nil {
+		return fmt.Errorf("container config is not initialized")
+	}
 
 	// Setup NATS subscriptions
 	if err := c.SetupNATSSubscriptions(ctx); err != nil {
@@ -399,16 +421,22 @@ func (c *Container) StartServices(ctx context.Context) error {
 	// Start production janitor service
 	if c.Config.Janitor.Enabled && c.JanitorService != nil {
 		c.JanitorService.StartItemLoop(ctx)
-		c.Logger.Info("janitor service started")
+		logger.Info("Janitor service started")
 	}
 
-	c.Logger.Info("NATS message processing services started successfully")
+	logger.Info("NATS message processing services started successfully")
 	return nil
 }
 
 // StartServicesWithWaitGroup starts all background services with WaitGroup coordination
 func (c *Container) StartServicesWithWaitGroup(ctx context.Context, wg *sync.WaitGroup) error {
-	c.Logger.Info("Starting NATS message processing services with WaitGroup coordination...")
+	logger := logging.WithComponent(c.Logger, constants.ComponentContainer)
+	logger.Info("Starting NATS message processing services with WaitGroup coordination...")
+
+	// Check for required components
+	if c.Config == nil {
+		return fmt.Errorf("container config is not initialized")
+	}
 
 	// Setup NATS subscriptions
 	if err := c.SetupNATSSubscriptions(ctx); err != nil {
@@ -419,19 +447,19 @@ func (c *Container) StartServicesWithWaitGroup(ctx context.Context, wg *sync.Wai
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		c.Logger.Debug("NATS shutdown coordinator started")
+		logger.Debug("NATS shutdown coordinator started")
 		<-ctx.Done() // Wait for shutdown signal
-		c.Logger.Info("NATS shutdown initiated...")
+		logger.Info("NATS shutdown initiated...")
 
 		// Drain NATS connections
-		if c.MessageRepository != nil {
-			if err := c.MessageRepository.DrainWithTimeout(); err != nil {
-				c.Logger.Error("Failed to drain NATS connections", "error", err.Error())
+		if c.MessagingRepository != nil {
+			if err := c.MessagingRepository.DrainWithTimeout(); err != nil {
+				logger.Error("Failed to drain NATS connections", "error", err.Error())
 			} else {
-				c.Logger.Info("NATS connections drained successfully")
+				logger.Info("NATS connections drained successfully")
 			}
 		}
-		c.Logger.Info("NATS shutdown completed")
+		logger.Info("NATS shutdown completed")
 	}()
 
 	// Start production janitor service with WaitGroup coordination
@@ -439,61 +467,66 @@ func (c *Container) StartServicesWithWaitGroup(ctx context.Context, wg *sync.Wai
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			c.Logger.Debug("Janitor shutdown coordinator started")
+			logger.Debug("Janitor shutdown coordinator started")
 			<-ctx.Done() // Wait for shutdown signal
-			c.Logger.Info("Janitor service shutdown initiated...")
+			logger.Info("Janitor service shutdown initiated...")
 			c.JanitorService.Shutdown()
-			c.Logger.Info("Janitor service shutdown completed")
+			logger.Info("Janitor service shutdown completed")
 		}()
 
 		c.JanitorService.StartItemLoop(ctx)
-		c.Logger.Info("janitor service started with WaitGroup coordination")
+		logger.Info("Janitor service started with WaitGroup coordination")
 	}
 
-	c.Logger.Info("NATS message processing services started successfully with WaitGroup coordination")
+	logger.Info("NATS message processing services started successfully with WaitGroup coordination")
 	return nil
 }
 
 // SetupNATSSubscriptions sets up all NATS message subscriptions
-// Following clean architecture: pure dependency injection, no business logic
-// Uses pre-initialized handlers from container (Single Responsibility Principle)
 func (c *Container) SetupNATSSubscriptions(ctx context.Context) error {
-	// Subscribe to V2 indexing messages with reply support
-	if err := c.MessageRepository.QueueSubscribeWithReply(
-		ctx,
-		c.Config.NATS.IndexingSubject,
-		c.Config.NATS.Queue,
-		c.IndexingMessageHandler, // Use stored handler
-	); err != nil {
-		return fmt.Errorf("failed to subscribe to indexing subject: %w", err)
+	logger := logging.WithComponent(c.Logger, constants.ComponentContainer)
+
+	// Check for required components
+	if c.Config == nil {
+		return fmt.Errorf("container config is not initialized")
 	}
 
-	// Subscribe to V1 indexing messages with reply support
-	if err := c.MessageRepository.QueueSubscribeWithReply(
-		ctx,
-		c.Config.NATS.V1IndexingSubject,
-		c.Config.NATS.Queue,
-		c.V1IndexingMessageHandler, // Use stored handler
-	); err != nil {
-		return fmt.Errorf("failed to subscribe to V1 indexing subject: %w", err)
+	if c.MessagingRepository == nil {
+		return fmt.Errorf("failed to subscribe - messaging repository is not initialized")
 	}
 
-	c.Logger.Info("Subscribed to NATS subjects",
-		"indexing_subject", c.Config.NATS.IndexingSubject,
-		"v1_indexing_subject", c.Config.NATS.V1IndexingSubject,
-		"queue", c.Config.NATS.Queue,
-	)
+	if c.IndexingMessageHandler == nil {
+		return fmt.Errorf("indexing message handler is not initialized")
+	}
 
+	logger.Info("Setting up NATS subscriptions...",
+		"queue", c.Config.NATS.Queue)
+
+	// Subscribe to indexing messages with queue group for load balancing
+	indexingSubject := constants.SubjectIndexing
+	if err := c.MessagingRepository.QueueSubscribe(ctx, indexingSubject, c.Config.NATS.Queue, c.IndexingMessageHandler); err != nil {
+		return fmt.Errorf("failed to subscribe to %s: %w", indexingSubject, err)
+	}
+	logger.Info("NATS subscription established", "subject", indexingSubject, "queue", c.Config.NATS.Queue)
+
+	// Subscribe to v1 indexing messages with the same unified handler
+	v1IndexingSubject := constants.SubjectV1Indexing
+	if err := c.MessagingRepository.QueueSubscribe(ctx, v1IndexingSubject, c.Config.NATS.Queue, c.IndexingMessageHandler); err != nil {
+		return fmt.Errorf("failed to subscribe to %s: %w", v1IndexingSubject, err)
+	}
+	logger.Info("NATS subscription established", "subject", v1IndexingSubject, "queue", c.Config.NATS.Queue)
+
+	logger.Info("All NATS subscriptions established successfully")
 	return nil
 }
 
 // HealthCheck performs a comprehensive health check on all services using the health service
 func (c *Container) HealthCheck(ctx context.Context) error {
-	if c.HealthService == nil {
-		return fmt.Errorf("health service is not initialized")
+	if c.IndexerService == nil {
+		return fmt.Errorf("indexer service is not initialized")
 	}
 
-	status := c.HealthService.CheckReadiness(ctx)
+	status := c.IndexerService.CheckReadiness(ctx)
 
 	if status.Status == "unhealthy" {
 		var errors []string
@@ -510,30 +543,31 @@ func (c *Container) HealthCheck(ctx context.Context) error {
 
 // GracefulShutdown performs graceful shutdown with NATS drain
 func (c *Container) GracefulShutdown() error {
-	c.Logger.Info("Starting graceful shutdown sequence")
+	logger := logging.WithComponent(c.Logger, constants.ComponentContainer)
+	logger.Info("Starting graceful shutdown sequence")
 
 	var errors []error
 
 	// First, drain NATS connections gracefully
-	if c.MessageRepository != nil {
-		c.Logger.Info("Draining NATS connections")
-		if err := c.MessageRepository.DrainWithTimeout(); err != nil {
-			c.Logger.Error("Failed to drain NATS connections", "error", err.Error())
+	if c.MessagingRepository != nil {
+		logger.Info("Draining NATS connections")
+		if err := c.MessagingRepository.DrainWithTimeout(); err != nil {
+			logger.Error("Failed to drain NATS connections", "error", err.Error())
 			errors = append(errors, fmt.Errorf("failed to drain NATS: %w", err))
 		} else {
-			c.Logger.Info("NATS connections drained successfully")
+			logger.Info("NATS connections drained successfully")
 		}
 	}
 
 	// Stop janitor service
 	if c.JanitorService != nil {
-		c.Logger.Info("Stopping janitor service")
+		logger.Info("Stopping janitor service")
 		c.JanitorService.Shutdown()
-		c.Logger.Info("Janitor service stopped")
+		logger.Info("Janitor service stopped")
 	}
 
 	// Finally, close all remaining resources
-	if err := c.Close(); err != nil {
+	if err := c.Shutdown(context.Background()); err != nil {
 		errors = append(errors, err)
 	}
 
@@ -541,58 +575,107 @@ func (c *Container) GracefulShutdown() error {
 		return fmt.Errorf("graceful shutdown completed with errors: %v", errors)
 	}
 
-	c.Logger.Info("Graceful shutdown completed successfully")
+	logger.Info("Graceful shutdown completed successfully")
 	return nil
 }
 
-// Close gracefully shuts down the container
-func (c *Container) Close() error {
-	if c.Logger != nil {
-		c.Logger.Info("Container shutdown initiated")
-	}
+// Shutdown gracefully shuts down all services and connections
+func (c *Container) Shutdown(ctx context.Context) error {
+	logger := logging.WithComponent(c.Logger, constants.ComponentContainer)
+	logger.Info("Container shutdown initiated...")
 
-	var errors []error
-
-	// Close message repository (includes NATS connection)
-	if c.MessageRepository != nil {
-		if c.Logger != nil {
-			c.Logger.Info("Closing message repository")
-		}
-		if err := c.MessageRepository.Close(); err != nil {
-			if c.Logger != nil {
-				c.Logger.Error("Failed to close message repository", "error", err.Error())
-			}
-			errors = append(errors, fmt.Errorf("failed to close message repository: %w", err))
-		} else {
-			if c.Logger != nil {
-				c.Logger.Info("Message repository closed successfully")
-			}
-		}
-	}
-
-	// Close janitor service
+	// Stop janitor service first
 	if c.JanitorService != nil {
-		if c.Logger != nil {
-			c.Logger.Info("Stopping janitor service")
-		}
 		c.JanitorService.Shutdown()
-		if c.Logger != nil {
-			c.Logger.Info("Janitor service stopped")
-		}
+		logger.Info("Janitor service stopped")
 	}
 
-	// Log completion
-	if c.Logger != nil {
-		if len(errors) == 0 {
-			c.Logger.Info("Container shutdown completed successfully")
+	// Drain and close NATS connections
+	if c.MessagingRepository != nil {
+		if err := c.MessagingRepository.DrainWithTimeout(); err != nil {
+			logger.Error("Failed to drain NATS connections during shutdown", "error", err.Error())
 		} else {
-			c.Logger.Error("Container shutdown completed with errors",
-				"error_count", len(errors))
+			logger.Info("NATS connections drained successfully")
+		}
+
+		if err := c.MessagingRepository.Close(); err != nil {
+			logger.Error("Failed to close NATS connections during shutdown", "error", err.Error())
+		} else {
+			logger.Info("NATS connections closed successfully")
 		}
 	}
 
-	if len(errors) > 0 {
-		return fmt.Errorf("shutdown errors: %v", errors)
+	logger.Info("Container shutdown completed successfully")
+	return nil
+}
+
+// validateNATSURL validates the NATS URL format and scheme
+func validateNATSURL(natsURL string) error {
+	if natsURL == "" {
+		return fmt.Errorf("NATS URL cannot be empty")
+	}
+
+	u, err := url.Parse(natsURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL format: %w", err)
+	}
+
+	if u.Scheme == "" {
+		return fmt.Errorf("URL missing scheme (expected: nats://)")
+	}
+
+	// Validate NATS-specific schemes
+	validSchemes := []string{"nats", "nats+tls", "ws", "wss"}
+	schemeValid := false
+	for _, validScheme := range validSchemes {
+		if u.Scheme == validScheme {
+			schemeValid = true
+			break
+		}
+	}
+
+	if !schemeValid {
+		return fmt.Errorf("invalid URL scheme '%s' (expected: nats://, nats+tls://, ws://, or wss://)", u.Scheme)
+	}
+
+	if u.Host == "" {
+		return fmt.Errorf("URL missing host")
+	}
+
+	return nil
+}
+
+// validateOpenSearchURL validates the OpenSearch URL format
+func validateOpenSearchURL(opensearchURL string) error {
+	if opensearchURL == "" {
+		return fmt.Errorf("OpenSearch URL cannot be empty")
+	}
+
+	u, err := url.Parse(opensearchURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL format: %w", err)
+	}
+
+	if u.Scheme == "" {
+		return fmt.Errorf("URL missing scheme (expected: http:// or https://)")
+	}
+
+	// Validate OpenSearch-specific schemes
+	validSchemes := []string{"http", "https"}
+	schemeValid := false
+	for _, validScheme := range validSchemes {
+		if u.Scheme == validScheme {
+			schemeValid = true
+			break
+		}
+	}
+
+	if !schemeValid {
+		return fmt.Errorf("invalid URL scheme '%s' (expected: http:// or https://)", u.Scheme)
+	}
+
+	if u.Host == "" {
+		return fmt.Errorf("URL missing host")
 	}
 
 	return nil

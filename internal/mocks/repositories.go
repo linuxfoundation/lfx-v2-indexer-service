@@ -8,12 +8,12 @@ import (
 	"io"
 	"sync"
 
+	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/contracts"
 	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/entities"
-	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/repositories"
 )
 
-// MockTransactionRepository implements the repositories.TransactionRepository interface for testing
-type MockTransactionRepository struct {
+// MockStorageRepository implements the contracts.StorageRepository interface for testing
+type MockStorageRepository struct {
 	mu sync.RWMutex
 
 	// Mock state
@@ -36,7 +36,7 @@ type MockTransactionRepository struct {
 	BulkCalls   []BulkCall
 
 	// Mock responses for new methods
-	SearchWithVersionsResults     map[string][]repositories.VersionedDocument
+	SearchWithVersionsResults     map[string][]contracts.VersionedDocument
 	SearchWithVersionsError       error
 	UpdateWithOptimisticLockError error
 
@@ -69,7 +69,7 @@ type DeleteCall struct {
 }
 
 type BulkCall struct {
-	Operations []repositories.BulkOperation
+	Operations []contracts.BulkOperation
 }
 
 type SearchWithVersionsCall struct {
@@ -81,15 +81,15 @@ type UpdateWithOptimisticLockCall struct {
 	Index  string
 	DocID  string
 	Body   string
-	Params *repositories.OptimisticUpdateParams
+	Params *contracts.OptimisticUpdateParams
 }
 
-// NewMockTransactionRepository creates a new mock transaction repository
-func NewMockTransactionRepository() *MockTransactionRepository {
-	return &MockTransactionRepository{
+// NewMockStorageRepository creates a new mock storage repository
+func NewMockStorageRepository() *MockStorageRepository {
+	return &MockStorageRepository{
 		IndexedDocuments:              make(map[string]map[string]interface{}),
 		SearchResults:                 make(map[string][]map[string]any),
-		SearchWithVersionsResults:     make(map[string][]repositories.VersionedDocument),
+		SearchWithVersionsResults:     make(map[string][]contracts.VersionedDocument),
 		IndexCalls:                    make([]IndexCall, 0),
 		SearchCalls:                   make([]SearchCall, 0),
 		UpdateCalls:                   make([]UpdateCall, 0),
@@ -100,8 +100,13 @@ func NewMockTransactionRepository() *MockTransactionRepository {
 	}
 }
 
+// NewMockTransactionRepository creates a new mock storage repository (backward compatibility)
+func NewMockTransactionRepository() *MockStorageRepository {
+	return NewMockStorageRepository()
+}
+
 // Index mocks indexing a document
-func (m *MockTransactionRepository) Index(ctx context.Context, index string, docID string, body io.Reader) error {
+func (m *MockStorageRepository) Index(ctx context.Context, index string, docID string, body io.Reader) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -132,7 +137,7 @@ func (m *MockTransactionRepository) Index(ctx context.Context, index string, doc
 }
 
 // Search mocks searching for documents
-func (m *MockTransactionRepository) Search(ctx context.Context, index string, query map[string]any) ([]map[string]any, error) {
+func (m *MockStorageRepository) Search(ctx context.Context, index string, query map[string]any) ([]map[string]any, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -152,12 +157,12 @@ func (m *MockTransactionRepository) Search(ctx context.Context, index string, qu
 		return results, nil
 	}
 
-	// Return empty results if no pre-configured results
+	// Default empty results
 	return []map[string]any{}, nil
 }
 
-// SearchWithVersions mocks searching for documents with version information
-func (m *MockTransactionRepository) SearchWithVersions(ctx context.Context, index string, query map[string]any) ([]repositories.VersionedDocument, error) {
+// SearchWithVersions mocks searching for documents with version tracking
+func (m *MockStorageRepository) SearchWithVersions(ctx context.Context, index string, query map[string]any) ([]contracts.VersionedDocument, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -177,12 +182,12 @@ func (m *MockTransactionRepository) SearchWithVersions(ctx context.Context, inde
 		return results, nil
 	}
 
-	// Return empty results if no pre-configured results
-	return []repositories.VersionedDocument{}, nil
+	// Default empty results
+	return []contracts.VersionedDocument{}, nil
 }
 
 // Update mocks updating a document
-func (m *MockTransactionRepository) Update(ctx context.Context, index string, docID string, body io.Reader) error {
+func (m *MockStorageRepository) Update(ctx context.Context, index string, docID string, body io.Reader) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -203,11 +208,76 @@ func (m *MockTransactionRepository) Update(ctx context.Context, index string, do
 		Body:  string(bodyBytes),
 	})
 
+	// Update the document
+	if m.IndexedDocuments[index] == nil {
+		m.IndexedDocuments[index] = make(map[string]interface{})
+	}
+	m.IndexedDocuments[index][docID] = string(bodyBytes)
+
+	return nil
+}
+
+// Delete mocks deleting a document
+func (m *MockStorageRepository) Delete(ctx context.Context, index string, docID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.DeleteError != nil {
+		return m.DeleteError
+	}
+
+	// Track the call
+	m.DeleteCalls = append(m.DeleteCalls, DeleteCall{
+		Index: index,
+		DocID: docID,
+	})
+
+	// Delete the document
+	if m.IndexedDocuments[index] != nil {
+		delete(m.IndexedDocuments[index], docID)
+	}
+
+	return nil
+}
+
+// BulkIndex mocks bulk indexing operations
+func (m *MockStorageRepository) BulkIndex(ctx context.Context, operations []contracts.BulkOperation) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.BulkError != nil {
+		return m.BulkError
+	}
+
+	// Track the call
+	m.BulkCalls = append(m.BulkCalls, BulkCall{
+		Operations: operations,
+	})
+
+	// Process each operation
+	for _, op := range operations {
+		if op.Action != "delete" && op.Body != nil {
+			bodyBytes, err := io.ReadAll(op.Body)
+			if err != nil {
+				return err
+			}
+
+			if m.IndexedDocuments[op.Index] == nil {
+				m.IndexedDocuments[op.Index] = make(map[string]interface{})
+			}
+			m.IndexedDocuments[op.Index][op.DocID] = string(bodyBytes)
+		} else if op.Action == "delete" {
+			if m.IndexedDocuments[op.Index] != nil {
+				delete(m.IndexedDocuments[op.Index], op.DocID)
+			}
+		}
+	}
+
 	return nil
 }
 
 // UpdateWithOptimisticLock mocks updating a document with optimistic concurrency control
-func (m *MockTransactionRepository) UpdateWithOptimisticLock(ctx context.Context, index, docID string, body io.Reader, params *repositories.OptimisticUpdateParams) error {
+func (m *MockStorageRepository) UpdateWithOptimisticLock(ctx context.Context, index, docID string, body io.Reader, params *contracts.OptimisticUpdateParams) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -229,130 +299,56 @@ func (m *MockTransactionRepository) UpdateWithOptimisticLock(ctx context.Context
 		Params: params,
 	})
 
-	return nil
-}
-
-// Delete mocks deleting a document
-func (m *MockTransactionRepository) Delete(ctx context.Context, index string, docID string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if m.DeleteError != nil {
-		return m.DeleteError
+	// Update the document
+	if m.IndexedDocuments[index] == nil {
+		m.IndexedDocuments[index] = make(map[string]interface{})
 	}
-
-	// Track the call
-	m.DeleteCalls = append(m.DeleteCalls, DeleteCall{
-		Index: index,
-		DocID: docID,
-	})
+	m.IndexedDocuments[index][docID] = string(bodyBytes)
 
 	return nil
 }
 
-// BulkIndex mocks bulk indexing operations
-func (m *MockTransactionRepository) BulkIndex(ctx context.Context, operations []repositories.BulkOperation) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if m.BulkError != nil {
-		return m.BulkError
-	}
-
-	// Track the call
-	m.BulkCalls = append(m.BulkCalls, BulkCall{
-		Operations: operations,
-	})
-
-	return nil
-}
-
-// HealthCheck mocks health checking
-func (m *MockTransactionRepository) HealthCheck(ctx context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+// HealthCheck mocks a health check
+func (m *MockStorageRepository) HealthCheck(ctx context.Context) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 
 	return m.HealthError
 }
 
-// Helper methods for testing
+// Helper methods
+func (m *MockStorageRepository) hashQuery(query map[string]any) string {
+	jsonBytes, _ := json.Marshal(query)
+	return fmt.Sprintf("%x", md5.Sum(jsonBytes))
+}
 
-// SetSearchResult sets a search result for a specific query
-func (m *MockTransactionRepository) SetSearchResult(query map[string]any, result []map[string]any) {
+func (m *MockStorageRepository) SetSearchResults(query map[string]any, results []map[string]any) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
 	queryHash := m.hashQuery(query)
-	m.SearchResults[queryHash] = result
+	m.SearchResults[queryHash] = results
 }
 
-// SetSearchWithVersionsResult sets a search result for a specific query with version information
-func (m *MockTransactionRepository) SetSearchWithVersionsResult(query map[string]any, result []repositories.VersionedDocument) {
+func (m *MockStorageRepository) SetSearchWithVersionsResults(query map[string]any, results []contracts.VersionedDocument) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
 	queryHash := m.hashQuery(query)
-	m.SearchWithVersionsResults[queryHash] = result
+	m.SearchWithVersionsResults[queryHash] = results
 }
 
-// GetIndexCalls returns all index calls
-func (m *MockTransactionRepository) GetIndexCalls() []IndexCall {
+func (m *MockStorageRepository) GetIndexedDocument(index, docID string) (interface{}, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-
-	calls := make([]IndexCall, len(m.IndexCalls))
-	copy(calls, m.IndexCalls)
-	return calls
+	if indexDocs, exists := m.IndexedDocuments[index]; exists {
+		doc, exists := indexDocs[docID]
+		return doc, exists
+	}
+	return nil, false
 }
 
-// GetSearchCalls returns all search calls
-func (m *MockTransactionRepository) GetSearchCalls() []SearchCall {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	calls := make([]SearchCall, len(m.SearchCalls))
-	copy(calls, m.SearchCalls)
-	return calls
-}
-
-// GetSearchWithVersionsCalls returns all search with versions calls
-func (m *MockTransactionRepository) GetSearchWithVersionsCalls() []SearchWithVersionsCall {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	calls := make([]SearchWithVersionsCall, len(m.SearchWithVersionsCalls))
-	copy(calls, m.SearchWithVersionsCalls)
-	return calls
-}
-
-// GetUpdateWithOptimisticLockCalls returns all optimistic update calls
-func (m *MockTransactionRepository) GetUpdateWithOptimisticLockCalls() []UpdateWithOptimisticLockCall {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	calls := make([]UpdateWithOptimisticLockCall, len(m.UpdateWithOptimisticLockCalls))
-	copy(calls, m.UpdateWithOptimisticLockCalls)
-	return calls
-}
-
-// Reset clears all call tracking and state
-func (m *MockTransactionRepository) Reset() {
+func (m *MockStorageRepository) ClearCalls() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	m.IndexedDocuments = make(map[string]map[string]interface{})
-	m.SearchResults = make(map[string][]map[string]any)
-	m.SearchWithVersionsResults = make(map[string][]repositories.VersionedDocument)
-
-	m.SearchError = nil
-	m.IndexError = nil
-	m.UpdateError = nil
-	m.DeleteError = nil
-	m.BulkError = nil
-	m.HealthError = nil
-	m.SearchWithVersionsError = nil
-	m.UpdateWithOptimisticLockError = nil
-
 	m.IndexCalls = make([]IndexCall, 0)
 	m.SearchCalls = make([]SearchCall, 0)
 	m.UpdateCalls = make([]UpdateCall, 0)
@@ -362,40 +358,36 @@ func (m *MockTransactionRepository) Reset() {
 	m.UpdateWithOptimisticLockCalls = make([]UpdateWithOptimisticLockCall, 0)
 }
 
-// hashQuery creates a hash of the query for lookup
-func (m *MockTransactionRepository) hashQuery(query map[string]any) string {
-	queryBytes, _ := json.Marshal(query)
-	return fmt.Sprintf("%x", md5.Sum(queryBytes))
-}
-
-// MockMessageRepository implements the MessageRepository interface for testing
-type MockMessageRepository struct {
+// MockMessagingRepository implements the contracts.MessagingRepository interface for testing
+type MockMessagingRepository struct {
 	mu sync.RWMutex
 
-	// Mock data
-	PublishedMessages map[string][]PublishedMessage // subject -> messages
-	Subscriptions     map[string]repositories.MessageHandler
+	// Mock state
+	PublishedMessages  map[string][]MockMessage
+	Subscriptions      map[string]contracts.MessageHandler
+	QueueSubs          map[string]map[string]contracts.MessageHandler
+	QueueSubsWithReply map[string]map[string]contracts.MessageHandlerWithReply
 
-	// Mock behavior
-	SubscribeError error
+	// Mock responses
 	PublishError   error
-	CloseError     error
+	SubscribeError error
 	HealthError    error
+	DrainError     error
+	CloseError     error
+
+	// Auth delegation (embedded AuthRepository)
+	AuthRepo *MockAuthRepository
 
 	// Call tracking
-	SubscribeCalls []SubscribeCall
-	PublishCalls   []PublishCall
-	CloseCalls     int
-	HealthCalls    int
+	PublishCalls       []PublishCall
+	SubscribeCalls     []SubscribeCall
+	QueueSubCalls      []QueueSubscribeCall
+	QueueReplySubCalls []QueueSubscribeWithReplyCall
 }
 
-type PublishedMessage struct {
-	Data []byte
-}
-
-type SubscribeCall struct {
+type MockMessage struct {
 	Subject string
-	Handler repositories.MessageHandler
+	Data    []byte
 }
 
 type PublishCall struct {
@@ -403,18 +395,42 @@ type PublishCall struct {
 	Data    []byte
 }
 
-// NewMockMessageRepository creates a new mock message repository
-func NewMockMessageRepository() *MockMessageRepository {
-	return &MockMessageRepository{
-		PublishedMessages: make(map[string][]PublishedMessage),
-		Subscriptions:     make(map[string]repositories.MessageHandler),
-		SubscribeCalls:    make([]SubscribeCall, 0),
-		PublishCalls:      make([]PublishCall, 0),
+type SubscribeCall struct {
+	Subject string
+}
+
+type QueueSubscribeCall struct {
+	Subject string
+	Queue   string
+}
+
+type QueueSubscribeWithReplyCall struct {
+	Subject string
+	Queue   string
+}
+
+// NewMockMessagingRepository creates a new mock messaging repository
+func NewMockMessagingRepository() *MockMessagingRepository {
+	return &MockMessagingRepository{
+		PublishedMessages:  make(map[string][]MockMessage),
+		Subscriptions:      make(map[string]contracts.MessageHandler),
+		QueueSubs:          make(map[string]map[string]contracts.MessageHandler),
+		QueueSubsWithReply: make(map[string]map[string]contracts.MessageHandlerWithReply),
+		AuthRepo:           NewMockAuthRepository(),
+		PublishCalls:       make([]PublishCall, 0),
+		SubscribeCalls:     make([]SubscribeCall, 0),
+		QueueSubCalls:      make([]QueueSubscribeCall, 0),
+		QueueReplySubCalls: make([]QueueSubscribeWithReplyCall, 0),
 	}
 }
 
+// NewMockMessageRepository creates a new mock messaging repository (backward compatibility)
+func NewMockMessageRepository() *MockMessagingRepository {
+	return NewMockMessagingRepository()
+}
+
 // Subscribe mocks subscribing to messages
-func (m *MockMessageRepository) Subscribe(ctx context.Context, subject string, handler repositories.MessageHandler) error {
+func (m *MockMessagingRepository) Subscribe(ctx context.Context, subject string, handler contracts.MessageHandler) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -422,20 +438,49 @@ func (m *MockMessageRepository) Subscribe(ctx context.Context, subject string, h
 		return m.SubscribeError
 	}
 
-	// Track the call
-	m.SubscribeCalls = append(m.SubscribeCalls, SubscribeCall{
-		Subject: subject,
-		Handler: handler,
-	})
-
-	// Store the subscription
+	m.SubscribeCalls = append(m.SubscribeCalls, SubscribeCall{Subject: subject})
 	m.Subscriptions[subject] = handler
+	return nil
+}
 
+// QueueSubscribe mocks queue subscribing to messages
+func (m *MockMessagingRepository) QueueSubscribe(ctx context.Context, subject string, queue string, handler contracts.MessageHandler) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.SubscribeError != nil {
+		return m.SubscribeError
+	}
+
+	m.QueueSubCalls = append(m.QueueSubCalls, QueueSubscribeCall{Subject: subject, Queue: queue})
+
+	if m.QueueSubs[subject] == nil {
+		m.QueueSubs[subject] = make(map[string]contracts.MessageHandler)
+	}
+	m.QueueSubs[subject][queue] = handler
+	return nil
+}
+
+// QueueSubscribeWithReply mocks queue subscribing to messages with reply support
+func (m *MockMessagingRepository) QueueSubscribeWithReply(ctx context.Context, subject string, queue string, handler contracts.MessageHandlerWithReply) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.SubscribeError != nil {
+		return m.SubscribeError
+	}
+
+	m.QueueReplySubCalls = append(m.QueueReplySubCalls, QueueSubscribeWithReplyCall{Subject: subject, Queue: queue})
+
+	if m.QueueSubsWithReply[subject] == nil {
+		m.QueueSubsWithReply[subject] = make(map[string]contracts.MessageHandlerWithReply)
+	}
+	m.QueueSubsWithReply[subject][queue] = handler
 	return nil
 }
 
 // Publish mocks publishing a message
-func (m *MockMessageRepository) Publish(ctx context.Context, subject string, data []byte) error {
+func (m *MockMessagingRepository) Publish(ctx context.Context, subject string, data []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -443,77 +488,92 @@ func (m *MockMessageRepository) Publish(ctx context.Context, subject string, dat
 		return m.PublishError
 	}
 
-	// Track the call
-	m.PublishCalls = append(m.PublishCalls, PublishCall{
+	m.PublishCalls = append(m.PublishCalls, PublishCall{Subject: subject, Data: data})
+
+	if m.PublishedMessages[subject] == nil {
+		m.PublishedMessages[subject] = make([]MockMessage, 0)
+	}
+	m.PublishedMessages[subject] = append(m.PublishedMessages[subject], MockMessage{
 		Subject: subject,
 		Data:    data,
 	})
-
-	// Store the message
-	m.PublishedMessages[subject] = append(m.PublishedMessages[subject], PublishedMessage{
-		Data: data,
-	})
-
 	return nil
 }
 
-// Close mocks closing the connection
-func (m *MockMessageRepository) Close() error {
+// DrainWithTimeout mocks draining connections
+func (m *MockMessagingRepository) DrainWithTimeout() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.DrainError
+}
 
-	m.CloseCalls++
-
+// Close mocks closing connections
+func (m *MockMessagingRepository) Close() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.CloseError
 }
 
-// HealthCheck mocks health check
-func (m *MockMessageRepository) HealthCheck(ctx context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.HealthCalls++
-
+// HealthCheck mocks a health check
+func (m *MockMessagingRepository) HealthCheck(ctx context.Context) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.HealthError
 }
 
-// Helper methods for testing
-func (m *MockMessageRepository) SimulateMessage(ctx context.Context, subject string, data []byte) error {
+// Auth delegation methods
+func (m *MockMessagingRepository) ValidateToken(ctx context.Context, token string) (*entities.Principal, error) {
+	return m.AuthRepo.ValidateToken(ctx, token)
+}
+
+func (m *MockMessagingRepository) ParsePrincipals(ctx context.Context, headers map[string]string) ([]entities.Principal, error) {
+	return m.AuthRepo.ParsePrincipals(ctx, headers)
+}
+
+// Helper methods
+func (m *MockMessagingRepository) GetPublishedMessages(subject string) []MockMessage {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.PublishedMessages[subject]
+}
+
+func (m *MockMessagingRepository) SimulateMessage(subject string, data []byte) error {
 	m.mu.RLock()
 	handler, exists := m.Subscriptions[subject]
 	m.mu.RUnlock()
 
-	if !exists {
-		return nil // No handler subscribed
+	if exists {
+		return handler.Handle(context.Background(), data, subject)
 	}
-
-	return handler.Handle(ctx, data, subject)
+	return fmt.Errorf("no subscription for subject: %s", subject)
 }
 
-func (m *MockMessageRepository) Reset() {
+func (m *MockMessagingRepository) ClearCalls() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	m.PublishedMessages = make(map[string][]PublishedMessage)
-	m.Subscriptions = make(map[string]repositories.MessageHandler)
-	m.SubscribeCalls = make([]SubscribeCall, 0)
 	m.PublishCalls = make([]PublishCall, 0)
-	m.CloseCalls = 0
-	m.HealthCalls = 0
-	m.SubscribeError = nil
-	m.PublishError = nil
-	m.CloseError = nil
-	m.HealthError = nil
+	m.SubscribeCalls = make([]SubscribeCall, 0)
+	m.QueueSubCalls = make([]QueueSubscribeCall, 0)
+	m.QueueReplySubCalls = make([]QueueSubscribeWithReplyCall, 0)
 }
 
-// MockAuthRepository provides a mock implementation of AuthRepository
+// MockAuthRepository implements the contracts.AuthRepository interface for testing
 type MockAuthRepository struct {
-	ValidTokens          map[string]*entities.Principal
-	ParsePrincipalsError error
+	mu sync.RWMutex
+
+	// Mock responses
+	ValidateTokenResponse   *entities.Principal
+	ValidateTokenError      error
+	ParsePrincipalsResponse []entities.Principal
+	ParsePrincipalsError    error
 
 	// Call tracking
+	ValidateTokenCalls   []ValidateTokenCall
 	ParsePrincipalsCalls []ParsePrincipalsCall
-	mu                   sync.Mutex
+}
+
+type ValidateTokenCall struct {
+	Token string
 }
 
 type ParsePrincipalsCall struct {
@@ -523,90 +583,60 @@ type ParsePrincipalsCall struct {
 // NewMockAuthRepository creates a new mock auth repository
 func NewMockAuthRepository() *MockAuthRepository {
 	return &MockAuthRepository{
-		ValidTokens:          make(map[string]*entities.Principal),
-		ParsePrincipalsError: nil,
+		ValidateTokenCalls:   make([]ValidateTokenCall, 0),
 		ParsePrincipalsCalls: make([]ParsePrincipalsCall, 0),
 	}
 }
 
-// ValidateToken validates a JWT token and returns principal information
+// ValidateToken mocks validating a token
 func (m *MockAuthRepository) ValidateToken(ctx context.Context, token string) (*entities.Principal, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Check for validation errors first
-	if m.ParsePrincipalsError != nil {
-		return nil, m.ParsePrincipalsError
+	m.ValidateTokenCalls = append(m.ValidateTokenCalls, ValidateTokenCall{Token: token})
+
+	if m.ValidateTokenError != nil {
+		return nil, m.ValidateTokenError
 	}
 
-	// Return pre-configured principal
-	if principal, exists := m.ValidTokens[token]; exists {
-		return principal, nil
+	if m.ValidateTokenResponse != nil {
+		return m.ValidateTokenResponse, nil
 	}
 
-	// Return default principal
+	// Default valid response
 	return &entities.Principal{
 		Principal: "test_user",
 		Email:     "test@example.com",
 	}, nil
 }
 
-// ParsePrincipals mocks parsing principals from headers with delegation support
+// ParsePrincipals mocks parsing principals from headers
 func (m *MockAuthRepository) ParsePrincipals(ctx context.Context, headers map[string]string) ([]entities.Principal, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	m.ParsePrincipalsCalls = append(m.ParsePrincipalsCalls, ParsePrincipalsCall{Headers: headers})
 
 	if m.ParsePrincipalsError != nil {
 		return nil, m.ParsePrincipalsError
 	}
 
-	// Track the call
-	m.ParsePrincipalsCalls = append(m.ParsePrincipalsCalls, ParsePrincipalsCall{
-		Headers: headers,
-	})
-
-	// Return simple list of principals (deployment pattern)
-	principal := entities.Principal{
-		Principal: "test_user",
-		Email:     "test@example.com",
+	if m.ParsePrincipalsResponse != nil {
+		return m.ParsePrincipalsResponse, nil
 	}
 
-	return []entities.Principal{principal}, nil
+	// Default valid response
+	return []entities.Principal{
+		{
+			Principal: "test_user",
+			Email:     "test@example.com",
+		},
+	}, nil
 }
 
-// HealthCheck mocks health checking for auth repository
-func (m *MockAuthRepository) HealthCheck(ctx context.Context) error {
+func (m *MockAuthRepository) ClearCalls() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	// Return the configured error (if any)
-	return m.ParsePrincipalsError
-}
-
-// Test helper methods
-
-// SetValidToken configures a valid token for testing
-func (m *MockAuthRepository) SetValidToken(token string, principal *entities.Principal) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.ValidTokens[token] = principal
-}
-
-// Reset clears all mock data
-func (m *MockAuthRepository) Reset() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.ValidTokens = make(map[string]*entities.Principal)
+	m.ValidateTokenCalls = make([]ValidateTokenCall, 0)
 	m.ParsePrincipalsCalls = make([]ParsePrincipalsCall, 0)
-	m.ParsePrincipalsError = nil
-}
-
-// SetParseError configures the mock to return an error
-func (m *MockAuthRepository) SetParseError(err error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.ParsePrincipalsError = err
 }

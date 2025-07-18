@@ -10,14 +10,14 @@ import (
 
 // HealthHandler handles Kubernetes health check requests
 type HealthHandler struct {
-	healthService  *services.HealthService
+	indexerService *services.IndexerService
 	simpleResponse bool
 }
 
-// NewHealthHandler creates a new health handler with the health service
-func NewHealthHandler(healthService *services.HealthService, simpleResponse bool) *HealthHandler {
+// NewHealthHandler creates a new health handler with the indexer service
+func NewHealthHandler(indexerService *services.IndexerService, simpleResponse bool) *HealthHandler {
 	return &HealthHandler{
-		healthService:  healthService,
+		indexerService: indexerService,
 		simpleResponse: simpleResponse,
 	}
 }
@@ -25,7 +25,7 @@ func NewHealthHandler(healthService *services.HealthService, simpleResponse bool
 // HandleLiveness handles Kubernetes liveness probe requests
 func (h *HealthHandler) HandleLiveness(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	status := h.healthService.CheckLiveness(ctx)
+	status := h.indexerService.CheckLiveness(ctx)
 
 	h.writeHealthResponse(w, status, http.StatusOK) // Liveness always returns 200
 }
@@ -33,7 +33,7 @@ func (h *HealthHandler) HandleLiveness(w http.ResponseWriter, r *http.Request) {
 // HandleReadiness handles Kubernetes readiness probe requests
 func (h *HealthHandler) HandleReadiness(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	status := h.healthService.CheckReadiness(ctx)
+	status := h.indexerService.CheckReadiness(ctx)
 
 	var statusCode int
 	switch status.Status {
@@ -51,7 +51,7 @@ func (h *HealthHandler) HandleReadiness(w http.ResponseWriter, r *http.Request) 
 // HandleHealthCheck handles general health check requests
 func (h *HealthHandler) HandleHealthCheck(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	status := h.healthService.CheckHealth(ctx)
+	status := h.indexerService.CheckHealth(ctx)
 
 	var statusCode int
 	switch status.Status {

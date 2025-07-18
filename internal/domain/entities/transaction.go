@@ -3,6 +3,8 @@ package entities
 import (
 	"fmt"
 	"time"
+
+	"github.com/linuxfoundation/lfx-indexer-service/pkg/constants"
 )
 
 // TransactionBody represents the OpenSearch document structure
@@ -72,34 +74,33 @@ type LFXTransaction struct {
 	ParsedPrincipals []Principal `json:"-"`
 }
 
-// Action Helper Methods
-//
-// The LFX indexer processes transactions from two different sources:
-// 1. Regular LFX services: send "created"/"updated"/"deleted" (past-tense)
-// 2. v1-sync-helper service: sends "create"/"update"/"delete" (present-tense)
-//
-// These helper methods handle both formats to provide a unified interface
-// for business logic that doesn't need to distinguish between sources.
+// =================
+// BASIC HELPERS (Inherent to data structure)
+// =================
 
 // IsCreateAction returns true if this is a create action (both V1 and V2)
 func (t *LFXTransaction) IsCreateAction() bool {
-	return t.Action == "create" || t.Action == "created"
+	return t.Action == constants.ActionCreate || t.Action == constants.ActionCreated
 }
 
 // IsUpdateAction returns true if this is an update action (both V1 and V2)
 func (t *LFXTransaction) IsUpdateAction() bool {
-	return t.Action == "update" || t.Action == "updated"
+	return t.Action == constants.ActionUpdate || t.Action == constants.ActionUpdated
 }
 
 // IsDeleteAction returns true if this is a delete action (both V1 and V2)
 func (t *LFXTransaction) IsDeleteAction() bool {
-	return t.Action == "delete" || t.Action == "deleted"
+	return t.Action == constants.ActionDelete || t.Action == constants.ActionDeleted
 }
 
 // IsV1Transaction returns true if this transaction originated from V1 system
 func (t *LFXTransaction) IsV1Transaction() bool {
 	return t.IsV1
 }
+
+// =================
+// BASIC GETTERS (Simple data access)
+// =================
 
 // GetObjectID returns the parsed object ID
 func (t *LFXTransaction) GetObjectID() string {
@@ -126,54 +127,21 @@ func (t *LFXTransaction) GetTimestamp() time.Time {
 	return t.Timestamp
 }
 
-// GetCanonicalAction returns the canonical (past-tense) action for indexing
-func (t *LFXTransaction) GetCanonicalAction() string {
-	switch t.Action {
-	case "create", "created":
-		return "created"
-	case "update", "updated":
-		return "updated"
-	case "delete", "deleted":
-		return "deleted"
-	default:
-		return t.Action
+// =================
+// SIMPLE TRANSACTION BODY HELPERS
+// =================
+
+// NewTransactionBody creates a new transaction body
+func NewTransactionBody() *TransactionBody {
+	latest := true
+	return &TransactionBody{
+		Latest: &latest,
 	}
 }
 
-// ValidateAction validates the transaction action based on transaction source
-func (t *LFXTransaction) ValidateAction() error {
-	if t.IsV1 {
-		// V1 transactions are sent by the v1-sync-helper service
-		// These use present-tense actions to match the original V1 API format
-		// Subject pattern: lfx.v1.index.{object_type}
-		switch t.Action {
-		case "create", "update", "delete":
-			return nil
-		default:
-			return fmt.Errorf("invalid transaction action: %s", t.Action)
-		}
-	} else {
-		// V2 transactions are sent by regular LFX services
-		// These use past-tense actions to indicate completed operations
-		// Subject pattern: lfx.index.{object_type}
-		switch t.Action {
-		case "created", "updated", "deleted":
-			return nil
-		default:
-			return fmt.Errorf("invalid transaction action: %s", t.Action)
-		}
-	}
-}
-
-// ValidateObjectType checks if an object type is supported (domain business rule)
-func (t *LFXTransaction) ValidateObjectType() error {
-	switch t.ObjectType {
-	case "project":
-		return nil
-	default:
-		return fmt.Errorf("unsupported object type: %s", t.ObjectType)
-	}
-}
+// =================
+// SUPPORTING TYPES
+// =================
 
 // ContactBody represents contact information within a transaction
 type ContactBody struct {
@@ -190,6 +158,14 @@ type Principal struct {
 	Email     string
 }
 
+// String returns a formatted string representation of the principal
+func (p Principal) String() string {
+	if p.Email != "" {
+		return fmt.Sprintf("%s <%s>", p.Principal, p.Email)
+	}
+	return p.Principal
+}
+
 // ProcessingResult represents the result of processing a transaction
 type ProcessingResult struct {
 	Success      bool
@@ -199,4 +175,14 @@ type ProcessingResult struct {
 	MessageID    string
 	DocumentID   string
 	IndexSuccess bool
+}
+
+// String returns a formatted string representation of the processing result
+func (pr ProcessingResult) String() string {
+	status := "SUCCESS"
+	if !pr.Success {
+		status = "FAILED"
+	}
+	return fmt.Sprintf("ProcessingResult{Status: %s, DocumentID: %s, Duration: %v}",
+		status, pr.DocumentID, pr.Duration)
 }

@@ -274,7 +274,7 @@ func (c *AppConfig) validateOpenSearch() error {
 
 // validateJWT validates JWT configuration
 func (c *AppConfig) validateJWT() error {
-	if c.JWT.Issuer == "" {
+	if strings.TrimSpace(c.JWT.Issuer) == "" {
 		return fmt.Errorf("JWT issuer is required")
 	}
 
@@ -284,7 +284,7 @@ func (c *AppConfig) validateJWT() error {
 	}
 
 	// Validate JWKS URL if provided
-	if c.JWT.JWKSURL == "" {
+	if strings.TrimSpace(c.JWT.JWKSURL) == "" {
 		return fmt.Errorf("JWKS URL is required")
 	}
 

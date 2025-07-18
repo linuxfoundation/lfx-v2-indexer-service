@@ -7,7 +7,7 @@ import (
 	"os"
 
 	"github.com/linuxfoundation/lfx-indexer-service/internal/infrastructure/config"
-	"github.com/linuxfoundation/lfx-indexer-service/internal/infrastructure/logging"
+	"github.com/linuxfoundation/lfx-indexer-service/pkg/logging"
 )
 
 // parseCLIFlags sets up, parses, and returns all CLI flags

@@ -78,24 +78,22 @@ curl http://localhost:8080/health   # General health
 │  └─ cmd/lfx-indexer/main.go - Pure dependency injection       │
 ├─────────────────────────────────────────────────────────────────┤
 │  Presentation Layer (NATS Protocol + Health Checks)            │
-│  ├─ IndexingMessageHandler - V2 message processing            │
-│  ├─ V1IndexingMessageHandler - V1 legacy support             │
+│  ├─ IndexingMessageHandler - Unified V2/V1 message processing │
 │  ├─ BaseMessageHandler - Shared NATS response logic          │
 │  └─ HealthHandler - Kubernetes health probes                  │
 ├─────────────────────────────────────────────────────────────────┤
-│  Application Layer (Use Case Orchestration)                    │
-│  ├─ MessageProcessingUseCase - Complete workflow coordination │
-│  └─ IndexingUseCase - Message-to-transaction processing       │
+│  Application Layer (Orchestration)                             │
+│  └─ MessageProcessor - Complete workflow coordination          │
 ├─────────────────────────────────────────────────────────────────┤
 │  Domain Layer (Business Logic)                                 │
-│  ├─ TransactionService - Core transaction processing          │
+│  ├─ IndexerService - Consolidated transaction + health logic  │
 │  ├─ LFXTransaction Entity - Domain model with validation      │
-│  ├─ Simple Subject Parsing - Clean constants    │
+│  ├─ Simple Subject Parsing - Clean constants                  │
 │  └─ Repository Interfaces - Clean abstractions                │
 ├─────────────────────────────────────────────────────────────────┤
 │  Infrastructure Layer (External Services)                      │
-│  ├─ MessageRepository - NATS client with queue groups         │
-│  ├─ TransactionRepository - OpenSearch client                 │
+│  ├─ MessagingRepository - NATS client with queue groups       │
+│  ├─ StorageRepository - OpenSearch client                     │
 │  ├─ AuthRepository - JWT validation (Heimdall integration)    │
 │  ├─ JanitorService - Event-driven conflict resolution         │
 │  └─ Container - Pure dependency injection                     │
@@ -131,23 +129,21 @@ graph TB
     %% Clean Architecture Layers
     MAIN_GO["cmd/lfx-indexer/main.go<br/>(Entry Point)"]
     CONTAINER["Container<br/>(Pure Dependency Injection)"]
-    MSG_REPO["MessageRepository<br/>(NATS Wrapper)"]
+    MSG_REPO["MessagingRepository<br/>(NATS Wrapper)"]
     
     %% Presentation Layer
     BASE_HANDLER["BaseMessageHandler<br/>(Shared NATS Response Logic)"]
-    V2_HANDLER["IndexingMessageHandler<br/>(V2 Messages)"]
-    V1_HANDLER["V1IndexingMessageHandler<br/>(V1 Messages)"]
+    UNIFIED_HANDLER["IndexingMessageHandler<br/>(Unified V2 + V1 Messages)"]
     
-    %% Application Layer  
-    MSG_PROC_UC["MessageProcessingUseCase<br/>(Coordination Layer)"]
-    INDEXING_UC["IndexingUseCase<br/>(Message Orchestration)"]
+    %% Application Layer
+    INDEXING_UC["MessageProcessor<br/>(Coordination Layer)"]
     
-    %% Domain Layer
-    TRANSACTION_SVC["TransactionService<br/>(Business Logic + Fixed Subject Parsing)"]
+    %% Domain Layer (Consolidated)
+    INDEXER_SVC["IndexerService<br/>(Consolidated Transaction + Health Logic)"]
     AUTH_REPO["AuthRepository<br/>(JWT Validation)"]
     
     %% Infrastructure Layer
-    OPENSEARCH_REPO["TransactionRepository<br/>(OpenSearch Client)"]
+    STORAGE_REPO["StorageRepository<br/>(OpenSearch Client)"]
     OPENSEARCH["OpenSearch Cluster<br/>resources index"]
     
     %% Janitor System
@@ -165,107 +161,98 @@ graph TB
     V2_SUBJECT --> NATS_SERVER
     V1_SUBJECT --> NATS_SERVER
     
-    NATS_SERVER -->|"Queue Subscribe"| QUEUE_GROUP
+    NATS_SERVER -->|"Queue Group Distribution"| QUEUE_GROUP
+    QUEUE_GROUP --> INSTANCE1
+    QUEUE_GROUP --> INSTANCE2  
+    QUEUE_GROUP --> INSTANCE3
     
-    %% Load Balancing
-    QUEUE_GROUP -.->|"Load Balance"| INSTANCE1
-    QUEUE_GROUP -.->|"Load Balance"| INSTANCE2
-    QUEUE_GROUP -.->|"Load Balance"| INSTANCE3
-    
-    %% Focus on single instance flow
+    %% Service Architecture Flow
     INSTANCE1 --> MAIN_GO
     MAIN_GO --> CONTAINER
     CONTAINER --> MSG_REPO
     
-    MSG_REPO -->|"V2: lfx.index.*"| V2_HANDLER
-    MSG_REPO -->|"V1: lfx.v1.index.*"| V1_HANDLER
+    MSG_REPO -->|"Both V2 + V1"| UNIFIED_HANDLER
     
-    %% BaseMessageHandler Composition
-    BASE_HANDLER -.->|"Embedded in"| V2_HANDLER
-    BASE_HANDLER -.->|"Embedded in"| V1_HANDLER
+    BASE_HANDLER -.->|"Embedded in"| UNIFIED_HANDLER
     
-    %% Application Layer Coordination
-    V2_HANDLER --> MSG_PROC_UC
-    V1_HANDLER --> MSG_PROC_UC
-    
-    MSG_PROC_UC --> INDEXING_UC
-    MSG_PROC_UC -->|"Queue Cleanup"| JANITOR_SVC
-    
-    INDEXING_UC --> TRANSACTION_SVC
-    
-    %% Business Logic Flow
-    TRANSACTION_SVC -->|"1. Fixed Subject Parsing (No Duplication)"| TRANSACTION_SVC
-    TRANSACTION_SVC -->|"2. Validate JWT Headers"| AUTH_REPO
-    AUTH_REPO -->|"Validate Token"| JWT_SERVICE
-    TRANSACTION_SVC -->|"3. Enrich Data"| TRANSACTION_SVC
-    TRANSACTION_SVC -->|"4. Generate Index Body"| TRANSACTION_SVC
-    TRANSACTION_SVC -->|"5. Index Document"| OPENSEARCH_REPO
-    
-    OPENSEARCH_REPO --> OPENSEARCH
+    %% Consolidated Processing Flow
+    UNIFIED_HANDLER --> MSG_PROCESSOR
+    MSG_PROCESSOR --> INDEXER_SVC
+    INDEXER_SVC --> AUTH_REPO
+    INDEXER_SVC --> STORAGE_REPO
+    STORAGE_REPO --> OPENSEARCH
     
     %% Janitor Integration
+    MSG_PROCESSOR --> JANITOR_SVC
     JANITOR_SVC --> JANITOR_QUEUE
     JANITOR_QUEUE --> JANITOR_WORKERS
-    JANITOR_WORKERS -->|"Conflict Resolution"| OPENSEARCH
+    JANITOR_WORKERS --> STORAGE_REPO
+    
+    %% External Dependencies
+    AUTH_REPO --> JWT_SERVICE
+    
+    %% Styling
+    classDef consolidated fill:#e1f5fe,stroke:#0277bd,stroke-width:2px
+    classDef external fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+    classDef infrastructure fill:#e8f5e8,stroke:#388e3c,stroke-width:2px
+    
+    class UNIFIED_HANDLER,MSG_PROCESSOR,INDEXER_SVC consolidated
+    class V2_APPS,V1_APPS,JWT_SERVICE,OPENSEARCH external
+    class NATS_SERVER,QUEUE_GROUP,JANITOR_QUEUE infrastructure
 ```
 
-## 🔄 Message Processing Flow
-
-### Complete Processing Sequence
+**Architecture Sequence Diagram (Updated)**:
 
 ```mermaid
 sequenceDiagram
     participant NATS as NATS Server
-    participant MR as MessageRepository  
-    participant IMH as IndexingMessageHandler
+    participant MR as MessagingRepository  
+    participant UH as IndexingMessageHandler
     participant BMH as BaseMessageHandler
-    participant MPUC as MessageProcessingUseCase
     participant IUC as IndexingUseCase
-    participant TS as TransactionService
+    participant IS as IndexerService
     participant AR as AuthRepository
     participant JWT as JWT Service
-    participant TR as TransactionRepository
+    participant SR as StorageRepository
     participant OS as OpenSearch
     participant JS as JanitorService
 
-    Note over NATS,JS: Clean Architecture Message Processing Flow
+    Note over NATS,JS: Clean Architecture Message Processing Flow (Consolidated)
 
     %% Message Arrival & Presentation Layer
-    NATS->>MR: NATS Message arrives<br/>Subject: lfx.index.project<br/>Queue: lfx.indexer.queue
+    NATS->>MR: NATS Message arrives<br/>Subject: lfx.index.project OR lfx.v1.index.project<br/>Queue: lfx.indexer.queue
     
-    MR->>IMH: HandleWithReply(ctx, data, subject, reply)
+    MR->>UH: HandleWithReply(ctx, data, subject, reply)
     
-    %% Application Layer Coordination
-    IMH->>MPUC: ProcessIndexingMessage(ctx, data, subject)
-    MPUC->>IUC: HandleIndexingMessage(ctx, data, subject)
+    %% Application Layer Coordination (Consolidated)
+    UH->>IUC: ProcessIndexingMessage(ctx, data, subject) OR ProcessV1IndexingMessage(ctx, data, subject)
     
-    %% Domain Layer Business Logic
-    IUC->>TS: CreateTransaction + EnrichTransaction
+    %% Domain Layer Business Logic (Consolidated)
+    IUC->>IS: ProcessTransaction(ctx, transaction, index)
     
-    Note over TS: Simple subject parsing:<br/>strings.CutPrefix(subject, "lfx.index.")<br/>(Fixed duplicate parsing issue)
+    Note over IS: Consolidated transaction processing + health logic:<br/>EnrichTransaction() + GenerateTransactionBody() + ProcessTransaction()
     
-    TS->>AR: ParsePrincipals(ctx, headers)
+    IS->>AR: ParsePrincipals(ctx, headers)
     AR->>JWT: ValidateToken(ctx, token)
     JWT-->>AR: Principal{Principal, Email}
-    AR-->>TS: []Principal
+    AR-->>IS: []Principal
     
-    TS->>TS: ValidateObjectType() + GenerateTransactionBody()
-    TS->>TR: Index(ctx, index, docID, body)
-    TR->>OS: POST /resources/_doc/{docID}
-    OS-->>TR: 201 Created
-    TR-->>TS: Success
+    IS->>IS: ValidateObjectType() + GenerateTransactionBody()
+    IS->>SR: Index(ctx, index, docID, body)
+    SR->>OS: POST /resources/_doc/{docID}
+    OS-->>SR: 201 Created
+    SR-->>IS: Success
     
-    TS-->>IUC: ProcessingResult{Success: true}
-    IUC-->>MPUC: Success
+    IS-->>IUC: ProcessingResult{Success: true}
     
     %% Janitor Coordination
-    MPUC->>JS: CheckItem(objectRef)
+    IUC->>JS: CheckItem(objectRef)
     Note over JS: Background conflict resolution
     
-    MPUC-->>IMH: Success
+    IUC-->>UH: Success
     
     %% Presentation Layer Response
-    IMH->>BMH: RespondSuccess(reply, subject)
+    UH->>BMH: RespondSuccess(reply, subject)
     BMH-->>MR: reply([]byte("OK"))
     MR-->>NATS: Acknowledge message
 ```
@@ -275,10 +262,10 @@ sequenceDiagram
 | Layer | Components | Responsibilities |
 |-------|------------|-----------------|
 | **Entry Point** | cmd/lfx-indexer/main.go | Pure application startup and dependency injection |
-| **Presentation** | BaseMessageHandler, IndexingMessageHandler, V1IndexingMessageHandler, HealthHandler | NATS protocol concerns, message parsing, response handling, health checks |
-| **Application** | MessageProcessingUseCase, IndexingUseCase | Workflow coordination, use case orchestration |
-| **Domain** | TransactionService, LFXTransaction, Simple Subject Parsing | Business logic, domain rules, data validation |
-| **Infrastructure** | Container, MessageRepository, TransactionRepository, AuthRepository, JanitorService | External service integration, data persistence, event-driven processing |
+| **Presentation** | BaseMessageHandler, IndexingMessageHandler (unified), HealthHandler | NATS protocol concerns, message parsing, response handling, health checks |
+| **Application** | MessageProcessor (consolidated) | Workflow coordination, use case orchestration |
+| **Domain** | IndexerService (consolidated), LFXTransaction, Simple Subject Parsing | Business logic, domain rules, data validation |
+| **Infrastructure** | Container, MessagingRepository, StorageRepository, AuthRepository, JanitorService | External service integration, data persistence, event-driven processing |
 
 ## 📊 NATS Configuration & Subjects
 
@@ -457,12 +444,39 @@ echo $JWT_CLOCK_SKEW
 LOG_LEVEL=debug ./bin/lfx-indexer
 ```
 
-**4. Subject Parsing Issues (Fixed)**
-Previous versions had duplicate subject parsing causing errors like:
+
+**Test Categories:**
+```bash
+# Run all tests
+make test
+
+# Layer-specific testing
+go test ./internal/container/...     # Container DI tests
+go test ./internal/domain/...        # Domain logic tests
+go test ./internal/application/...   # Application layer tests
+go test ./internal/infrastructure/... # Infrastructure tests
+go test ./internal/presentation/...  # Handler tests
+
+# Specific test patterns
+go test -v -run TestContainer_       # Container-specific tests
+go test -v -run TestConfig           # Configuration tests
+go test -v -run TestErrorHandling    # Error handling tests
 ```
-failed to parse subject: invalid subject format: project (expected prefix: lfx.index.)
+
+### Development Workflow
+
+```bash
+# Pre-commit checks
+make lint                          # Code linting
+make fmt                           # Code formatting
+make test                          # Full test suite
+make coverage                      # Generate coverage report
+
+# Debugging and validation
+make test-verbose                  # Verbose test output
+./bin/lfx-indexer -check-config   # Validate configuration
+LOG_LEVEL=debug make run           # Debug mode execution
 ```
-This has been **fixed** by removing duplicate parsing in TransactionService.
 
 ### Debug Configuration
 ```bash
@@ -498,7 +512,7 @@ curl http://localhost:8080/health   # General health status
 
 **Input Validation:**
 - **Domain Validation**: LFXTransaction entity validates all inputs
-- **Subject Format Validation**: Simple string prefix validation
+- **Subject Format Validation**: Simple string prefix validation with enhanced error messages
 - **Data Structure Validation**: Comprehensive JSON schema validation
 
 **Error Handling:**
@@ -506,37 +520,99 @@ curl http://localhost:8080/health   # General health status
 - **Structured Logging**: Detailed error context for debugging
 - **Graceful Degradation**: Continue processing on non-critical failures
 
+## �📁 Project Structure
+
+```
 ## 📁 Project Structure
 
 ```
 ├── cmd/                           # Application entry points (Standard Go Layout)
-│   ├── lfx-indexer/              # Main indexer service
-│   │   └── main.go               # Service entry point
-│   └── README.md                 # Command documentation
+│   └── lfx-indexer/              # Main indexer service
+│       ├── main.go               # Service entry point
+│       ├── cli.go                # CLI command handling
+│       └── server.go             # HTTP server setup
 ├── internal/                      # Private application code
 │   ├── application/              # Application layer (use cases)
-│   │   └── usecases/             # Use case implementations
+│   │   └── message_processor.go  # Message processing coordination
 │   ├── domain/                   # Domain layer (business logic)
-│   │   ├── constants/            # Shared constants (subject prefixes)
+│   │   ├── contracts/            # Domain contracts/interfaces
+│   │   │   ├── messaging.go      # Messaging repository interface
+│   │   │   └── storage.go        # Storage repository interface
 │   │   ├── entities/             # Domain entities
-│   │   ├── repositories/         # Repository interfaces
+│   │   │   └── transaction.go    # LFX transaction entity
 │   │   └── services/             # Domain services
+│   │       ├── indexer_service.go # Core indexer business logic
+│   │       └── indexer_service_test.go # Service tests
 │   ├── infrastructure/           # Infrastructure layer
+│   │   ├── auth/                 # Authentication
+│   │   │   └── auth_repository.go # JWT validation implementation
 │   │   ├── config/               # Configuration management
-│   │   ├── opensearch/           # OpenSearch client
-│   │   ├── nats/                 # NATS messaging
-│   │   └── jwt/                  # JWT authentication
+│   │   │   ├── app_config.go     # Application configuration
+│   │   │   └── cli_config.go     # CLI configuration
+│   │   ├── janitor/              # Background cleanup service
+│   │   │   ├── janitor_service.go # Janitor implementation
+│   │   │   └── janitor_service_test.go # Janitor tests
+│   │   ├── messaging/            # NATS messaging
+│   │   │   └── messaging_repository.go # NATS client wrapper
+│   │   └── storage/              # OpenSearch storage
+│   │       └── storage_repository.go # OpenSearch client wrapper
 │   ├── presentation/             # Presentation layer
-│   │   └── handlers/             # HTTP and message handlers
+│   │   └── handlers/             # Message and HTTP handlers
+│   │       ├── health_handler.go # Health check endpoints
+│   │       ├── health_handler_test.go # Health handler tests
+│   │       └── indexing_message_handler.go # NATS message handler
+│   ├── enrichers/                # Data enrichment utilities
 │   ├── container/                # Dependency injection
+│   │   ├── container.go          # DI container implementation
+│   │   └── container_test.go     # Container tests
 │   └── mocks/                    # Mock implementations
-├── bin/                          # Compiled binaries
-├── deployments/                  # Deployment configurations
-├── docs/                         # Documentation
+│       └── repositories.go       # Repository mocks
+├── pkg/                          # Public packages (reusable)
+│   ├── constants/                # Shared constants
+│   │   ├── app.go                # Application constants
+│   │   ├── errors.go             # Error constants
+│   │   ├── health.go             # Health check constants
+│   │   └── messaging.go          # Messaging constants
+│   └── logging/                  # Logging utilities
+│       ├── logger.go             # Logger implementation
+│       ├── logger_test.go        # Logger tests
+│       └── testing.go            # Test logging utilities
+├── deployment/                   # Deployment configurations
+│   └── deployment.yaml          # Kubernetes deployment
 ├── Dockerfile                    # Container definition
 ├── Makefile                      # Build automation
-├── go.mod                        # Go dependencies
+├── go.mod                        # Go module definition
+├── go.sum                        # Go module checksums
+├── run.sh                        # Run script
 └── README.md                     # This file
+```
+
+### Key Architecture Components
+
+**Entry Points:**
+- `cmd/lfx-indexer/main.go` - Application bootstrap and dependency injection
+- `cmd/lfx-indexer/cli.go` - Command-line interface handling
+- `cmd/lfx-indexer/server.go` - HTTP server setup and routing
+
+**Core Business Logic:**
+- `internal/domain/services/indexer_service.go` - Main business logic
+- `internal/application/message_processor.go` - Workflow coordination
+- `internal/domain/entities/transaction.go` - Domain model
+
+**Infrastructure Integration:**
+- `internal/infrastructure/messaging/` - NATS integration
+- `internal/infrastructure/storage/` - OpenSearch integration
+- `internal/infrastructure/auth/` - JWT authentication
+- `internal/infrastructure/janitor/` - Background cleanup
+
+**Dependency Injection:**
+- `internal/container/container.go` - Comprehensive DI container with validation
+- Enhanced with robust error handling and configuration validation
+
+**Testing:**
+- Comprehensive test coverage across all layers
+- Mock implementations in `internal/mocks/`
+- Test utilities in `pkg/logging/testing.go`
 ```
 
 

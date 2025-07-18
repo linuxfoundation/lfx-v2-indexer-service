@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/linuxfoundation/lfx-indexer-service/internal/container"
-	"github.com/linuxfoundation/lfx-indexer-service/internal/infrastructure/logging"
+	"github.com/linuxfoundation/lfx-indexer-service/pkg/logging"
 )
 
 func main() {

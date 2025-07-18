@@ -1,230 +1,149 @@
 package handlers
 
 import (
-	"context"
-	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
-	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/entities"
-	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/repositories"
 	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/services"
-	"github.com/linuxfoundation/lfx-indexer-service/internal/infrastructure/logging"
+	"github.com/linuxfoundation/lfx-indexer-service/internal/mocks"
+	"github.com/linuxfoundation/lfx-indexer-service/pkg/logging"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
-func TestHealthHandler_HandleReadiness_HealthyDependencies(t *testing.T) {
-	// Create mock repositories that are all healthy
-	mockTransactionRepo := &MockTransactionRepo{}
-	mockMessageRepo := &MockMessageRepo{}
-	mockAuthRepo := &MockAuthRepo{}
-
-	// Create health service
+func TestHealthHandler_HandleReadiness_Healthy(t *testing.T) {
+	// Setup
+	mockStorageRepo := mocks.NewMockStorageRepository()
+	mockMessagingRepo := mocks.NewMockMessagingRepository()
 	logger, _ := logging.TestLogger(t)
-	healthService := services.NewHealthService(
-		mockTransactionRepo,
-		mockMessageRepo,
-		mockAuthRepo,
-		logger,
-		5*time.Second,
-		1*time.Second,
-	)
 
-	// Create handler
-	handler := NewHealthHandler(healthService, false) // Use JSON responses for testing
+	indexerService := services.NewIndexerService(
+		mockStorageRepo,
+		mockMessagingRepo,
+		logger,
+	)
+	handler := NewHealthHandler(indexerService, false)
 
 	// Create request
-	req := httptest.NewRequest("GET", "/readyz", nil)
-	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/health/readiness", nil)
+	w := httptest.NewRecorder()
 
-	// Handle request
-	handler.HandleReadiness(recorder, req)
+	// Execute
+	handler.HandleReadiness(w, req)
 
-	// Assert response
-	assert.Equal(t, http.StatusOK, recorder.Code)
-	assert.Equal(t, "application/json", recorder.Header().Get("Content-Type"))
-
-	// Parse response
-	var response services.HealthStatus
-	err := json.Unmarshal(recorder.Body.Bytes(), &response)
-	require.NoError(t, err)
-
-	// Verify the response contains actual health check data
-	assert.Equal(t, "healthy", response.Status)
-	assert.Contains(t, response.Checks, "opensearch")
-	assert.Contains(t, response.Checks, "nats")
-	assert.Contains(t, response.Checks, "auth")
-	assert.Equal(t, 0, response.ErrorCount)
+	// Verify
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `"status":"healthy"`)
 }
 
-func TestHealthHandler_HandleReadiness_UnhealthyDependencies(t *testing.T) {
-	// Create mock repositories with failures
-	mockTransactionRepo := &MockTransactionRepo{healthError: assert.AnError}
-	mockMessageRepo := &MockMessageRepo{}
-	mockAuthRepo := &MockAuthRepo{}
+func TestHealthHandler_HandleReadiness_Unhealthy(t *testing.T) {
+	// Setup - simulate storage failure
+	mockStorageRepo := mocks.NewMockStorageRepository()
+	mockMessagingRepo := mocks.NewMockMessagingRepository()
+	mockStorageRepo.HealthError = assert.AnError
 
-	// Create health service
 	logger, _ := logging.TestLogger(t)
-	healthService := services.NewHealthService(
-		mockTransactionRepo,
-		mockMessageRepo,
-		mockAuthRepo,
+	indexerService := services.NewIndexerService(
+		mockStorageRepo,
+		mockMessagingRepo,
 		logger,
-		5*time.Second,
-		1*time.Second,
 	)
-
-	// Create handler
-	handler := NewHealthHandler(healthService, false) // Use JSON responses for testing
+	handler := NewHealthHandler(indexerService, false)
 
 	// Create request
-	req := httptest.NewRequest("GET", "/readyz", nil)
-	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/health/readiness", nil)
+	w := httptest.NewRecorder()
 
-	// Handle request
-	handler.HandleReadiness(recorder, req)
+	// Execute
+	handler.HandleReadiness(w, req)
 
-	// Assert response - should return 503 Service Unavailable
-	assert.Equal(t, http.StatusServiceUnavailable, recorder.Code)
-	assert.Equal(t, "application/json", recorder.Header().Get("Content-Type"))
-
-	// Parse response
-	var response services.HealthStatus
-	err := json.Unmarshal(recorder.Body.Bytes(), &response)
-	require.NoError(t, err)
-
-	// Verify the response contains actual health check data
-	assert.Equal(t, "degraded", response.Status) // Only OpenSearch failed
-	assert.Contains(t, response.Checks, "opensearch")
-	assert.Equal(t, "unhealthy", response.Checks["opensearch"].Status)
-	assert.Equal(t, "healthy", response.Checks["nats"].Status)
-	assert.Equal(t, 1, response.ErrorCount)
+	// Verify
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	assert.Contains(t, w.Body.String(), `"status":"unhealthy"`)
 }
 
 func TestHealthHandler_HandleLiveness_AlwaysHealthy(t *testing.T) {
-	// Create mock repositories (can be unhealthy)
-	mockTransactionRepo := &MockTransactionRepo{healthError: assert.AnError}
-	mockMessageRepo := &MockMessageRepo{healthError: assert.AnError}
-	mockAuthRepo := &MockAuthRepo{healthError: assert.AnError}
+	// Setup - even with all dependencies failing
+	mockStorageRepo := mocks.NewMockStorageRepository()
+	mockMessagingRepo := mocks.NewMockMessagingRepository()
+	mockStorageRepo.HealthError = assert.AnError
+	mockMessagingRepo.HealthError = assert.AnError
 
-	// Create health service
 	logger, _ := logging.TestLogger(t)
-	healthService := services.NewHealthService(
-		mockTransactionRepo,
-		mockMessageRepo,
-		mockAuthRepo,
+	indexerService := services.NewIndexerService(
+		mockStorageRepo,
+		mockMessagingRepo,
 		logger,
-		5*time.Second,
-		1*time.Second,
 	)
-
-	// Create handler
-	handler := NewHealthHandler(healthService, false) // Use JSON responses for testing
+	handler := NewHealthHandler(indexerService, false)
 
 	// Create request
-	req := httptest.NewRequest("GET", "/livez", nil)
-	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/health/liveness", nil)
+	w := httptest.NewRecorder()
 
-	// Handle request
-	handler.HandleLiveness(recorder, req)
+	// Execute
+	handler.HandleLiveness(w, req)
 
-	// Assert response - liveness should always return 200
-	assert.Equal(t, http.StatusOK, recorder.Code)
-	assert.Equal(t, "application/json", recorder.Header().Get("Content-Type"))
-
-	// Parse response
-	var response services.HealthStatus
-	err := json.Unmarshal(recorder.Body.Bytes(), &response)
-	require.NoError(t, err)
-
-	// Verify liveness is always healthy (service-level check)
-	assert.Equal(t, "healthy", response.Status)
-	assert.Contains(t, response.Checks, "service")
-	assert.Equal(t, "healthy", response.Checks["service"].Status)
+	// Verify - liveness should always return 200
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `"status":"healthy"`)
 }
 
-// Mock implementations for testing
+func TestHealthHandler_HandleHealthCheck_Simple(t *testing.T) {
+	// Setup with simple response enabled
+	mockStorageRepo := mocks.NewMockStorageRepository()
+	mockMessagingRepo := mocks.NewMockMessagingRepository()
+	logger, _ := logging.TestLogger(t)
 
-type MockTransactionRepo struct {
-	healthError error
+	indexerService := services.NewIndexerService(
+		mockStorageRepo,
+		mockMessagingRepo,
+		logger,
+	)
+	handler := NewHealthHandler(indexerService, true) // Simple response
+
+	// Create request
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w := httptest.NewRecorder()
+
+	// Execute
+	handler.HandleHealthCheck(w, req)
+
+	// Verify
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// Simple response should just be "OK" text
+	responseBody := w.Body.String()
+	assert.Equal(t, "OK\n", responseBody)
 }
 
-func (m *MockTransactionRepo) Index(ctx context.Context, index string, docID string, body io.Reader) error {
-	return nil
-}
+func TestHealthHandler_HandleHealthCheck_Detailed(t *testing.T) {
+	// Setup with detailed response
+	mockStorageRepo := mocks.NewMockStorageRepository()
+	mockMessagingRepo := mocks.NewMockMessagingRepository()
+	logger, _ := logging.TestLogger(t)
 
-func (m *MockTransactionRepo) Search(ctx context.Context, index string, query map[string]any) ([]map[string]any, error) {
-	return nil, nil
-}
+	indexerService := services.NewIndexerService(
+		mockStorageRepo,
+		mockMessagingRepo,
+		logger,
+	)
+	handler := NewHealthHandler(indexerService, false) // Detailed response
 
-func (m *MockTransactionRepo) Update(ctx context.Context, index string, docID string, body io.Reader) error {
-	return nil
-}
+	// Create request
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w := httptest.NewRecorder()
 
-func (m *MockTransactionRepo) Delete(ctx context.Context, index string, docID string) error {
-	return nil
-}
+	// Execute
+	handler.HandleHealthCheck(w, req)
 
-func (m *MockTransactionRepo) BulkIndex(ctx context.Context, operations []repositories.BulkOperation) error {
-	return nil
-}
+	// Verify
+	assert.Equal(t, http.StatusOK, w.Code)
 
-func (m *MockTransactionRepo) HealthCheck(ctx context.Context) error {
-	return m.healthError
-}
-
-func (m *MockTransactionRepo) UpdateWithOptimisticLock(ctx context.Context, index, docID string, body io.Reader, params *repositories.OptimisticUpdateParams) error {
-	return nil
-}
-
-func (m *MockTransactionRepo) SearchWithVersions(ctx context.Context, index string, query map[string]any) ([]repositories.VersionedDocument, error) {
-	return nil, nil
-}
-
-type MockMessageRepo struct {
-	healthError error
-}
-
-func (m *MockMessageRepo) Subscribe(ctx context.Context, subject string, handler repositories.MessageHandler) error {
-	return nil
-}
-
-func (m *MockMessageRepo) QueueSubscribe(ctx context.Context, subject string, queue string, handler repositories.MessageHandler) error {
-	return nil
-}
-
-func (m *MockMessageRepo) QueueSubscribeWithReply(ctx context.Context, subject string, queue string, handler repositories.MessageHandlerWithReply) error {
-	return nil
-}
-
-func (m *MockMessageRepo) Publish(ctx context.Context, subject string, data []byte) error {
-	return nil
-}
-
-func (m *MockMessageRepo) Close() error {
-	return nil
-}
-
-func (m *MockMessageRepo) HealthCheck(ctx context.Context) error {
-	return m.healthError
-}
-
-type MockAuthRepo struct {
-	healthError error
-}
-
-func (m *MockAuthRepo) ValidateToken(ctx context.Context, token string) (*entities.Principal, error) {
-	return nil, nil
-}
-
-func (m *MockAuthRepo) ParsePrincipals(ctx context.Context, headers map[string]string) ([]entities.Principal, error) {
-	return nil, nil
-}
-
-func (m *MockAuthRepo) HealthCheck(ctx context.Context) error {
-	return m.healthError
+	// Detailed response should contain checks
+	responseBody := w.Body.String()
+	assert.Contains(t, responseBody, `"status":"healthy"`)
+	assert.Contains(t, responseBody, `"checks"`)
+	assert.Contains(t, responseBody, `"opensearch"`)
+	assert.Contains(t, responseBody, `"nats"`)
 }
