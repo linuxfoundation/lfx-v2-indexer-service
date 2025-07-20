@@ -1,3 +1,6 @@
+// Copyright The Linux Foundation and each contributor to LFX.
+// SPDX-License-Identifier: MIT
+
 package constants
 
 // Error messages (centralized from scattered string literals)
@@ -13,6 +16,19 @@ const (
 	ErrJanitorFailed     = "janitor processing failed"
 	ErrShutdownTimeout   = "shutdown timeout exceeded"
 	ErrProcessing        = "processing failed"
+
+	// Transaction processing errors
+	ErrCreateTransaction   = "failed to create transaction"
+	ErrCreateV1Transaction = "failed to create V1 transaction"
+	ErrCreateV2Transaction = "failed to create V2 transaction"
+	ErrProcessTransaction  = "failed to process transaction"
+
+	// Data enrichment errors
+	ErrMappingUID        = "error mapping `uid` to `object_id`"
+	ErrMappingPublic     = "error mapping `public` attribute"
+	ErrEnrichmentFailed  = "transaction enrichment failed"
+	ErrMissingObjectID   = "missing or invalid object ID"
+	ErrMissingPublicFlag = "missing or invalid public flag"
 
 	// Storage specific errors
 	ErrMarshalQuery       = "failed to marshal query"
@@ -34,11 +50,6 @@ const (
 	LogFailedOptimisticUpdate    = "Failed to perform optimistic update"
 	LogFailedCreateTransaction   = "Failed to create transaction from message"
 	LogFailedCreateV1Transaction = "Failed to create V1 transaction from message"
-
-	// Transaction creation errors
-	ErrCreateTransaction   = "failed to create transaction"
-	ErrCreateV1Transaction = "failed to create V1 transaction"
-	ErrCreateV2Transaction = "failed to create V2 transaction"
 )
 
 // Error contexts (for structured error logging)

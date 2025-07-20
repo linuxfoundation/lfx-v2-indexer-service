@@ -15,12 +15,8 @@ GOOS := linux
 GOARCH := amd64
 
 # Linting
-GOLANGCI_LINT_VERSION := v1.64.6
 LINT_TIMEOUT := 10m
-LINT_TOOL=$(shell go env GOPATH)/bin/golangci-lint
 
-# Kubernetes
-NAMESPACE := lfx-system
 
 .PHONY: help
 help: ## Show this help message
@@ -34,6 +30,11 @@ setup: ## Setup development environment
 	go mod download
 	go mod tidy
 
+.PHONY: deps
+deps: ## Download dependencies
+	@echo "Downloading dependencies..."
+	go mod download
+
 .PHONY: fmt
 fmt: ## Format code
 	@echo "Formatting code..."
@@ -46,24 +47,22 @@ vet: ## Run go vet
 	go vet ./...
 
 .PHONY: lint
-lint: ## Run golangci-lint with default settings
+lint: ## Run golangci-lint (local Go linting)
 	@echo "Running golangci-lint..."
-	@$(LINT_TOOL) run --config=.golangci.yml ./... && echo "==> Lint OK"
+	@which golangci-lint >/dev/null 2>&1 || (echo "Installing golangci-lint..." && go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest)
+	@golangci-lint run ./... && echo "==> Lint OK"
 
 .PHONY: lint-fast
-lint-fast: ## Run golangci-lint with fast linters only
-	@echo "Running fast linters..."
-	golangci-lint run --fast --timeout=5m
+lint-fast: ## Run fast Go linting with golangci-lint (for quick development checks)
+	@echo "Running fast golangci-lint..."
+	@which golangci-lint >/dev/null 2>&1 || (echo "Installing golangci-lint..." && go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest)
+	@golangci-lint run --fast --timeout=5m
 
 .PHONY: lint-fix
-lint-fix: ## Run golangci-lint and automatically fix issues
+lint-fix: ## Run golangci-lint with auto-fix (for quick development fixes)
 	@echo "Running golangci-lint with auto-fix..."
-	golangci-lint run --fix --timeout=$(LINT_TIMEOUT)
-
-.PHONY: lint-new
-lint-new: ## Run golangci-lint only on new/changed code
-	@echo "Running golangci-lint on new code..."
-	golangci-lint run --new-from-rev=HEAD~1 --timeout=$(LINT_TIMEOUT)
+	@which golangci-lint >/dev/null 2>&1 || (echo "Installing golangci-lint..." && go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest)
+	@golangci-lint run --fix --timeout=$(LINT_TIMEOUT)
 
 .PHONY: test
 test: ## Run tests
@@ -151,12 +150,14 @@ quality-ci: fmt vet lint-fast test-short ## Run quality checks optimized for CI
 .PHONY: security
 security: ## Run security checks
 	@echo "Running security checks..."
-	golangci-lint run --disable-all --enable=gosec --timeout=5m
+	@which golangci-lint >/dev/null 2>&1 || (echo "Installing golangci-lint..." && go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest)
+	@golangci-lint run --disable-all --enable=gosec --timeout=5m
 
 .PHONY: complexity
 complexity: ## Check code complexity
 	@echo "Checking code complexity..."
-	golangci-lint run --disable-all --enable=gocyclo,gocognit,funlen --timeout=5m
+	@which golangci-lint >/dev/null 2>&1 || (echo "Installing golangci-lint..." && go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest)
+	@golangci-lint run --disable-all --enable=gocyclo,gocognit,funlen --timeout=5m
 
 ##@ Clean Architecture
 
@@ -214,8 +215,6 @@ docker-stop: ## Stop Docker container
 .PHONY: dev-setup
 dev-setup: ## Setup development tools
 	@echo "Installing development tools..."
-	@echo "Installing golangci-lint $(GOLANGCI_LINT_VERSION)..."
-	go install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 	@echo "Installing additional tools..."
 	go install golang.org/x/tools/cmd/goimports@latest
 	@echo "Installing mock generation tools..."
@@ -225,7 +224,6 @@ dev-setup: ## Setup development tools
 .PHONY: dev-update
 dev-update: ## Update development tools
 	@echo "Updating development tools..."
-	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 	go install golang.org/x/tools/cmd/goimports@latest
 	go install github.com/golang/mock/mockgen@latest
 
@@ -274,7 +272,6 @@ version: ## Show version information
 	@echo "Build Time: $(BUILD_TIME)"
 	@echo "Git Commit: $(GIT_COMMIT)"
 	@echo "Go Version: $(GO_VERSION)"
-	@echo "Golangci-lint Version: $(GOLANGCI_LINT_VERSION)"
 
 .PHONY: health
 health: ## Check application health

@@ -1,3 +1,6 @@
+// Copyright The Linux Foundation and each contributor to LFX.
+// SPDX-License-Identifier: MIT
+
 package services
 
 import (
@@ -566,14 +569,12 @@ func (s *IndexerService) GenerateTransactionBody(ctx context.Context, transactio
 		body.CreatedAt = &transaction.Timestamp
 		body.UpdatedAt = body.CreatedAt // For search sorting
 		s.setPrincipalFields(body, transaction.ParsedPrincipals, constants.ActionCreated)
-		body.Data = transaction.ParsedData
 		logger.Debug("Created action body prepared",
 			"transaction_id", transactionID,
 			"principal_count", len(transaction.ParsedPrincipals))
 	case constants.ActionUpdated:
 		body.UpdatedAt = &transaction.Timestamp
 		s.setPrincipalFields(body, transaction.ParsedPrincipals, constants.ActionUpdated)
-		body.Data = transaction.ParsedData
 		logger.Debug("Updated action body prepared",
 			"transaction_id", transactionID,
 			"principal_count", len(transaction.ParsedPrincipals))

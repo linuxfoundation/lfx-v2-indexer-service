@@ -1,3 +1,6 @@
+// Copyright The Linux Foundation and each contributor to LFX.
+// SPDX-License-Identifier: MIT
+
 package handlers
 
 import (
@@ -76,13 +79,13 @@ func (h *TestableIndexingMessageHandler) HandleWithReply(ctx context.Context, da
 // Helper methods for testing (simplified versions)
 func (h *TestableIndexingMessageHandler) respondErrorWithContext(ctx context.Context, reply func([]byte) error, err error, msg string, subject string) {
 	if reply != nil {
-		reply([]byte("ERROR: " + msg))
+		_ = reply([]byte("ERROR: " + msg)) // Test helper - ignore reply errors
 	}
 }
 
 func (h *TestableIndexingMessageHandler) respondSuccessWithContext(ctx context.Context, reply func([]byte) error, subject string) {
 	if reply != nil {
-		reply([]byte("OK"))
+		_ = reply([]byte("OK")) // Test helper - ignore reply errors
 	}
 }
 

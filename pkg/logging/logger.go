@@ -1,3 +1,6 @@
+// Copyright The Linux Foundation and each contributor to LFX.
+// SPDX-License-Identifier: MIT
+
 package logging
 
 import (
@@ -19,7 +22,7 @@ const (
 // NewRequestID generates a simple 16-character request ID
 func NewRequestID() string {
 	bytes := make([]byte, 8)
-	rand.Read(bytes)
+	_, _ = rand.Read(bytes) // Ignore error - crypto/rand.Read only fails on system issues
 	return hex.EncodeToString(bytes)
 }
 

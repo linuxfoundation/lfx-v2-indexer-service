@@ -1,3 +1,6 @@
+// Copyright The Linux Foundation and each contributor to LFX.
+// SPDX-License-Identifier: MIT
+
 package main
 
 import (
@@ -19,9 +22,7 @@ func parseCLIFlags() *config.CLIConfig {
 	noJanitor := flag.Bool("nojanitor", logging.GetEnvBool("NO_JANITOR", false), "disable janitor")
 	simpleHealth := flag.Bool("simple-health", logging.GetEnvBool("SIMPLE_HEALTH", false), "use simple 'OK' health responses")
 
-	// Legacy flags for backwards compatibility
 	configCheck := flag.Bool("check-config", false, "Check configuration and exit")
-	version := flag.Bool("version", false, "Print version and exit")
 	help := flag.Bool("help", false, "Show help")
 
 	// Custom usage function
@@ -37,7 +38,6 @@ func parseCLIFlags() *config.CLIConfig {
 		fmt.Fprintf(os.Stderr, "  --nojanitor      Disable background janitor service\n")
 		fmt.Fprintf(os.Stderr, "  --simple-health  Use simple 'OK' health responses for K8s\n")
 		fmt.Fprintf(os.Stderr, "  --check-config   Check configuration and exit\n")
-		fmt.Fprintf(os.Stderr, "  --version        Print version and exit\n")
 		fmt.Fprintf(os.Stderr, "  --help           Show this help message\n\n")
 
 		fmt.Fprintf(os.Stderr, "Examples:\n")
@@ -75,7 +75,6 @@ func parseCLIFlags() *config.CLIConfig {
 		NoJanitor:    *noJanitor,
 		SimpleHealth: *simpleHealth,
 		ConfigCheck:  *configCheck,
-		Version:      *version,
 		Help:         *help,
 	}
 }
@@ -85,12 +84,6 @@ func handleEarlyExits(flags *config.CLIConfig, logger *slog.Logger) {
 	// Handle help flag
 	if flags.Help {
 		flag.Usage()
-		os.Exit(0)
-	}
-
-	// Handle version flag
-	if flags.Version {
-		logger.Info("Version information", "version", "v2.0.0", "service", "LFX Indexer Service")
 		os.Exit(0)
 	}
 

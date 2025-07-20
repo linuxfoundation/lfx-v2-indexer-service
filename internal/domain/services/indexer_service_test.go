@@ -1,3 +1,6 @@
+// Copyright The Linux Foundation and each contributor to LFX.
+// SPDX-License-Identifier: MIT
+
 package services
 
 import (
@@ -27,8 +30,9 @@ func TestIndexerService_ProcessTransaction_Success(t *testing.T) {
 			"authorization": "Bearer valid-token",
 		},
 		Data: map[string]any{
-			"id":   "test-project",
-			"name": "Test Project",
+			"id":     "test-project",
+			"name":   "Test Project",
+			"public": true, // Required for access control
 		},
 		Timestamp: time.Now(),
 		ParsedPrincipals: []entities.Principal{
@@ -70,8 +74,9 @@ func TestIndexerService_ProcessTransaction_EnrichmentSuccess(t *testing.T) {
 			"authorization": "Bearer valid-token",
 		},
 		Data: map[string]any{
-			"id":   "test-project",
-			"name": "Test Project Updated",
+			"id":     "test-project",
+			"name":   "Test Project Updated",
+			"public": false, // Required for access control
 		},
 		Timestamp: time.Now(),
 		// No ParsedPrincipals - should be enriched via auth
@@ -162,8 +167,9 @@ func TestIndexerService_ProcessTransaction_BasicValidation(t *testing.T) {
 			"authorization": "Bearer valid-token",
 		},
 		Data: map[string]any{
-			"id":   "test-project",
-			"name": "Test Project",
+			"id":     "test-project",
+			"name":   "Test Project",
+			"public": true, // Required for access control
 		},
 		Timestamp: time.Now(),
 		ParsedPrincipals: []entities.Principal{

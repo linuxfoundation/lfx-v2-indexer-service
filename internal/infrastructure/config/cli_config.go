@@ -1,3 +1,6 @@
+// Copyright The Linux Foundation and each contributor to LFX.
+// SPDX-License-Identifier: MIT
+
 package config
 
 // CLIConfig holds parsed command line flags and configuration overrides
@@ -8,6 +11,5 @@ type CLIConfig struct {
 	NoJanitor    bool
 	SimpleHealth bool
 	ConfigCheck  bool
-	Version      bool
 	Help         bool
 }

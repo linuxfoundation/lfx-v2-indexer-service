@@ -1,3 +1,6 @@
+// Copyright The Linux Foundation and each contributor to LFX.
+// SPDX-License-Identifier: MIT
+
 package main
 
 import (
@@ -19,7 +22,7 @@ func main() {
 	// Initialize logger using existing infrastructure
 	logger := logging.NewLogger(flags.Debug)
 
-	// Handle early exits (help, version, config-check)
+	// Handle early exits (help, config-check)
 	handleEarlyExits(flags, logger)
 
 	// Log configuration with sources for transparency
@@ -28,11 +31,10 @@ func main() {
 		"debug", flags.Debug,
 		"bind", flags.Bind,
 		"no_janitor", flags.NoJanitor,
-		"simple_health", flags.SimpleHealth,
-		"version", "v2.0.0")
+		"simple_health", flags.SimpleHealth)
 
 	startupTime := time.Now()
-	logger.Info("LFX Indexer Service startup initiated", "version", "v2.0.0")
+	logger.Info("LFX Indexer Service startup initiated")
 
 	// Initialize dependency injection container
 	logger.Info("Initializing dependency injection container...")

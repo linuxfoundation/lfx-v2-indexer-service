@@ -1,3 +1,6 @@
+// Copyright The Linux Foundation and each contributor to LFX.
+// SPDX-License-Identifier: MIT
+
 package container
 
 import (
@@ -115,7 +118,7 @@ func TestContainer_NewContainer(t *testing.T) {
 					t.Logf("Container creation succeeded with invalid config (due to connection retry behavior)")
 					assert.NotNil(t, container)
 					if container != nil {
-						container.Shutdown(context.Background())
+						_ = container.Shutdown(context.Background()) // Test cleanup - ignore shutdown errors
 					}
 				}
 			} else {
@@ -147,7 +150,7 @@ func TestContainer_NewContainer(t *testing.T) {
 
 				// Cleanup
 				if container != nil {
-					container.Shutdown(context.Background())
+					_ = container.Shutdown(context.Background()) // Test cleanup - ignore shutdown errors
 				}
 			}
 		})
@@ -300,7 +303,7 @@ func TestContainer_CLIConfigOverrides(t *testing.T) {
 				assert.NotNil(t, container)
 				// Clean up if successful
 				if container != nil {
-					container.Shutdown(context.Background())
+					_ = container.Shutdown(context.Background()) // Test cleanup - ignore shutdown errors
 				}
 			}
 
@@ -630,7 +633,7 @@ func BenchmarkContainer_Creation(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		container, err := NewContainer(logger, nil)
 		if err == nil && container != nil {
-			container.Shutdown(context.Background())
+			_ = container.Shutdown(context.Background())
 		}
 	}
 }
@@ -718,7 +721,7 @@ func TestContainer_EdgeCases(t *testing.T) {
 			t.Logf("Container creation succeeded with empty CLI config")
 			assert.NotNil(t, container)
 			if container != nil {
-				container.Shutdown(context.Background())
+				_ = container.Shutdown(context.Background())
 			}
 		}
 	})
@@ -816,7 +819,7 @@ func TestContainer_ConfigurationValidation(t *testing.T) {
 		} else {
 			t.Logf("Container creation succeeded despite invalid port")
 			if container != nil {
-				container.Shutdown(context.Background())
+				_ = container.Shutdown(context.Background())
 			}
 		}
 	})
@@ -968,11 +971,11 @@ func TestContainer_RealWorldScenarios(t *testing.T) {
 		} else {
 			t.Logf("Container creation succeeded with production-like config")
 			assert.NotNil(t, container)
-			assert.Equal(t, 8080, container.Config.Server.Port)
-			assert.Equal(t, "warn", container.Config.Logging.Level)
-			assert.True(t, container.Config.Janitor.Enabled)
 			if container != nil {
-				container.Shutdown(context.Background())
+				assert.Equal(t, 8080, container.Config.Server.Port)
+				assert.Equal(t, "warn", container.Config.Logging.Level)
+				assert.True(t, container.Config.Janitor.Enabled)
+				_ = container.Shutdown(context.Background()) // Test cleanup - ignore shutdown errors
 			}
 		}
 	})
@@ -1006,12 +1009,12 @@ func TestContainer_RealWorldScenarios(t *testing.T) {
 		} else {
 			t.Logf("Container creation succeeded with development config")
 			assert.NotNil(t, container)
-			assert.Equal(t, 8080, container.Config.Server.Port)
-			assert.Equal(t, "debug", container.Config.Logging.Level)
-			assert.False(t, container.Config.Janitor.Enabled)
-			assert.False(t, container.Config.Health.EnableDetailedResponse)
 			if container != nil {
-				container.Shutdown(context.Background())
+				assert.Equal(t, 8080, container.Config.Server.Port)
+				assert.Equal(t, "debug", container.Config.Logging.Level)
+				assert.False(t, container.Config.Janitor.Enabled)
+				assert.False(t, container.Config.Health.EnableDetailedResponse)
+				_ = container.Shutdown(context.Background())
 			}
 		}
 	})
@@ -1106,7 +1109,7 @@ func BenchmarkContainer_HealthCheck(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		container.HealthCheck(ctx)
+		_ = container.HealthCheck(ctx) // Benchmark - ignore health check errors
 	}
 }
 
@@ -1118,6 +1121,6 @@ func BenchmarkContainer_Shutdown(b *testing.B) {
 		container := &Container{
 			Logger: logging.NewLogger(true),
 		}
-		container.Shutdown(context.Background())
+		_ = container.Shutdown(context.Background())
 	}
 }

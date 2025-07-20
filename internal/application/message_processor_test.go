@@ -1,3 +1,6 @@
+// Copyright The Linux Foundation and each contributor to LFX.
+// SPDX-License-Identifier: MIT
+
 package application
 
 import (
@@ -177,8 +180,9 @@ func TestMessageProcessor_ProcessIndexingMessage_Success(t *testing.T) {
 	testData := map[string]any{
 		"action": "created",
 		"data": map[string]any{
-			"id":   "test-123",
-			"name": "Test Project",
+			"id":     "test-123",
+			"name":   "Test Project",
+			"public": true, // Required field for project enricher
 		},
 		"headers": map[string]string{
 			"x-trace-id":    "trace-123",
