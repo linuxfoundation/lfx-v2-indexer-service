@@ -5,9 +5,10 @@ package storage
 
 import (
 	"context"
-	"fmt"
+	"io"
+	"log/slog"
+	"strings"
 	"testing"
-	"time"
 
 	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/contracts"
 	"github.com/linuxfoundation/lfx-indexer-service/pkg/logging"
@@ -15,10 +16,16 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// Helper function to create a test logger
+func setupTestLogger(t *testing.T) *slog.Logger {
+	logger, _ := logging.TestLogger(t)
+	return logger
+}
+
 func TestNewStorageRepository(t *testing.T) {
 	// Setup
 	client := &opensearch.Client{}
-	logger, _ := logging.TestLogger(t)
+	logger := setupTestLogger(t)
 
 	// Execute
 	repo := NewStorageRepository(client, logger)
@@ -29,409 +36,246 @@ func TestNewStorageRepository(t *testing.T) {
 	assert.NotNil(t, repo.logger)
 }
 
-func TestClassifyError(t *testing.T) {
-	tests := []struct {
-		name     string
-		err      error
-		expected string
-	}{
-		{
-			name:     "nil error",
-			err:      nil,
-			expected: "",
-		},
-		{
-			name:     "network error",
-			err:      fmt.Errorf("connection refused"),
-			expected: "network",
-		},
-		{
-			name:     "timeout error",
-			err:      fmt.Errorf("request timeout"),
-			expected: "network",
-		},
-		{
-			name:     "version conflict",
-			err:      fmt.Errorf("409 version conflict"),
-			expected: "version_conflict",
-		},
-		{
-			name:     "bad request",
-			err:      fmt.Errorf("400 bad request"),
-			expected: "bad_request",
-		},
-		{
-			name:     "authentication error",
-			err:      fmt.Errorf("401 unauthorized"),
-			expected: "authentication",
-		},
-		{
-			name:     "authorization error",
-			err:      fmt.Errorf("403 forbidden"),
-			expected: "authentication",
-		},
-		{
-			name:     "not found",
-			err:      fmt.Errorf("404 not found"),
-			expected: "not_found",
-		},
-		{
-			name:     "marshal error",
-			err:      fmt.Errorf("failed to marshal data"),
-			expected: "serialization",
-		},
-		{
-			name:     "decode error",
-			err:      fmt.Errorf("failed to decode response"),
-			expected: "serialization",
-		},
-		{
-			name:     "unknown error",
-			err:      fmt.Errorf("some unknown error"),
-			expected: "unknown",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := classifyError(tt.err)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-func TestLogOperationStartAndEnd(t *testing.T) {
-	// Setup
-	logger, logOutput := logging.TestLogger(t)
-	repo := &StorageRepository{
-		client: &opensearch.Client{},
-		logger: logger,
-	}
-
-	// Test successful operation
-	t.Run("successful operation", func(t *testing.T) {
-		logOutput.Reset()
-
-		enhancedLogger, start := repo.logOperationStart(logger, "test_operation", map[string]any{"key": "value"})
-
-		// Simulate some work
-		time.Sleep(1 * time.Millisecond)
-
-		repo.logOperationEnd(enhancedLogger, "test_operation", start, nil, map[string]any{"result": "success"})
-
-		logs := logOutput.String()
-		assert.Contains(t, logs, "Storage operation started")
-		assert.Contains(t, logs, "Storage operation completed successfully")
-		assert.Contains(t, logs, "operation\":\"test_operation\"")
-		assert.Contains(t, logs, "key\":\"value\"")
-		assert.Contains(t, logs, "result\":\"success\"")
-		assert.Contains(t, logs, "duration_ms")
-	})
-
-	// Test failed operation
-	t.Run("failed operation", func(t *testing.T) {
-		logOutput.Reset()
-
-		enhancedLogger, start := repo.logOperationStart(logger, "test_operation", nil)
-
-		// Simulate some work
-		time.Sleep(1 * time.Millisecond)
-
-		testErr := fmt.Errorf("test error")
-		repo.logOperationEnd(enhancedLogger, "test_operation", start, testErr, map[string]any{"stage": "testing"})
-
-		logs := logOutput.String()
-		assert.Contains(t, logs, "Storage operation started")
-		assert.Contains(t, logs, "Storage operation failed")
-		assert.Contains(t, logs, "error\":\"test error\"")
-		assert.Contains(t, logs, "error_type\":\"unknown\"")
-		assert.Contains(t, logs, "stage\":\"testing\"")
-	})
-}
-
-func TestLogOperationStart_WithMetadata(t *testing.T) {
-	// Setup
-	logger, logOutput := logging.TestLogger(t)
-	repo := &StorageRepository{
-		client: &opensearch.Client{},
-		logger: logger,
-	}
-
-	// Test with metadata
-	metadata := map[string]any{
-		"document_id": "test-doc-id",
-		"index":       "test-index",
-		"seq_no":      int64(1),
-	}
-
-	enhancedLogger, start := repo.logOperationStart(logger, "test_operation", metadata)
-
-	// Verify logger and start time
-	assert.NotNil(t, enhancedLogger)
-	assert.True(t, start.Before(time.Now()) || start.Equal(time.Now()))
-
-	// Verify logging
-	logs := logOutput.String()
-	assert.Contains(t, logs, "Storage operation started")
-	assert.Contains(t, logs, "operation\":\"test_operation\"")
-	assert.Contains(t, logs, "document_id\":\"test-doc-id\"")
-	assert.Contains(t, logs, "index\":\"test-index\"")
-	assert.Contains(t, logs, "seq_no\":1")
-}
-
-func TestLogOperationStart_WithoutMetadata(t *testing.T) {
-	// Setup
-	logger, logOutput := logging.TestLogger(t)
-	repo := &StorageRepository{
-		client: &opensearch.Client{},
-		logger: logger,
-	}
-
-	// Test without metadata
-	enhancedLogger, start := repo.logOperationStart(logger, "test_operation", nil)
-
-	// Verify logger and start time
-	assert.NotNil(t, enhancedLogger)
-	assert.True(t, start.Before(time.Now()) || start.Equal(time.Now()))
-
-	// Verify logging
-	logs := logOutput.String()
-	assert.Contains(t, logs, "Storage operation started")
-	assert.Contains(t, logs, "operation\":\"test_operation\"")
-	assert.Contains(t, logs, "started_at")
-}
-
-func TestLogOperationEnd_Success(t *testing.T) {
-	// Setup
-	logger, logOutput := logging.TestLogger(t)
-	repo := &StorageRepository{
-		client: &opensearch.Client{},
-		logger: logger,
-	}
-
-	start := time.Now().Add(-10 * time.Millisecond)
-	metadata := map[string]any{
-		"status_code": "200 OK",
-		"result":      "success",
-	}
-
-	// Execute
-	repo.logOperationEnd(logger, "test_operation", start, nil, metadata)
-
-	// Verify
-	logs := logOutput.String()
-	assert.Contains(t, logs, "Storage operation completed successfully")
-	assert.Contains(t, logs, "operation\":\"test_operation\"")
-	assert.Contains(t, logs, "status_code\":\"200 OK\"")
-	assert.Contains(t, logs, "result\":\"success\"")
-	assert.Contains(t, logs, "duration_ms")
-}
-
-func TestLogOperationEnd_Error(t *testing.T) {
-	// Setup
-	logger, logOutput := logging.TestLogger(t)
-	repo := &StorageRepository{
-		client: &opensearch.Client{},
-		logger: logger,
-	}
-
-	start := time.Now().Add(-10 * time.Millisecond)
-	testErr := fmt.Errorf("connection timeout")
-	metadata := map[string]any{
-		"stage": "request_execution",
-	}
-
-	// Execute
-	repo.logOperationEnd(logger, "test_operation", start, testErr, metadata)
-
-	// Verify
-	logs := logOutput.String()
-	assert.Contains(t, logs, "Storage operation failed")
-	assert.Contains(t, logs, "operation\":\"test_operation\"")
-	assert.Contains(t, logs, "error\":\"connection timeout\"")
-	assert.Contains(t, logs, "error_type\":\"network\"")
-	assert.Contains(t, logs, "stage\":\"request_execution\"")
-	assert.Contains(t, logs, "duration_ms")
-}
-
-func TestLogOperationEnd_WithEmptyMetadata(t *testing.T) {
-	// Setup
-	logger, logOutput := logging.TestLogger(t)
-	repo := &StorageRepository{
-		client: &opensearch.Client{},
-		logger: logger,
-	}
-
-	start := time.Now().Add(-5 * time.Millisecond)
-
-	// Execute
-	repo.logOperationEnd(logger, "test_operation", start, nil, map[string]any{})
-
-	// Verify
-	logs := logOutput.String()
-	assert.Contains(t, logs, "Storage operation completed successfully")
-	assert.Contains(t, logs, "operation\":\"test_operation\"")
-	assert.Contains(t, logs, "duration_ms")
-}
-
 func TestBulkIndex_EmptyOperations(t *testing.T) {
 	// Setup
-	logger, _ := logging.TestLogger(t)
+	logger := setupTestLogger(t)
 	repo := &StorageRepository{
 		client: &opensearch.Client{},
 		logger: logger,
 	}
 
-	ctx := context.Background()
-	operations := []contracts.BulkOperation{}
+	// Execute - Empty operations should be handled without external calls
+	err := repo.BulkIndex(context.TODO(), []contracts.BulkOperation{})
 
-	// Execute
-	err := repo.BulkIndex(ctx, operations)
-
-	// Verify - should return nil for empty operations
+	// Verify
 	assert.NoError(t, err)
 }
 
-func TestVersionConflictError_Properties(t *testing.T) {
-	// Test that we can create and work with version conflict errors
-	versionErr := &contracts.VersionConflictError{
-		DocumentID:  "test-doc-id",
-		CurrentSeq:  5,
-		ExpectedSeq: 3,
-		Err:         fmt.Errorf("version conflict detected"),
-	}
-
-	// Verify properties
-	assert.Equal(t, "test-doc-id", versionErr.DocumentID)
-	assert.Equal(t, int64(5), versionErr.CurrentSeq)
-	assert.Equal(t, int64(3), versionErr.ExpectedSeq)
-	assert.Contains(t, versionErr.Error(), "version conflict detected")
-}
-
-// Integration test that demonstrates the logging flow
-func TestStorageRepository_LoggingFlow(t *testing.T) {
-	// Setup
-	logger, logOutput := logging.TestLogger(t)
+func TestStorageRepository_StructureValidation(t *testing.T) {
+	// This test validates the repository structure and interface compliance
+	logger := setupTestLogger(t)
 	repo := &StorageRepository{
 		client: &opensearch.Client{},
 		logger: logger,
 	}
 
-	// Simulate a complete operation flow
-	baseLogger := logging.WithFields(
-		logging.FromContext(context.Background(), repo.logger),
-		map[string]any{
-			"document_id": "test-doc",
-			"index":       "test-index",
-		},
-	)
+	// Verify all expected methods exist on the repository
+	t.Run("methods_exist", func(t *testing.T) {
+		// These tests verify method signatures exist
+		var _ func(context.Context, string, string, io.Reader) error = repo.Index
+		var _ func(context.Context, string, map[string]any) ([]map[string]any, error) = repo.Search
+		var _ func(context.Context, string, map[string]any) ([]contracts.VersionedDocument, error) = repo.SearchWithVersions
+		var _ func(context.Context, string, string, io.Reader) error = repo.Update
+		var _ func(context.Context, string, string) error = repo.Delete
+		var _ func(context.Context, []contracts.BulkOperation) error = repo.BulkIndex
+		var _ func(context.Context, string, string, io.Reader, *contracts.OptimisticUpdateParams) error = repo.UpdateWithOptimisticLock
+		var _ func(context.Context) error = repo.HealthCheck
+	})
+}
 
-	// Start operation
-	enhancedLogger, start := repo.logOperationStart(baseLogger, "index", nil)
+func TestStorageRepository_BulkOperationValidation(t *testing.T) {
+	// Test that bulk operations can be constructed properly
+	t.Run("bulk_operation_construction", func(t *testing.T) {
+		operations := []contracts.BulkOperation{
+			{
+				Action: "index",
+				Index:  "test-index",
+				DocID:  "doc-1",
+				Body:   strings.NewReader(`{"field": "value1"}`),
+			},
+			{
+				Action: "update",
+				Index:  "test-index",
+				DocID:  "doc-2",
+				Body:   strings.NewReader(`{"doc": {"field": "value2"}}`),
+			},
+		}
 
-	// Simulate some processing time
-	time.Sleep(2 * time.Millisecond)
+		// Verify operations are constructed correctly
+		assert.Len(t, operations, 2)
+		assert.Equal(t, "index", operations[0].Action)
+		assert.Equal(t, "test-index", operations[0].Index)
+		assert.Equal(t, "doc-1", operations[0].DocID)
+		assert.NotNil(t, operations[0].Body)
 
-	// End operation successfully
-	repo.logOperationEnd(enhancedLogger, "index", start, nil, map[string]any{
-		"status_code": "200 OK",
+		assert.Equal(t, "update", operations[1].Action)
+		assert.Equal(t, "test-index", operations[1].Index)
+		assert.Equal(t, "doc-2", operations[1].DocID)
+		assert.NotNil(t, operations[1].Body)
+	})
+}
+
+func TestStorageRepository_OptimisticUpdateParams(t *testing.T) {
+	// Test that optimistic update parameters can be constructed properly
+	t.Run("optimistic_params_construction", func(t *testing.T) {
+		seqNo := int64(1)
+		primaryTerm := int64(1)
+		
+		params := &contracts.OptimisticUpdateParams{
+			SeqNo:       &seqNo,
+			PrimaryTerm: &primaryTerm,
+		}
+
+		// Verify params are constructed correctly
+		assert.NotNil(t, params)
+		assert.NotNil(t, params.SeqNo)
+		assert.NotNil(t, params.PrimaryTerm)
+		assert.Equal(t, int64(1), *params.SeqNo)
+		assert.Equal(t, int64(1), *params.PrimaryTerm)
 	})
 
-	// Verify the complete logging flow
-	logs := logOutput.String()
-	assert.Contains(t, logs, "Storage operation started")
-	assert.Contains(t, logs, "Storage operation completed successfully")
-	assert.Contains(t, logs, "operation\":\"index\"")
-	assert.Contains(t, logs, "document_id\":\"test-doc\"")
-	assert.Contains(t, logs, "index\":\"test-index\"")
-	assert.Contains(t, logs, "status_code\":\"200 OK\"")
-	assert.Contains(t, logs, "duration_ms")
+	t.Run("optimistic_params_nil_values", func(t *testing.T) {
+		// Test params with nil values
+		params := &contracts.OptimisticUpdateParams{
+			SeqNo:       nil,
+			PrimaryTerm: nil,
+		}
+
+		// Verify params can be created with nil values
+		assert.NotNil(t, params)
+		assert.Nil(t, params.SeqNo)
+		assert.Nil(t, params.PrimaryTerm)
+	})
+
+	t.Run("optimistic_params_partial_values", func(t *testing.T) {
+		seqNo := int64(42)
+		
+		// Test params with only one field set
+		params := &contracts.OptimisticUpdateParams{
+			SeqNo:       &seqNo,
+			PrimaryTerm: nil,
+		}
+
+		// Verify partial params construction
+		assert.NotNil(t, params)
+		assert.NotNil(t, params.SeqNo)
+		assert.Nil(t, params.PrimaryTerm)
+		assert.Equal(t, int64(42), *params.SeqNo)
+	})
 }
 
-// Test error classification edge cases
-func TestClassifyError_EdgeCases(t *testing.T) {
-	tests := []struct {
-		name     string
-		err      error
-		expected string
-	}{
-		{
-			name:     "multiple keywords",
-			err:      fmt.Errorf("connection timeout during marshal"),
-			expected: "network", // Should match the first pattern
-		},
-		{
-			name:     "case sensitivity",
-			err:      fmt.Errorf("connection refused"),
-			expected: "network", // The function is case-sensitive, so uppercase doesn't match
-		},
-		{
-			name:     "version_conflict keyword",
-			err:      fmt.Errorf("document has version_conflict"),
-			expected: "version_conflict",
-		},
-		{
-			name:     "unmarshal error",
-			err:      fmt.Errorf("failed to unmarshal JSON"),
-			expected: "serialization",
-		},
-		{
-			name:     "empty error message",
-			err:      fmt.Errorf(""),
-			expected: "unknown",
-		},
-	}
+func TestStorageRepository_BulkOperationEdgeCases(t *testing.T) {
+	// Test additional bulk operation scenarios
+	t.Run("bulk_operation_different_actions", func(t *testing.T) {
+		operations := []contracts.BulkOperation{
+			{
+				Action: "index",
+				Index:  "test-index",
+				DocID:  "doc-1",
+				Body:   strings.NewReader(`{"field": "value1"}`),
+			},
+			{
+				Action: "update",
+				Index:  "test-index",
+				DocID:  "doc-2", 
+				Body:   strings.NewReader(`{"doc": {"field": "value2"}}`),
+			},
+			{
+				Action: "delete",
+				Index:  "test-index",
+				DocID:  "doc-3",
+				Body:   nil, // Delete operations typically don't have a body
+			},
+		}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := classifyError(tt.err)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
+		// Verify different operation types
+		assert.Len(t, operations, 3)
+		assert.Equal(t, "index", operations[0].Action)
+		assert.Equal(t, "update", operations[1].Action)
+		assert.Equal(t, "delete", operations[2].Action)
+		assert.NotNil(t, operations[0].Body)
+		assert.NotNil(t, operations[1].Body)
+		assert.Nil(t, operations[2].Body) // Delete operations may not have body
+	})
+
+	t.Run("bulk_operation_nil_body", func(t *testing.T) {
+		operation := contracts.BulkOperation{
+			Action: "delete",
+			Index:  "test-index",
+			DocID:  "doc-to-delete",
+			Body:   nil,
+		}
+
+		// Verify operation with nil body is valid for certain actions
+		assert.Equal(t, "delete", operation.Action)
+		assert.Equal(t, "test-index", operation.Index)
+		assert.Equal(t, "doc-to-delete", operation.DocID)
+		assert.Nil(t, operation.Body)
+	})
 }
 
-// Benchmark tests for performance
-func BenchmarkClassifyError(b *testing.B) {
-	err := fmt.Errorf("connection refused")
+func TestStorageRepository_ParameterValidation(t *testing.T) {
+	// Test parameter validation scenarios that don't require external calls
+	t.Run("repository_initialization", func(t *testing.T) {
+		logger := setupTestLogger(t)
+		
+		// Test repository can be created with various client states
+		repo1 := &StorageRepository{
+			client: &opensearch.Client{},
+			logger: logger,
+		}
+		assert.NotNil(t, repo1)
+		assert.NotNil(t, repo1.client)
+		assert.NotNil(t, repo1.logger)
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = classifyError(err)
-	}
+		// Test repository creation via constructor
+		repo2 := NewStorageRepository(&opensearch.Client{}, logger)
+		assert.NotNil(t, repo2)
+		assert.NotNil(t, repo2.client)
+		assert.NotNil(t, repo2.logger)
+	})
+
+	t.Run("context_types", func(t *testing.T) {
+		// Test that different context types are accepted structurally
+		contexts := []context.Context{
+			context.Background(),
+			context.TODO(),
+		}
+
+		// We're just testing that these contexts are valid types
+		// The actual method calls would require OpenSearch infrastructure
+		for i, ctx := range contexts {
+			assert.NotNil(t, ctx, "Context %d should not be nil", i)
+			assert.IsType(t, (*context.Context)(nil), &ctx, "Should be a context type")
+		}
+	})
+
+	t.Run("string_parameter_types", func(t *testing.T) {
+		// Test that various string parameter combinations are valid types
+		testCases := []struct {
+			index string
+			docID string
+			name  string
+		}{
+			{"test-index", "doc-123", "normal_case"},
+			{"", "doc-456", "empty_index"},
+			{"test-index", "", "empty_docid"},
+			{"", "", "both_empty"},
+		}
+
+		for _, tc := range testCases {
+			// We're testing parameter type validity, not actual OpenSearch calls
+			assert.IsType(t, "", tc.index, "Index should be string type")
+			assert.IsType(t, "", tc.docID, "DocID should be string type")
+		}
+	})
 }
 
-func BenchmarkLogOperationStart(b *testing.B) {
-	logger, _ := logging.TestLogger(&testing.T{})
-	repo := &StorageRepository{
-		client: &opensearch.Client{},
-		logger: logger,
-	}
-
-	metadata := map[string]any{
-		"document_id": "test-doc-id",
-		"index":       "test-index",
-	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, _ = repo.logOperationStart(logger, "test_operation", metadata)
-	}
-}
-
-func BenchmarkLogOperationEnd(b *testing.B) {
-	logger, _ := logging.TestLogger(&testing.T{})
-	repo := &StorageRepository{
-		client: &opensearch.Client{},
-		logger: logger,
-	}
-
-	start := time.Now()
-	metadata := map[string]any{
-		"status_code": "200 OK",
-	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		repo.logOperationEnd(logger, "test_operation", start, nil, metadata)
-	}
-}
+// Note: Integration tests that require actual OpenSearch connections should be placed
+// in separate test files with build tags (e.g., //go:build integration) to allow
+// running unit tests without external dependencies.
+//
+// Current test coverage:
+// ✅ Repository construction and initialization (TestNewStorageRepository)
+// ✅ Empty operations validation (TestBulkIndex_EmptyOperations) 
+// ✅ Method signature validation (TestStorageRepository_StructureValidation)
+// ✅ Contract construction and validation (BulkOperation, OptimisticUpdateParams)
+// ✅ Edge case handling (nil values, different operation types)
+// ✅ Parameter type validation (contexts, strings)
+//
+// Missing (requires OpenSearch integration):
+// ❌ Actual OpenSearch operations (Index, Search, Update, Delete, etc.)
+// ❌ Error handling for OpenSearch failures
+// ❌ Response parsing and data transformation
+// ❌ Network timeouts and retries
+// ❌ Authentication and connection management

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/entities"
+	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/contracts"
 	"github.com/linuxfoundation/lfx-indexer-service/pkg/constants"
 )
 
@@ -25,7 +25,7 @@ func (e *ProjectEnricher) ObjectType() string {
 }
 
 // EnrichData enriches project-specific data
-func (e *ProjectEnricher) EnrichData(body *entities.TransactionBody, transaction *entities.LFXTransaction) error {
+func (e *ProjectEnricher) EnrichData(body *contracts.TransactionBody, transaction *contracts.LFXTransaction) error {
 	data := transaction.ParsedData
 
 	// Set the processed data on the body (enricher owns data assignment)

@@ -33,23 +33,17 @@ func main() {
 		"no_janitor", flags.NoJanitor,
 		"simple_health", flags.SimpleHealth)
 
-	startupTime := time.Now()
 	logger.Info("LFX Indexer Service startup initiated")
 
 	// Initialize dependency injection container
 	logger.Info("Initializing dependency injection container...")
-	containerStartTime := time.Now()
 
 	// CLI config is already the right type - no conversion needed
 	container, err := container.NewContainer(logger, flags)
 	if err != nil {
-		logger.Error("Failed to initialize container",
-			"duration", time.Since(containerStartTime),
-			"error", err.Error())
+		logger.Error("Failed to initialize container", "error", err.Error())
 		os.Exit(1)
 	}
-
-	logger.Info("Container initialized successfully", "duration", time.Since(containerStartTime))
 
 	// Create context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())
@@ -60,31 +54,24 @@ func main() {
 
 	// Perform health check
 	logger.Info("Performing initial health check...")
-	healthCheckStart := time.Now()
 
 	if err := container.HealthCheck(ctx); err != nil {
-		logger.Warn("Initial health check failed",
-			"duration", time.Since(healthCheckStart),
-			"error", err.Error())
+		logger.Warn("Initial health check failed", "error", err.Error())
 		logger.Warn("Service will start in degraded mode - some dependencies may be unavailable")
 		logger.Warn("Health status will be continuously monitored via health endpoints")
 	} else {
-		logger.Info("Initial health check passed",
-			"duration", time.Since(healthCheckStart))
+		logger.Info("Initial health check passed")
 	}
 
 	// Start background services with WaitGroup coordination
 	logger.Info("Starting background services...")
-	servicesStartTime := time.Now()
 
 	if err := container.StartServicesWithWaitGroup(ctx, gracefulCloseWG); err != nil {
-		logger.Error("Failed to start background services",
-			"duration", time.Since(servicesStartTime),
-			"error", err.Error())
+		logger.Error("Failed to start background services", "error", err.Error())
 		os.Exit(1)
 	}
 
-	logger.Info("Background services started successfully", "duration", time.Since(servicesStartTime))
+	logger.Info("Background services started successfully")
 
 	// Setup and start HTTP server
 	logger.Info("Setting up health check HTTP server...")
@@ -95,8 +82,7 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	totalStartupTime := time.Since(startupTime)
-	logger.Info("LFX Indexer Service started successfully", "startup_duration", totalStartupTime)
+	logger.Info("LFX Indexer Service started successfully")
 	logger.Info("Service Status",
 		"nats_processing", "ACTIVE",
 		"opensearch_indexing", "READY",
@@ -108,7 +94,6 @@ func main() {
 
 	// Wait for shutdown signal
 	receivedSignal := <-sigChan
-	shutdownStartTime := time.Now()
 
 	logger.Info("Shutdown signal received", "signal", receivedSignal)
 	logger.Info("Initiating graceful shutdown sequence...")
@@ -143,10 +128,6 @@ func main() {
 		logger.Info("Health check server shutdown completed")
 	}
 
-	shutdownDuration := time.Since(shutdownStartTime)
-	totalUptime := time.Since(startupTime)
-
-	logger.Info("Graceful shutdown completed", "shutdown_duration", shutdownDuration)
-	logger.Info("Service uptime", "uptime", totalUptime)
+	logger.Info("Graceful shutdown completed")
 	logger.Info("LFX Indexer Service stopped")
 }

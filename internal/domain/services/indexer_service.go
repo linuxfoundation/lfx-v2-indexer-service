@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/contracts"
-	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/entities"
 	"github.com/linuxfoundation/lfx-indexer-service/internal/enrichers"
 	"github.com/linuxfoundation/lfx-indexer-service/pkg/constants"
 	"github.com/linuxfoundation/lfx-indexer-service/pkg/logging"
@@ -86,11 +85,30 @@ func NewIndexerService(
 }
 
 // =================
+// TRANSACTION ACTION HELPERS
+// =================
+
+// isCreateAction returns true if this is a create action (both V1 and V2)
+func (s *IndexerService) isCreateAction(transaction *contracts.LFXTransaction) bool {
+	return transaction.Action == constants.ActionCreate || transaction.Action == constants.ActionCreated
+}
+
+// isUpdateAction returns true if this is an update action (both V1 and V2)
+func (s *IndexerService) isUpdateAction(transaction *contracts.LFXTransaction) bool {
+	return transaction.Action == constants.ActionUpdate || transaction.Action == constants.ActionUpdated
+}
+
+// isDeleteAction returns true if this is a delete action (both V1 and V2)
+func (s *IndexerService) isDeleteAction(transaction *contracts.LFXTransaction) bool {
+	return transaction.Action == constants.ActionDelete || transaction.Action == constants.ActionDeleted
+}
+
+// =================
 // TRANSACTION CREATION METHODS
 // =================
 
 // CreateTransactionFromMessage creates a transaction from message data
-func (s *IndexerService) CreateTransactionFromMessage(messageData map[string]any, objectType string, isV1 bool) (*entities.LFXTransaction, error) {
+func (s *IndexerService) CreateTransactionFromMessage(messageData map[string]any, objectType string, isV1 bool) (*contracts.LFXTransaction, error) {
 	logger := s.logger
 
 	action, ok := messageData["action"].(string)
@@ -108,7 +126,7 @@ func (s *IndexerService) CreateTransactionFromMessage(messageData map[string]any
 		"is_v1", isV1)
 
 	// Create transaction directly without constructors
-	transaction := &entities.LFXTransaction{
+	transaction := &contracts.LFXTransaction{
 		Action:     action,
 		ObjectType: objectType,
 		Data:       messageData["data"],
@@ -144,7 +162,7 @@ func (s *IndexerService) CreateTransactionFromMessage(messageData map[string]any
 }
 
 // setV1Data sets V1-specific data on the transaction
-func (s *IndexerService) setV1Data(transaction *entities.LFXTransaction, messageData map[string]any) {
+func (s *IndexerService) setV1Data(transaction *contracts.LFXTransaction, messageData map[string]any) {
 	if v1Data, ok := messageData["v1_data"].(map[string]any); ok {
 		transaction.V1Data = v1Data
 		s.logger.Debug("V1 data set on transaction",
@@ -157,7 +175,7 @@ func (s *IndexerService) setV1Data(transaction *entities.LFXTransaction, message
 }
 
 // ValidateTransactionData validates transaction data
-func (s *IndexerService) ValidateTransactionData(transaction *entities.LFXTransaction) error {
+func (s *IndexerService) ValidateTransactionData(transaction *contracts.LFXTransaction) error {
 	logger := s.logger
 	transactionID := s.generateTransactionID(transaction)
 
@@ -177,7 +195,7 @@ func (s *IndexerService) ValidateTransactionData(transaction *entities.LFXTransa
 	}
 
 	switch {
-	case transaction.IsCreateAction() || transaction.IsUpdateAction():
+	case s.isCreateAction(transaction) || s.isUpdateAction(transaction):
 		if _, ok := transaction.Data.(map[string]any); !ok {
 			err := fmt.Errorf("data must be an object for %s actions", transaction.Action)
 			logging.LogError(logger, "Transaction data validation failed: invalid data type", err,
@@ -191,7 +209,7 @@ func (s *IndexerService) ValidateTransactionData(transaction *entities.LFXTransa
 		logger.Debug("Transaction data validation passed",
 			"transaction_id", transactionID,
 			"data_type", "object")
-	case transaction.IsDeleteAction():
+	case s.isDeleteAction(transaction):
 		if _, ok := transaction.Data.(string); !ok {
 			err := fmt.Errorf("data must be a string (object ID) for %s actions", transaction.Action)
 			logging.LogError(logger, "Transaction data validation failed: invalid data type", err,
@@ -213,7 +231,7 @@ func (s *IndexerService) ValidateTransactionData(transaction *entities.LFXTransa
 }
 
 // ValidateTransactionHeaders validates transaction headers
-func (s *IndexerService) ValidateTransactionHeaders(transaction *entities.LFXTransaction) error {
+func (s *IndexerService) ValidateTransactionHeaders(transaction *contracts.LFXTransaction) error {
 	logger := s.logger
 	transactionID := s.generateTransactionID(transaction)
 
@@ -250,7 +268,7 @@ func (s *IndexerService) ValidateTransactionHeaders(transaction *entities.LFXTra
 }
 
 // validateV1Headers validates headers for V1 transactions
-func (s *IndexerService) validateV1Headers(transaction *entities.LFXTransaction, transactionID string) error {
+func (s *IndexerService) validateV1Headers(transaction *contracts.LFXTransaction, transactionID string) error {
 	logger := s.logger
 	// V1 transactions don't require authorization headers
 	// They use X-Username and X-Email headers instead
@@ -271,7 +289,7 @@ func (s *IndexerService) validateV1Headers(transaction *entities.LFXTransaction,
 }
 
 // validateV2Headers validates headers for V2 transactions
-func (s *IndexerService) validateV2Headers(transaction *entities.LFXTransaction, transactionID string) error {
+func (s *IndexerService) validateV2Headers(transaction *contracts.LFXTransaction, transactionID string) error {
 	logger := s.logger
 	// V2 transactions require authorization header
 	if auth, exists := transaction.Headers[constants.AuthorizationHeader]; !exists || auth == "" {
@@ -289,7 +307,7 @@ func (s *IndexerService) validateV2Headers(transaction *entities.LFXTransaction,
 }
 
 // ValidateObjectType validates object type using the enricher registry
-func (s *IndexerService) ValidateObjectType(transaction *entities.LFXTransaction) error {
+func (s *IndexerService) ValidateObjectType(transaction *contracts.LFXTransaction) error {
 	logger := s.logger
 	transactionID := s.generateTransactionID(transaction)
 
@@ -316,7 +334,7 @@ func (s *IndexerService) ValidateObjectType(transaction *entities.LFXTransaction
 }
 
 // ValidateTransactionAction validates the transaction action based on transaction version
-func (s *IndexerService) ValidateTransactionAction(transaction *entities.LFXTransaction) error {
+func (s *IndexerService) ValidateTransactionAction(transaction *contracts.LFXTransaction) error {
 	logger := s.logger
 	transactionID := s.generateTransactionID(transaction)
 
@@ -345,7 +363,7 @@ func (s *IndexerService) ValidateTransactionAction(transaction *entities.LFXTran
 }
 
 // validateV1Action validates actions for V1 transactions
-func (s *IndexerService) validateV1Action(transaction *entities.LFXTransaction, transactionID string) error {
+func (s *IndexerService) validateV1Action(transaction *contracts.LFXTransaction, transactionID string) error {
 	logger := s.logger
 	// V1 transactions are sent by the v1-sync-helper service
 	// These use present-tense actions to match the original V1 API format
@@ -373,7 +391,7 @@ func (s *IndexerService) validateV1Action(transaction *entities.LFXTransaction, 
 }
 
 // validateV2Action validates actions for V2 transactions
-func (s *IndexerService) validateV2Action(transaction *entities.LFXTransaction, transactionID string) error {
+func (s *IndexerService) validateV2Action(transaction *contracts.LFXTransaction, transactionID string) error {
 	logger := s.logger
 	// V2 transactions are sent by regular LFX services
 	// These use past-tense actions to indicate completed operations
@@ -401,7 +419,7 @@ func (s *IndexerService) validateV2Action(transaction *entities.LFXTransaction, 
 }
 
 // GetCanonicalAction returns the canonical (past-tense) action for indexing
-func (s *IndexerService) GetCanonicalAction(transaction *entities.LFXTransaction) string {
+func (s *IndexerService) GetCanonicalAction(transaction *contracts.LFXTransaction) string {
 	switch transaction.Action {
 	case constants.ActionCreate, constants.ActionCreated:
 		return constants.ActionCreated
@@ -415,8 +433,8 @@ func (s *IndexerService) GetCanonicalAction(transaction *entities.LFXTransaction
 }
 
 // ExtractObjectID extracts object ID from transaction
-func (s *IndexerService) ExtractObjectID(transaction *entities.LFXTransaction) (string, error) {
-	if transaction.IsDeleteAction() {
+func (s *IndexerService) ExtractObjectID(transaction *contracts.LFXTransaction) (string, error) {
+	if s.isDeleteAction(transaction) {
 		return transaction.ParsedObjectID, nil
 	}
 
@@ -436,10 +454,9 @@ func (s *IndexerService) ExtractObjectID(transaction *entities.LFXTransaction) (
 // =================
 
 // EnrichTransaction enriches a transaction with additional data and validation
-func (s *IndexerService) EnrichTransaction(ctx context.Context, transaction *entities.LFXTransaction) error {
+func (s *IndexerService) EnrichTransaction(ctx context.Context, transaction *contracts.LFXTransaction) error {
 	logger := logging.FromContext(ctx, s.logger)
 	transactionID := s.generateTransactionID(transaction)
-	startTime := time.Now()
 
 	logger.Info("Starting transaction enrichment",
 		"transaction_id", transactionID,
@@ -448,107 +465,81 @@ func (s *IndexerService) EnrichTransaction(ctx context.Context, transaction *ent
 		"is_v1", transaction.IsV1)
 
 	// Validate transaction action
-	stepStart := time.Now()
 	if err := s.ValidateTransactionAction(transaction); err != nil {
 		logging.LogError(logger, "Transaction enrichment failed: action validation", err,
 			"transaction_id", transactionID,
-			"step", "validate_action",
-			"step_duration", time.Since(stepStart))
+			"step", "validate_action")
 		return fmt.Errorf("%s: %w", constants.ErrInvalidAction, err)
 	}
-	logger.Debug("Action validation completed",
-		"transaction_id", transactionID,
-		"step_duration", time.Since(stepStart))
+	logger.Debug("Action validation completed", "transaction_id", transactionID)
 
 	// Validate object type using enricher registry
-	stepStart = time.Now()
 	if err := s.ValidateObjectType(transaction); err != nil {
 		logging.LogError(logger, "Transaction enrichment failed: object type validation", err,
 			"transaction_id", transactionID,
-			"step", "validate_object_type",
-			"step_duration", time.Since(stepStart))
+			"step", "validate_object_type")
 		return fmt.Errorf("%s: %w", constants.ErrInvalidObjectType, err)
 	}
-	logger.Debug("Object type validation completed",
-		"transaction_id", transactionID,
-		"step_duration", time.Since(stepStart))
+	logger.Debug("Object type validation completed", "transaction_id", transactionID)
 
 	// Validate transaction data
-	stepStart = time.Now()
 	if err := s.ValidateTransactionData(transaction); err != nil {
 		logging.LogError(logger, "Transaction enrichment failed: data validation", err,
 			"transaction_id", transactionID,
-			"step", "validate_data",
-			"step_duration", time.Since(stepStart))
+			"step", "validate_data")
 		return fmt.Errorf("invalid transaction data: %w", err)
 	}
-	logger.Debug("Data validation completed",
-		"transaction_id", transactionID,
-		"step_duration", time.Since(stepStart))
+	logger.Debug("Data validation completed", "transaction_id", transactionID)
 
 	// Validate transaction headers
-	stepStart = time.Now()
 	if err := s.ValidateTransactionHeaders(transaction); err != nil {
 		logging.LogError(logger, "Transaction enrichment failed: header validation", err,
 			"transaction_id", transactionID,
-			"step", "validate_headers",
-			"step_duration", time.Since(stepStart))
+			"step", "validate_headers")
 		return fmt.Errorf("invalid transaction headers: %w", err)
 	}
-	logger.Debug("Header validation completed",
-		"transaction_id", transactionID,
-		"step_duration", time.Since(stepStart))
+	logger.Debug("Header validation completed", "transaction_id", transactionID)
 
 	// Parse data based on action
-	stepStart = time.Now()
 	if err := s.parseTransactionData(transaction); err != nil {
 		logging.LogError(logger, "Transaction enrichment failed: data parsing", err,
 			"transaction_id", transactionID,
-			"step", "parse_data",
-			"step_duration", time.Since(stepStart))
+			"step", "parse_data")
 		return fmt.Errorf("%s: %w", constants.ErrParseTransaction, err)
 	}
-	logger.Debug("Data parsing completed",
-		"transaction_id", transactionID,
-		"step_duration", time.Since(stepStart))
+	logger.Debug("Data parsing completed", "transaction_id", transactionID)
 
 	// Parse principals based on transaction version
-	stepStart = time.Now()
 	principals, err := s.parsePrincipals(ctx, transaction)
 	if err != nil {
 		logging.LogError(logger, "Transaction enrichment failed: principal parsing", err,
 			"transaction_id", transactionID,
-			"step", "parse_principals",
-			"step_duration", time.Since(stepStart))
+			"step", "parse_principals")
 		return fmt.Errorf("failed to parse principals: %w", err)
 	}
 	transaction.ParsedPrincipals = principals
 	logger.Debug("Principal parsing completed",
 		"transaction_id", transactionID,
-		"principal_count", len(principals),
-		"step_duration", time.Since(stepStart))
+		"principal_count", len(principals))
 
-	totalDuration := time.Since(startTime)
 	logger.Info("Transaction enrichment completed successfully",
 		"transaction_id", transactionID,
-		"total_duration", totalDuration,
 		"principal_count", len(principals))
 
 	return nil
 }
 
 // GenerateTransactionBody creates a transaction body for indexing
-func (s *IndexerService) GenerateTransactionBody(ctx context.Context, transaction *entities.LFXTransaction) (*entities.TransactionBody, error) {
+func (s *IndexerService) GenerateTransactionBody(ctx context.Context, transaction *contracts.LFXTransaction) (*contracts.TransactionBody, error) {
 	logger := logging.FromContext(ctx, s.logger)
 	transactionID := s.generateTransactionID(transaction)
-	startTime := time.Now()
 
 	logger.Debug("Generating transaction body",
 		"transaction_id", transactionID,
 		"object_type", transaction.ObjectType,
 		"action", transaction.Action)
 
-	body := &entities.TransactionBody{
+	body := &contracts.TransactionBody{
 		ObjectType: transaction.ObjectType,
 		V1Data:     transaction.V1Data,
 	}
@@ -591,9 +582,7 @@ func (s *IndexerService) GenerateTransactionBody(ctx context.Context, transactio
 			"principal_count", len(transaction.ParsedPrincipals))
 
 		// Early return for delete transactions (no enrichment needed)
-		logger.Debug("Transaction body generation completed (delete action)",
-			"transaction_id", transactionID,
-			"duration", time.Since(startTime))
+		logger.Debug("Transaction body generation completed (delete action)", "transaction_id", transactionID)
 		return body, nil
 	default:
 		err := fmt.Errorf("unsupported action: %s", canonicalAction)
@@ -605,36 +594,30 @@ func (s *IndexerService) GenerateTransactionBody(ctx context.Context, transactio
 	}
 
 	// Enrich data for create/update actions
-	enrichStart := time.Now()
 	if err := s.enrichTransactionData(body, transaction); err != nil {
 		logging.LogError(logger, "Failed to enrich transaction data during body generation", err,
-			"transaction_id", transactionID,
-			"enrichment_duration", time.Since(enrichStart))
+			"transaction_id", transactionID)
 		return nil, fmt.Errorf("failed to enrich transaction data: %w", err)
 	}
-	logger.Debug("Transaction data enrichment completed",
-		"transaction_id", transactionID,
-		"enrichment_duration", time.Since(enrichStart))
+	logger.Debug("Transaction data enrichment completed", "transaction_id", transactionID)
 
 	// Set object reference
 	body.ObjectRef = transaction.ObjectType + ":" + body.ObjectID
 
 	logger.Debug("Transaction body generation completed",
 		"transaction_id", transactionID,
-		"object_ref", body.ObjectRef,
-		"total_duration", time.Since(startTime))
+		"object_ref", body.ObjectRef)
 
 	return body, nil
 }
 
 // ProcessTransaction processes a complete transaction
-func (s *IndexerService) ProcessTransaction(ctx context.Context, transaction *entities.LFXTransaction, index string) (*entities.ProcessingResult, error) {
+func (s *IndexerService) ProcessTransaction(ctx context.Context, transaction *contracts.LFXTransaction, index string) (*contracts.ProcessingResult, error) {
 	logger := logging.FromContext(ctx, s.logger)
 	transactionID := s.generateTransactionID(transaction)
 
-	startTime := time.Now()
-	result := &entities.ProcessingResult{
-		ProcessedAt: startTime,
+	result := &contracts.ProcessingResult{
+		ProcessedAt: time.Now(),
 		MessageID:   s.generateMessageID(transaction),
 	}
 
@@ -646,90 +629,71 @@ func (s *IndexerService) ProcessTransaction(ctx context.Context, transaction *en
 		"index", index)
 
 	// Enrich the transaction
-	enrichStart := time.Now()
 	if err := s.EnrichTransaction(ctx, transaction); err != nil {
 		logging.LogError(logger, "Failed to enrich transaction", err,
 			"transaction_id", transactionID,
-			"step", "enrichment",
-			"step_duration", time.Since(enrichStart))
+			"step", "enrichment")
 		result.Error = err
 		result.Success = false
-		result.Duration = time.Since(startTime)
 		return result, err
 	}
-	logger.Debug("Transaction enrichment completed",
-		"transaction_id", transactionID,
-		"step_duration", time.Since(enrichStart))
+	logger.Debug("Transaction enrichment completed", "transaction_id", transactionID)
 
 	// Generate transaction body
-	bodyStart := time.Now()
 	body, err := s.GenerateTransactionBody(ctx, transaction)
 	if err != nil {
 		logging.LogError(logger, "Failed to generate transaction body", err,
 			"transaction_id", transactionID,
-			"step", "body_generation",
-			"step_duration", time.Since(bodyStart))
+			"step", "body_generation")
 		result.Error = err
 		result.Success = false
-		result.Duration = time.Since(startTime)
 		return result, err
 	}
 	logger.Debug("Transaction body generated",
 		"transaction_id", transactionID,
 		"object_id", body.ObjectID,
-		"object_ref", body.ObjectRef,
-		"step_duration", time.Since(bodyStart))
+		"object_ref", body.ObjectRef)
 
 	// Convert body to JSON for indexing
-	marshalStart := time.Now()
 	bodyBytes, err := json.Marshal(body)
 	if err != nil {
 		err = fmt.Errorf("failed to marshal body: %w", err)
 		logging.LogError(logger, "Failed to marshal transaction body", err,
 			"transaction_id", transactionID,
-			"step", "json_marshaling",
-			"step_duration", time.Since(marshalStart))
+			"step", "json_marshaling")
 		result.Error = err
 		result.Success = false
-		result.Duration = time.Since(startTime)
 		return result, err
 	}
 	logger.Debug("Transaction body marshaled",
 		"transaction_id", transactionID,
-		"body_size_bytes", len(bodyBytes),
-		"step_duration", time.Since(marshalStart))
+		"body_size_bytes", len(bodyBytes))
 
 	// Index the transaction using storage repository
-	indexStart := time.Now()
 	err = s.storageRepo.Index(ctx, index, body.ObjectRef, bytes.NewReader(bodyBytes))
 	if err != nil {
 		logging.LogError(logger, "Failed to index transaction", err,
 			"transaction_id", transactionID,
 			"step", "indexing",
 			"index", index,
-			"object_ref", body.ObjectRef,
-			"step_duration", time.Since(indexStart))
+			"object_ref", body.ObjectRef)
 		result.Error = err
 		result.Success = false
 		result.IndexSuccess = false
-		result.Duration = time.Since(startTime)
 		return result, err
 	}
 	logger.Debug("Transaction indexed successfully",
 		"transaction_id", transactionID,
-		"object_ref", body.ObjectRef,
-		"step_duration", time.Since(indexStart))
+		"object_ref", body.ObjectRef)
 
 	// Success
 	result.Success = true
 	result.IndexSuccess = true
 	result.DocumentID = body.ObjectRef
-	result.Duration = time.Since(startTime)
 
 	logger.Info("Transaction processing completed successfully",
 		"transaction_id", transactionID,
-		"object_ref", body.ObjectRef,
-		"total_duration", result.Duration)
+		"object_ref", body.ObjectRef)
 
 	return result, nil
 }
@@ -912,7 +876,7 @@ func (s *IndexerService) performHealthCheck(ctx context.Context) *HealthStatus {
 }
 
 // setPrincipalFields sets principal-related fields on the transaction body
-func (s *IndexerService) setPrincipalFields(body *entities.TransactionBody, principals []entities.Principal, action string) {
+func (s *IndexerService) setPrincipalFields(body *contracts.TransactionBody, principals []contracts.Principal, action string) {
 	for _, principal := range principals {
 		principalRef := fmt.Sprintf("%s <%s>", principal.Principal, principal.Email)
 
@@ -940,7 +904,7 @@ func (s *IndexerService) setPrincipalFields(body *entities.TransactionBody, prin
 }
 
 // parsePrincipals parses principals based on transaction version
-func (s *IndexerService) parsePrincipals(ctx context.Context, transaction *entities.LFXTransaction) ([]entities.Principal, error) {
+func (s *IndexerService) parsePrincipals(ctx context.Context, transaction *contracts.LFXTransaction) ([]contracts.Principal, error) {
 	logger := logging.FromContext(ctx, s.logger)
 	transactionID := s.generateTransactionID(transaction)
 
@@ -972,9 +936,9 @@ func (s *IndexerService) parsePrincipals(ctx context.Context, transaction *entit
 }
 
 // parseV1Principals converts V1 headers to Principal structure
-func (s *IndexerService) parseV1Principals(transaction *entities.LFXTransaction, transactionID string) []entities.Principal {
+func (s *IndexerService) parseV1Principals(transaction *contracts.LFXTransaction, transactionID string) []contracts.Principal {
 	logger := s.logger
-	var principal entities.Principal
+	var principal contracts.Principal
 
 	for header, value := range transaction.Headers {
 		header = strings.ToLower(header)
@@ -1000,11 +964,11 @@ func (s *IndexerService) parseV1Principals(transaction *entities.LFXTransaction,
 	}
 
 	// Return the parsed principal as a slice of 1
-	return []entities.Principal{principal}
+	return []contracts.Principal{principal}
 }
 
 // parseV2Principals parses principals for V2 transactions
-func (s *IndexerService) parseV2Principals(ctx context.Context, transaction *entities.LFXTransaction, transactionID string) ([]entities.Principal, error) {
+func (s *IndexerService) parseV2Principals(ctx context.Context, transaction *contracts.LFXTransaction, transactionID string) ([]contracts.Principal, error) {
 	logger := logging.FromContext(ctx, s.logger)
 
 	logger.Debug("Parsing V2 principals using messaging repository",
@@ -1026,15 +990,15 @@ func (s *IndexerService) parseV2Principals(ctx context.Context, transaction *ent
 }
 
 // parseTransactionData parses the transaction data based on action
-func (s *IndexerService) parseTransactionData(transaction *entities.LFXTransaction) error {
+func (s *IndexerService) parseTransactionData(transaction *contracts.LFXTransaction) error {
 	switch {
-	case transaction.IsCreateAction() || transaction.IsUpdateAction():
+	case s.isCreateAction(transaction) || s.isUpdateAction(transaction):
 		parsedData, ok := transaction.Data.(map[string]any)
 		if !ok {
 			return fmt.Errorf("invalid data for action %s: expected object", transaction.Action)
 		}
 		transaction.ParsedData = parsedData
-	case transaction.IsDeleteAction():
+	case s.isDeleteAction(transaction):
 		objectID, ok := transaction.Data.(string)
 		if !ok {
 			return fmt.Errorf("invalid data for action %s: expected string", transaction.Action)
@@ -1048,10 +1012,9 @@ func (s *IndexerService) parseTransactionData(transaction *entities.LFXTransacti
 }
 
 // enrichTransactionData enriches transaction data using the enricher registry
-func (s *IndexerService) enrichTransactionData(body *entities.TransactionBody, transaction *entities.LFXTransaction) error {
+func (s *IndexerService) enrichTransactionData(body *contracts.TransactionBody, transaction *contracts.LFXTransaction) error {
 	logger := s.logger
 	transactionID := s.generateTransactionID(transaction)
-	startTime := time.Now()
 
 	logger.Debug("Starting transaction data enrichment",
 		"transaction_id", transactionID,
@@ -1065,8 +1028,7 @@ func (s *IndexerService) enrichTransactionData(body *entities.TransactionBody, t
 		logging.LogError(logger, "Enrichment failed: no enricher found", err,
 			"transaction_id", transactionID,
 			"object_type", transaction.ObjectType,
-			"enrichment_step", "enricher_lookup",
-			"duration", time.Since(startTime))
+			"enrichment_step", "enricher_lookup")
 		return err
 	}
 
@@ -1080,27 +1042,25 @@ func (s *IndexerService) enrichTransactionData(body *entities.TransactionBody, t
 		logging.LogError(logger, "Enrichment failed during data processing", err,
 			"transaction_id", transactionID,
 			"object_type", transaction.ObjectType,
-			"enrichment_step", "data_processing",
-			"duration", time.Since(startTime))
+			"enrichment_step", "data_processing")
 		return err
 	}
 
 	logger.Info("Transaction data enrichment completed successfully",
 		"transaction_id", transactionID,
-		"object_type", transaction.ObjectType,
-		"duration", time.Since(startTime))
+		"object_type", transaction.ObjectType)
 
 	return nil
 }
 
 // generateMessageID generates a unique message ID for tracking
-func (s *IndexerService) generateMessageID(transaction *entities.LFXTransaction) string {
+func (s *IndexerService) generateMessageID(transaction *contracts.LFXTransaction) string {
 	timestamp := strconv.FormatInt(transaction.Timestamp.UnixNano(), 10)
 	return fmt.Sprintf("%s-%s-%s", transaction.ObjectType, transaction.Action, timestamp)
 }
 
 // generateTransactionID generates a unique transaction ID for tracking
-func (s *IndexerService) generateTransactionID(transaction *entities.LFXTransaction) string {
+func (s *IndexerService) generateTransactionID(transaction *contracts.LFXTransaction) string {
 	timestamp := strconv.FormatInt(transaction.Timestamp.UnixNano(), 10)
 	return fmt.Sprintf("txn_%s_%s_%s", transaction.ObjectType, transaction.Action, timestamp)
 }

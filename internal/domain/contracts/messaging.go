@@ -5,8 +5,6 @@ package contracts
 
 import (
 	"context"
-
-	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/entities"
 )
 
 // MessageHandler defines the interface for handling messages
@@ -41,11 +39,14 @@ type MessagingRepository interface {
 	// HealthCheck checks the health of the NATS connection
 	HealthCheck(ctx context.Context) error
 
+	// DrainWithTimeout performs graceful NATS connection drain with timeout
+	DrainWithTimeout() error
+
 	// Authentication operations (from AuthRepository)
 
 	// ValidateToken validates a JWT token and returns principal information
-	ValidateToken(ctx context.Context, token string) (*entities.Principal, error)
+	ValidateToken(ctx context.Context, token string) (*Principal, error)
 
 	// ParsePrincipals parses principals from HTTP headers with delegation support
-	ParsePrincipals(ctx context.Context, headers map[string]string) ([]entities.Principal, error)
+	ParsePrincipals(ctx context.Context, headers map[string]string) ([]Principal, error)
 }

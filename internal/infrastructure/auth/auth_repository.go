@@ -14,7 +14,7 @@ import (
 
 	"github.com/auth0/go-jwt-middleware/v2/jwks"
 	"github.com/auth0/go-jwt-middleware/v2/validator"
-	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/entities"
+	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/contracts"
 	"github.com/linuxfoundation/lfx-indexer-service/pkg/constants"
 	"github.com/linuxfoundation/lfx-indexer-service/pkg/logging"
 )
@@ -45,37 +45,22 @@ type AuthRepository struct {
 func NewAuthRepository(issuer string, audiences []string, jwksURL string, clockSkew time.Duration, logger *slog.Logger) (*AuthRepository, error) {
 	authLogger := logging.WithComponent(logger, "auth_repository")
 
-	authLogger.Info("Initializing JWT auth repository",
-		"issuer", issuer,
-		"audiences", audiences,
-		"jwks_url", jwksURL,
-		"clock_skew", clockSkew)
-
 	// Parse the issuer URL
 	issuerURL, err := url.Parse(issuer)
 	if err != nil {
-		authLogger.Error("Failed to parse issuer URL",
-			"issuer", issuer,
-			"error", err.Error())
+		authLogger.Error("Failed to parse issuer URL", "issuer", issuer, "error", err.Error())
 		return nil, fmt.Errorf("invalid issuer URL: %w", err)
 	}
 
 	// Parse JWKS URL
 	jwksURLParsed, err := url.Parse(jwksURL)
 	if err != nil {
-		authLogger.Error("Failed to parse JWKS URL",
-			"jwks_url", jwksURL,
-			"error", err.Error())
+		authLogger.Error("Failed to parse JWKS URL", "jwks_url", jwksURL, "error", err.Error())
 		return nil, fmt.Errorf("invalid JWKS URL: %w", err)
 	}
 
 	// Set up JWKS provider with 5 minute cache
 	provider := jwks.NewCachingProvider(issuerURL, 5*time.Minute, jwks.WithCustomJWKSURI(jwksURLParsed))
-
-	authLogger.Debug("JWKS provider configured",
-		"cache_duration", 5*time.Minute,
-		"issuer_url", issuerURL.String(),
-		"jwks_url", jwksURLParsed.String())
 
 	// Factory for custom JWT claims target
 	customClaims := func() validator.CustomClaims {
@@ -92,16 +77,9 @@ func NewAuthRepository(issuer string, audiences []string, jwksURL string, clockS
 		validator.WithAllowedClockSkew(clockSkew),
 	)
 	if err != nil {
-		authLogger.Error("Failed to create JWT validator",
-			"error", err.Error(),
-			"issuer", issuer,
-			"audiences", audiences)
+		authLogger.Error("Failed to create JWT validator", "error", err.Error())
 		return nil, fmt.Errorf("failed to create JWT validator: %w", err)
 	}
-
-	authLogger.Info("JWT auth repository initialized successfully",
-		"validator_configured", true,
-		"audiences_count", len(audiences))
 
 	return &AuthRepository{
 		validator: jwtValidator,
@@ -112,22 +90,13 @@ func NewAuthRepository(issuer string, audiences []string, jwksURL string, clockS
 }
 
 // ValidateToken validates a JWT token
-func (r *AuthRepository) ValidateToken(ctx context.Context, token string) (*entities.Principal, error) {
-	startTime := time.Now()
+func (r *AuthRepository) ValidateToken(ctx context.Context, token string) (*contracts.Principal, error) {
 	authID := r.generateAuthID()
-
-	r.logger.Debug("Token validation initiated",
-		"auth_id", authID,
-		"token_preview", r.safeTokenLog(token),
-		"has_bearer_prefix", len(token) > 7 && strings.ToLower(token[:7]) == constants.BearerPrefix)
 
 	// Trim any leading, case-insensitive "bearer " prefix
 	originalToken := token
 	if len(token) > 7 && strings.ToLower(token[:7]) == constants.BearerPrefix {
 		token = token[7:]
-		r.logger.Debug("Bearer prefix removed from token",
-			"auth_id", authID,
-			"token_preview", r.safeTokenLog(token))
 	}
 
 	// Check for empty token after prefix removal
@@ -139,43 +108,29 @@ func (r *AuthRepository) ValidateToken(ctx context.Context, token string) (*enti
 	}
 
 	// Validate the token
-	r.logger.Debug("Validating token with JWT validator",
-		"auth_id", authID,
-		"issuer", r.issuer,
-		"audiences", r.audiences)
-
 	validatedClaims, err := r.validator.ValidateToken(ctx, token)
 	if err != nil {
 		errorType := r.classifyAuthError(err)
 		r.logger.Error("Token validation failed",
 			"auth_id", authID,
 			"error", err.Error(),
-			"error_type", errorType,
-			"token_preview", r.safeTokenLog(token),
-			"duration", time.Since(startTime))
+			"error_type", errorType)
 		return nil, fmt.Errorf("%s: %w", constants.ErrInvalidToken, err)
 	}
-
-	r.logger.Debug("Token validation successful",
-		"auth_id", authID,
-		"validation_duration", time.Since(startTime))
 
 	// Extract the principal from the token
 	principal, err := r.extractPrincipalFromClaims(validatedClaims)
 	if err != nil {
 		r.logger.Error("Failed to extract principal from validated claims",
 			"auth_id", authID,
-			"error", err.Error(),
-			"total_duration", time.Since(startTime))
+			"error", err.Error())
 		return nil, fmt.Errorf("failed to extract principal: %w", err)
 	}
 
-	r.logger.Info("Token validation and principal extraction completed",
+	r.logger.Info("Token validation completed",
 		"auth_id", authID,
 		"principal", r.safePrincipalLog(principal.Principal),
-		"has_email", principal.Email != "",
-		"is_machine_user", r.isMachineUser(principal.Principal),
-		"total_duration", time.Since(startTime))
+		"is_machine_user", r.isMachineUser(principal.Principal))
 
 	return principal, nil
 }
@@ -185,42 +140,29 @@ func (r *AuthRepository) ValidateToken(ctx context.Context, token string) (*enti
 // X-On-Behalf-Of header is not validated or pruned by the API gateway, this
 // function also provides the enforcement that "on behalf of" data is only used
 // if the authorized principal is a machine user.
-func (r *AuthRepository) ParsePrincipals(ctx context.Context, headers map[string]string) ([]entities.Principal, error) {
-	startTime := time.Now()
+func (r *AuthRepository) ParsePrincipals(ctx context.Context, headers map[string]string) ([]contracts.Principal, error) {
 	authID := r.generateAuthID()
-
-	r.logger.Info("Multi-principal parsing initiated",
-		"auth_id", authID,
-		"headers_count", len(headers),
-		"has_authorization", headers[constants.AuthorizationHeader] != "",
-		"has_on_behalf_of", headers[constants.OnBehalfOfHeader] != "")
 
 	// This will be set to `true` if the authorization header contains a machine
 	// user principal.
 	var isMachineUser bool
 
-	var authorizedPrincipals []entities.Principal
-	var onBehalfOfPrincipals []entities.Principal
+	var authorizedPrincipals []contracts.Principal
+	var onBehalfOfPrincipals []contracts.Principal
 
 	for header, value := range headers {
 		header = strings.ToLower(header)
 		switch header {
 		case constants.AuthorizationHeader:
-			r.logger.Debug("Processing authorization header",
-				"auth_id", authID,
-				"token_preview", r.safeTokenLog(value))
-
 			principal, email, err := r.parsePrincipalAndEmail(ctx, value)
 			if err != nil {
 				r.logger.Warn("Failed to parse principal from authorization header",
 					"auth_id", authID,
-					"error", err.Error(),
-					"error_type", r.classifyAuthError(err),
-					"token_preview", r.safeTokenLog(value))
+					"error", err.Error())
 				continue
 			}
 
-			principalEntity := entities.Principal{
+			principalEntity := contracts.Principal{
 				Principal: principal,
 				Email:     email,
 			}
@@ -274,7 +216,7 @@ func (r *AuthRepository) ParsePrincipals(ctx context.Context, headers map[string
 					continue
 				}
 
-				principalEntity := entities.Principal{
+				principalEntity := contracts.Principal{
 					Principal: principal,
 					Email:     email,
 				}
@@ -320,34 +262,22 @@ func (r *AuthRepository) ParsePrincipals(ctx context.Context, headers map[string
 	r.logger.Info("Multi-principal parsing completed",
 		"auth_id", authID,
 		"final_principals_count", len(authorizedPrincipals),
-		"is_machine_user", isMachineUser,
-		"total_duration", time.Since(startTime))
+		"is_machine_user", isMachineUser)
 
 	return authorizedPrincipals, nil
 }
 
 // HealthCheck checks the health of the auth service
 func (r *AuthRepository) HealthCheck(ctx context.Context) error {
-	startTime := time.Now()
-
 	// Check if logger is properly initialized first to avoid panic
 	if r.logger == nil {
-		return errors.New("logger not initialized")
+		return errors.New("auth repository logger not initialized")
 	}
-
-	r.logger.Debug("Auth repository health check initiated")
 
 	if r.validator == nil {
 		r.logger.Error("Health check failed: JWT validator not initialized")
 		return errors.New(constants.ErrJWTValidatorNotInit)
 	}
-
-	r.logger.Info("Auth repository health check completed",
-		"status", "healthy",
-		"validator_initialized", r.validator != nil,
-		"issuer", r.issuer,
-		"audiences_count", len(r.audiences),
-		"check_duration", time.Since(startTime))
 
 	return nil
 }
@@ -376,8 +306,6 @@ func (r *AuthRepository) GetAuthStatus() map[string]interface{} {
 
 // parsePrincipalAndEmail extracts the principal and email from the JWT claims
 func (r *AuthRepository) parsePrincipalAndEmail(ctx context.Context, token string) (string, string, error) {
-	startTime := time.Now()
-
 	if r.validator == nil {
 		r.logger.Error("JWT validator not initialized for principal parsing")
 		return "", "", errors.New(constants.ErrJWTValidatorNotSet)
@@ -405,8 +333,7 @@ func (r *AuthRepository) parsePrincipalAndEmail(ctx context.Context, token strin
 		r.logger.Debug("Token validation failed during principal parsing",
 			"error", err.Error(),
 			"error_type", errorType,
-			"token_preview", r.safeTokenLog(token),
-			"duration", time.Since(startTime))
+			"token_preview", r.safeTokenLog(token))
 		return "", "", err
 	}
 
@@ -430,16 +357,13 @@ func (r *AuthRepository) parsePrincipalAndEmail(ctx context.Context, token strin
 	r.logger.Debug("Principal and email extracted successfully",
 		"principal", r.safePrincipalLog(principal),
 		"has_email", email != "",
-		"is_machine_user", r.isMachineUser(principal),
-		"duration", time.Since(startTime))
+		"is_machine_user", r.isMachineUser(principal))
 
 	return principal, email, nil
 }
 
 // extractPrincipalFromClaims extracts principal information from JWT claims
-func (r *AuthRepository) extractPrincipalFromClaims(claims interface{}) (*entities.Principal, error) {
-	startTime := time.Now()
-
+func (r *AuthRepository) extractPrincipalFromClaims(claims interface{}) (*contracts.Principal, error) {
 	r.logger.Debug("Extracting principal from validated claims")
 
 	validatedClaims, ok := claims.(*validator.ValidatedClaims)
@@ -456,7 +380,7 @@ func (r *AuthRepository) extractPrincipalFromClaims(claims interface{}) (*entiti
 		return nil, errors.New(constants.ErrInvalidCustomClaims)
 	}
 
-	principal := &entities.Principal{
+	principal := &contracts.Principal{
 		Principal: customClaims.Principal,
 		Email:     customClaims.Email,
 	}
@@ -480,8 +404,7 @@ func (r *AuthRepository) extractPrincipalFromClaims(claims interface{}) (*entiti
 		"principal", r.safePrincipalLog(principal.Principal),
 		"has_email", principal.Email != "",
 		"is_machine_user", r.isMachineUser(principal.Principal),
-		"used_subject_fallback", customClaims.Principal == "" && validatedClaims.RegisteredClaims.Subject != "",
-		"extraction_duration", time.Since(startTime))
+		"used_subject_fallback", customClaims.Principal == "" && validatedClaims.RegisteredClaims.Subject != "")
 
 	return principal, nil
 }

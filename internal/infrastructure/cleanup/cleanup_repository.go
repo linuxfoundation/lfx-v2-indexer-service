@@ -1,7 +1,7 @@
 // Copyright The Linux Foundation and each contributor to LFX.
 // SPDX-License-Identifier: MIT
 
-package janitor
+package cleanup
 
 import (
 	"context"
@@ -37,8 +37,8 @@ type TransactionBodyStub struct {
 	DeletedAt *string `json:"deleted_at"`
 }
 
-// JanitorService handles background maintenance tasks using the production-proven pattern
-type JanitorService struct {
+// CleanupRepository handles background maintenance tasks using the production-proven pattern
+type CleanupRepository struct {
 	storageRepo contracts.StorageRepository
 	logger      *slog.Logger
 	index       string
@@ -48,9 +48,9 @@ type JanitorService struct {
 	mu          sync.RWMutex
 }
 
-// NewJanitorService creates a new janitor service matching production implementation
-func NewJanitorService(storageRepo contracts.StorageRepository, logger *slog.Logger, index string) *JanitorService {
-	return &JanitorService{
+// NewCleanupRepository creates a new janitor service matching production implementation
+func NewCleanupRepository(storageRepo contracts.StorageRepository, logger *slog.Logger, index string) *CleanupRepository {
+	return &CleanupRepository{
 		storageRepo: storageRepo,
 		logger:      logging.WithComponent(logger, "janitor_service"),
 		index:       index,
@@ -60,7 +60,7 @@ func NewJanitorService(storageRepo contracts.StorageRepository, logger *slog.Log
 
 // CheckItem queues a resource for the janitor to check.
 // This matches the janitorCheckItem function from production janitor.go exactly.
-func (j *JanitorService) CheckItem(objectRef string) {
+func (j *CleanupRepository) CheckItem(objectRef string) {
 	if objectRef == "" {
 		j.logger.Debug("Skipping empty object reference")
 		return
@@ -89,7 +89,7 @@ func (j *JanitorService) CheckItem(objectRef string) {
 
 // StartItemLoop is a long-running goroutine that processes janitor item checks on specific object refs.
 // This matches the janitorItemLoop function from production janitor.go exactly.
-func (j *JanitorService) StartItemLoop(ctx context.Context) {
+func (j *CleanupRepository) StartItemLoop(ctx context.Context) {
 	j.mu.Lock()
 	if j.isRunning {
 		j.mu.Unlock()
@@ -125,8 +125,6 @@ func (j *JanitorService) StartItemLoop(ctx context.Context) {
 		itemsSkipped := 0
 		conflictsResolved := 0
 		errors := 0
-		startTime := time.Now()
-		lastHealthLog := time.Now()
 
 		for {
 			select {
@@ -135,8 +133,7 @@ func (j *JanitorService) StartItemLoop(ctx context.Context) {
 					"items_processed", itemsProcessed,
 					"items_skipped", itemsSkipped,
 					"conflicts_resolved", conflictsResolved,
-					"errors", errors,
-					"uptime", time.Since(startTime))
+					"errors", errors)
 				return
 			case <-ctx.Done():
 				j.logger.Info("Janitor context cancelled",
@@ -144,7 +141,6 @@ func (j *JanitorService) StartItemLoop(ctx context.Context) {
 					"items_skipped", itemsSkipped,
 					"conflicts_resolved", conflictsResolved,
 					"errors", errors,
-					"uptime", time.Since(startTime),
 					"context_error", ctx.Err())
 				return
 			case objectRef, more := <-globalJanitorChan:
@@ -154,10 +150,9 @@ func (j *JanitorService) StartItemLoop(ctx context.Context) {
 					return
 				}
 
-				// Worker health logging every 100 items or 5 minutes
-				if itemsProcessed%100 == 0 || time.Since(lastHealthLog) > 5*time.Minute {
-					j.logWorkerHealth(itemsProcessed, itemsSkipped, conflictsResolved, errors, startTime)
-					lastHealthLog = time.Now()
+				// Worker health logging every 100 items
+				if itemsProcessed%100 == 0 {
+					j.logWorkerHealth(itemsProcessed, itemsSkipped, conflictsResolved, errors)
 				}
 
 				itemsProcessed++
@@ -183,9 +178,7 @@ func (j *JanitorService) StartItemLoop(ctx context.Context) {
 }
 
 // Shutdown gracefully shuts down the janitor service
-func (j *JanitorService) Shutdown() {
-	shutdownStartTime := time.Now()
-
+func (j *CleanupRepository) Shutdown() {
 	j.mu.Lock()
 	if !j.isRunning {
 		j.mu.Unlock()
@@ -205,14 +198,11 @@ func (j *JanitorService) Shutdown() {
 	j.logger.Info("Waiting for janitor worker to finish...")
 	j.workerWG.Wait()
 
-	j.logger.Info("Janitor service shutdown completed",
-		"shutdown_duration", time.Since(shutdownStartTime))
+	j.logger.Info("Janitor service shutdown completed")
 }
 
 // processItem processes a single janitor item with enhanced logging
-func (j *JanitorService) processItem(ctx context.Context, objectRef *string) string {
-	startTime := time.Now()
-
+func (j *CleanupRepository) processItem(ctx context.Context, objectRef *string) string {
 	if objectRef == nil || *objectRef == "" {
 		j.logger.Debug("Skipping nil or empty object reference")
 		return "skipped"
@@ -248,8 +238,7 @@ func (j *JanitorService) processItem(ctx context.Context, objectRef *string) str
 	if err != nil {
 		j.logger.Error("Janitor search failed",
 			"object_ref", safeLogString(objectRef),
-			"error", err.Error(),
-			"duration", time.Since(startTime))
+			"error", err.Error())
 		return "error"
 	}
 
@@ -257,26 +246,22 @@ func (j *JanitorService) processItem(ctx context.Context, objectRef *string) str
 	hitCount := len(docs)
 	j.logger.Info("Janitor search completed",
 		"object_ref", safeLogString(objectRef),
-		"hits", hitCount,
-		"search_duration", time.Since(startTime))
+		"hits", hitCount)
 
 	if hitCount == 0 {
 		j.logger.Info("No documents found for janitor processing",
-			"object_ref", safeLogString(objectRef),
-			"total_duration", time.Since(startTime))
+			"object_ref", safeLogString(objectRef))
 		return "skipped"
 	}
 
 	if hitCount == 1 {
 		j.logger.Info("Single document found, no janitor action needed",
 			"object_ref", safeLogString(objectRef),
-			"document_id", docs[0].ID,
-			"total_duration", time.Since(startTime))
+			"document_id", docs[0].ID)
 		return "skipped"
 	}
 
 	// Multiple hits found - need conflict resolution
-	conflictStartTime := time.Now()
 	j.logger.Warn("Multiple latest documents found, initiating conflict resolution",
 		"object_ref", safeLogString(objectRef),
 		"hit_count", hitCount,
@@ -354,8 +339,7 @@ func (j *JanitorService) processItem(ctx context.Context, objectRef *string) str
 		"winning_id", winningID,
 		"winning_updated_at", winningUpdatedAt,
 		"deleted_docs", deletedDocCount,
-		"updated_docs", updatedDocCount,
-		"analysis_duration", time.Since(conflictStartTime))
+		"updated_docs", updatedDocCount)
 
 	// Don't update anything if there is no winning hit
 	if winningID == "" {
@@ -366,7 +350,6 @@ func (j *JanitorService) processItem(ctx context.Context, objectRef *string) str
 	// Set all hits to `latest=false` except for the winning hit
 	updatesAttempted := 0
 	updatesSuccessful := 0
-	updateStartTime := time.Now()
 
 	for _, doc := range docs {
 		if doc.ID == winningID {
@@ -416,16 +399,12 @@ func (j *JanitorService) processItem(ctx context.Context, objectRef *string) str
 		"object_ref", safeLogString(objectRef),
 		"winning_id", winningID,
 		"updates_attempted", updatesAttempted,
-		"updates_successful", updatesSuccessful,
-		"update_duration", time.Since(updateStartTime),
-		"total_duration", time.Since(startTime))
+		"updates_successful", updatesSuccessful)
 	return "conflict_resolved"
 }
 
 // updateLatestFlag updates the latest flag for a document with optimistic concurrency control
-func (j *JanitorService) updateLatestFlag(ctx context.Context, doc contracts.VersionedDocument, latest bool, objectRef string) error {
-	startTime := time.Now()
-
+func (j *CleanupRepository) updateLatestFlag(ctx context.Context, doc contracts.VersionedDocument, latest bool, objectRef string) error {
 	j.logger.Debug("Updating latest flag for document",
 		"object_ref", objectRef,
 		"document_id", doc.ID,
@@ -461,22 +440,20 @@ func (j *JanitorService) updateLatestFlag(ctx context.Context, doc contracts.Ver
 			"object_ref", objectRef,
 			"document_id", doc.ID,
 			"latest", latest,
-			"error", err.Error(),
-			"duration", time.Since(startTime))
+			"error", err.Error())
 		return err
 	}
 
 	j.logger.Info("Document latest flag updated successfully",
 		"object_ref", objectRef,
 		"document_id", doc.ID,
-		"latest", latest,
-		"duration", time.Since(startTime))
+		"latest", latest)
 
 	return nil
 }
 
 // asyncRetry handles version conflicts with enhanced logging
-func (j *JanitorService) asyncRetry(ctx context.Context, objectRef, docID string) {
+func (j *CleanupRepository) asyncRetry(ctx context.Context, objectRef, docID string) {
 	retryDelay := time.Duration(5+mathRand.Intn(5)) * time.Second
 
 	j.logger.Info("Scheduling janitor retry due to version conflict",
@@ -506,8 +483,7 @@ func (j *JanitorService) asyncRetry(ctx context.Context, objectRef, docID string
 }
 
 // logWorkerHealth logs worker health metrics and performance data
-func (j *JanitorService) logWorkerHealth(itemsProcessed, itemsSkipped, conflictsResolved, errors int, startTime time.Time) {
-	uptime := time.Since(startTime)
+func (j *CleanupRepository) logWorkerHealth(itemsProcessed, itemsSkipped, conflictsResolved, errors int) {
 	queueLength := len(globalJanitorChan)
 
 	j.logger.Info("Janitor worker health check",
@@ -515,9 +491,7 @@ func (j *JanitorService) logWorkerHealth(itemsProcessed, itemsSkipped, conflicts
 		"items_skipped", itemsSkipped,
 		"conflicts_resolved", conflictsResolved,
 		"errors", errors,
-		"uptime", uptime,
-		"queue_length", queueLength,
-		"processing_rate", fmt.Sprintf("%.2f items/min", float64(itemsProcessed)/uptime.Minutes()))
+		"queue_length", queueLength)
 
 	// Log warning if queue is backing up
 	if queueLength > cap(globalJanitorChan)/2 {
@@ -529,7 +503,7 @@ func (j *JanitorService) logWorkerHealth(itemsProcessed, itemsSkipped, conflicts
 }
 
 // GetMetrics returns janitor metrics for monitoring
-func (j *JanitorService) GetMetrics() map[string]interface{} {
+func (j *CleanupRepository) GetMetrics() map[string]interface{} {
 	j.mu.RLock()
 	isRunning := j.isRunning
 	j.mu.RUnlock()
@@ -562,7 +536,7 @@ func (j *JanitorService) GetMetrics() map[string]interface{} {
 }
 
 // getHealthStatus returns the health status based on queue utilization and running state
-func (j *JanitorService) getHealthStatus(queueUtilization float64, isRunning bool) string {
+func (j *CleanupRepository) getHealthStatus(queueUtilization float64, isRunning bool) string {
 	if !isRunning {
 		return "stopped"
 	}
@@ -576,7 +550,7 @@ func (j *JanitorService) getHealthStatus(queueUtilization float64, isRunning boo
 }
 
 // IsRunning returns whether the janitor is currently processing items
-func (j *JanitorService) IsRunning() bool {
+func (j *CleanupRepository) IsRunning() bool {
 	j.mu.RLock()
 	defer j.mu.RUnlock()
 	return j.isRunning

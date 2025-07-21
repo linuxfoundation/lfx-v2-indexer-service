@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"time"
 
 	"github.com/linuxfoundation/lfx-indexer-service/internal/application"
 	"github.com/linuxfoundation/lfx-indexer-service/pkg/constants"
@@ -78,8 +77,7 @@ func (h *IndexingMessageHandler) respondErrorWithContext(ctx context.Context, re
 		"message", msg,
 		"subject", subject,
 		"has_reply", reply != nil,
-		"request_id", logging.GetRequestID(ctx),
-		"timestamp", time.Now().UTC())
+		"request_id", logging.GetRequestID(ctx))
 
 	// Send error response to NATS (presentation layer concern)
 	if reply != nil {
@@ -104,10 +102,8 @@ func (h *IndexingMessageHandler) respondErrorWithContext(ctx context.Context, re
 	}
 }
 
-// respondSuccessWithContext handles success responses with full context and timing
+// respondSuccessWithContext handles success responses
 func (h *IndexingMessageHandler) respondSuccessWithContext(ctx context.Context, reply func([]byte) error, subject string) {
-	startTime := time.Now()
-
 	// Create base logger or use context logger if available
 	var logger *slog.Logger
 	if requestID := logging.GetRequestID(ctx); requestID != "" {
@@ -121,14 +117,11 @@ func (h *IndexingMessageHandler) respondSuccessWithContext(ctx context.Context, 
 			logger.Error("Failed to send success reply to NATS",
 				"subject", subject,
 				"reply_error", replyErr.Error(),
-				"request_id", logging.GetRequestID(ctx),
-				"response_time", time.Since(startTime))
+				"request_id", logging.GetRequestID(ctx))
 		} else {
 			logger.Info("Success reply sent to NATS",
 				"subject", subject,
-				"request_id", logging.GetRequestID(ctx),
-				"response_time", time.Since(startTime),
-				"timestamp", time.Now().UTC())
+				"request_id", logging.GetRequestID(ctx))
 		}
 	} else {
 		logger.Debug("No reply function available for success response",

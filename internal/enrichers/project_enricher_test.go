@@ -6,7 +6,7 @@ package enrichers
 import (
 	"testing"
 
-	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/entities"
+	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/contracts"
 	"github.com/linuxfoundation/lfx-indexer-service/pkg/constants"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,7 +18,7 @@ func TestProjectEnricher_EnrichData(t *testing.T) {
 	tests := []struct {
 		name           string
 		parsedData     map[string]any
-		expectedBody   *entities.TransactionBody
+		expectedBody   *contracts.TransactionBody
 		expectedError  string
 		expectedFields []string // fields to verify
 	}{
@@ -28,7 +28,7 @@ func TestProjectEnricher_EnrichData(t *testing.T) {
 				"uid":    "project-123",
 				"public": true,
 			},
-			expectedBody: &entities.TransactionBody{
+			expectedBody: &contracts.TransactionBody{
 				ObjectID: "project-123",
 				Public:   true,
 			},
@@ -40,7 +40,7 @@ func TestProjectEnricher_EnrichData(t *testing.T) {
 				"id":     "project-456",
 				"public": false,
 			},
-			expectedBody: &entities.TransactionBody{
+			expectedBody: &contracts.TransactionBody{
 				ObjectID: "project-456",
 				Public:   false,
 			},
@@ -56,7 +56,7 @@ func TestProjectEnricher_EnrichData(t *testing.T) {
 				"historyCheckObject":   "project",
 				"historyCheckRelation": "viewer",
 			},
-			expectedBody: &entities.TransactionBody{
+			expectedBody: &contracts.TransactionBody{
 				ObjectID:             "project-789",
 				Public:               true,
 				AccessCheckObject:    "project", // Override from data
@@ -72,7 +72,7 @@ func TestProjectEnricher_EnrichData(t *testing.T) {
 				"uid":    "project-defaults",
 				"public": true,
 			},
-			expectedBody: &entities.TransactionBody{
+			expectedBody: &contracts.TransactionBody{
 				ObjectID:             "project-defaults",
 				Public:               true,
 				AccessCheckObject:    "project:project-defaults", // Computed default
@@ -89,7 +89,7 @@ func TestProjectEnricher_EnrichData(t *testing.T) {
 				"public":   true,
 				"parentID": "project-parent",
 			},
-			expectedBody: &entities.TransactionBody{
+			expectedBody: &contracts.TransactionBody{
 				ObjectID:   "project-child",
 				Public:     true,
 				ParentRefs: []string{"project-parent"},
@@ -103,7 +103,7 @@ func TestProjectEnricher_EnrichData(t *testing.T) {
 				"public":   true,
 				"parentID": "",
 			},
-			expectedBody: &entities.TransactionBody{
+			expectedBody: &contracts.TransactionBody{
 				ObjectID:   "project-orphan",
 				Public:     true,
 				ParentRefs: nil,
@@ -121,7 +121,7 @@ func TestProjectEnricher_EnrichData(t *testing.T) {
 				"historyCheckRelation": "member",
 				"parentID":             "org-parent",
 			},
-			expectedBody: &entities.TransactionBody{
+			expectedBody: &contracts.TransactionBody{
 				ObjectID:             "project-complete",
 				Public:               false,
 				AccessCheckObject:    "organization",
@@ -141,7 +141,7 @@ func TestProjectEnricher_EnrichData(t *testing.T) {
 				"slug":        "example-project",
 				"description": "A sample project for testing search functionality",
 			},
-			expectedBody: &entities.TransactionBody{
+			expectedBody: &contracts.TransactionBody{
 				ObjectID:       "project-search",
 				Public:         true,
 				SortName:       "Example Project",
@@ -157,7 +157,7 @@ func TestProjectEnricher_EnrichData(t *testing.T) {
 				"public":     false,
 				"parent_uid": "parent-legacy",
 			},
-			expectedBody: &entities.TransactionBody{
+			expectedBody: &contracts.TransactionBody{
 				ObjectID:   "project-child-legacy",
 				Public:     false,
 				ParentRefs: []string{"project:parent-legacy"},
@@ -198,8 +198,8 @@ func TestProjectEnricher_EnrichData(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			body := &entities.TransactionBody{}
-			transaction := &entities.LFXTransaction{
+			body := &contracts.TransactionBody{}
+			transaction := &contracts.LFXTransaction{
 				ParsedData: tt.parsedData,
 			}
 
@@ -244,10 +244,10 @@ func TestProjectEnricher_EnrichData(t *testing.T) {
 
 func TestProjectEnricher_EnrichData_AccessControlComputedDefaults(t *testing.T) {
 	enricher := &ProjectEnricher{}
-	body := &entities.TransactionBody{}
+	body := &contracts.TransactionBody{}
 
 	// Test that access control fields get computed defaults when not provided
-	transaction := &entities.LFXTransaction{
+	transaction := &contracts.LFXTransaction{
 		ParsedData: map[string]any{
 			"uid":    "project-computed-defaults",
 			"public": true,
@@ -267,10 +267,10 @@ func TestProjectEnricher_EnrichData_AccessControlComputedDefaults(t *testing.T) 
 
 func TestProjectEnricher_EnrichData_ParentReferenceOptional(t *testing.T) {
 	enricher := &ProjectEnricher{}
-	body := &entities.TransactionBody{}
+	body := &contracts.TransactionBody{}
 
 	// Test that parent reference is optional
-	transaction := &entities.LFXTransaction{
+	transaction := &contracts.LFXTransaction{
 		ParsedData: map[string]any{
 			"uid":    "project-no-parent",
 			"public": false,
@@ -290,8 +290,8 @@ func TestProjectEnricher_EnrichData_BackwardsCompatibility(t *testing.T) {
 
 	// Test that both 'uid' and 'id' fields work, with 'uid' taking precedence
 	t.Run("uid takes precedence over id", func(t *testing.T) {
-		body := &entities.TransactionBody{}
-		transaction := &entities.LFXTransaction{
+		body := &contracts.TransactionBody{}
+		transaction := &contracts.LFXTransaction{
 			ParsedData: map[string]any{
 				"uid":    "project-uid",
 				"id":     "project-id",
@@ -305,8 +305,8 @@ func TestProjectEnricher_EnrichData_BackwardsCompatibility(t *testing.T) {
 	})
 
 	t.Run("fallback to id when uid missing", func(t *testing.T) {
-		body := &entities.TransactionBody{}
-		transaction := &entities.LFXTransaction{
+		body := &contracts.TransactionBody{}
+		transaction := &contracts.LFXTransaction{
 			ParsedData: map[string]any{
 				"id":     "project-legacy",
 				"public": true,
@@ -323,8 +323,8 @@ func TestProjectEnricher_EnrichData_EdgeCases(t *testing.T) {
 	enricher := &ProjectEnricher{}
 
 	t.Run("empty string values for access control", func(t *testing.T) {
-		body := &entities.TransactionBody{}
-		transaction := &entities.LFXTransaction{
+		body := &contracts.TransactionBody{}
+		transaction := &contracts.LFXTransaction{
 			ParsedData: map[string]any{
 				"uid":                  "project-empty-strings",
 				"public":               true,
@@ -346,8 +346,8 @@ func TestProjectEnricher_EnrichData_EdgeCases(t *testing.T) {
 	})
 
 	t.Run("non-string access control values ignored", func(t *testing.T) {
-		body := &entities.TransactionBody{}
-		transaction := &entities.LFXTransaction{
+		body := &contracts.TransactionBody{}
+		transaction := &contracts.LFXTransaction{
 			ParsedData: map[string]any{
 				"uid":                  "project-non-string",
 				"public":               true,
@@ -369,8 +369,8 @@ func TestProjectEnricher_EnrichData_EdgeCases(t *testing.T) {
 	})
 
 	t.Run("non-string parent ID ignored", func(t *testing.T) {
-		body := &entities.TransactionBody{}
-		transaction := &entities.LFXTransaction{
+		body := &contracts.TransactionBody{}
+		transaction := &contracts.LFXTransaction{
 			ParsedData: map[string]any{
 				"uid":      "project-non-string-parent",
 				"public":   true,

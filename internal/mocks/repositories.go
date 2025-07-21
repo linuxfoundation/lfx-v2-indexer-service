@@ -12,7 +12,6 @@ import (
 	"sync"
 
 	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/contracts"
-	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/entities"
 )
 
 // MockStorageRepository implements the contracts.StorageRepository interface for testing
@@ -525,11 +524,11 @@ func (m *MockMessagingRepository) HealthCheck(ctx context.Context) error {
 }
 
 // Auth delegation methods
-func (m *MockMessagingRepository) ValidateToken(ctx context.Context, token string) (*entities.Principal, error) {
+func (m *MockMessagingRepository) ValidateToken(ctx context.Context, token string) (*contracts.Principal, error) {
 	return m.AuthRepo.ValidateToken(ctx, token)
 }
 
-func (m *MockMessagingRepository) ParsePrincipals(ctx context.Context, headers map[string]string) ([]entities.Principal, error) {
+func (m *MockMessagingRepository) ParsePrincipals(ctx context.Context, headers map[string]string) ([]contracts.Principal, error) {
 	return m.AuthRepo.ParsePrincipals(ctx, headers)
 }
 
@@ -565,9 +564,9 @@ type MockAuthRepository struct {
 	mu sync.RWMutex
 
 	// Mock responses
-	ValidateTokenResponse   *entities.Principal
+	ValidateTokenResponse   *contracts.Principal
 	ValidateTokenError      error
-	ParsePrincipalsResponse []entities.Principal
+	ParsePrincipalsResponse []contracts.Principal
 	ParsePrincipalsError    error
 
 	// Call tracking
@@ -592,7 +591,7 @@ func NewMockAuthRepository() *MockAuthRepository {
 }
 
 // ValidateToken mocks validating a token
-func (m *MockAuthRepository) ValidateToken(ctx context.Context, token string) (*entities.Principal, error) {
+func (m *MockAuthRepository) ValidateToken(ctx context.Context, token string) (*contracts.Principal, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -607,14 +606,14 @@ func (m *MockAuthRepository) ValidateToken(ctx context.Context, token string) (*
 	}
 
 	// Default valid response
-	return &entities.Principal{
+	return &contracts.Principal{
 		Principal: "test_user",
 		Email:     "test@example.com",
 	}, nil
 }
 
 // ParsePrincipals mocks parsing principals from headers
-func (m *MockAuthRepository) ParsePrincipals(ctx context.Context, headers map[string]string) ([]entities.Principal, error) {
+func (m *MockAuthRepository) ParsePrincipals(ctx context.Context, headers map[string]string) ([]contracts.Principal, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -629,7 +628,7 @@ func (m *MockAuthRepository) ParsePrincipals(ctx context.Context, headers map[st
 	}
 
 	// Default valid response
-	return []entities.Principal{
+	return []contracts.Principal{
 		{
 			Principal: "test_user",
 			Email:     "test@example.com",

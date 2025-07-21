@@ -5,7 +5,6 @@ package messaging
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
 	"testing"
@@ -182,126 +181,155 @@ func TestMessagingRepository_UtilityMethods_NilConnection(t *testing.T) {
 		assert.NotNil(t, status)
 		assert.Equal(t, "messaging_repository", status["component"])
 		assert.Contains(t, status, "status")
-		assert.Contains(t, status, "connection_info")
 		assert.Contains(t, status, "subscription_count")
 		assert.Contains(t, status, "is_shutting_down")
 
 		// Verify specific values for nil connection
 		assert.Equal(t, 0, status["subscription_count"])
 		assert.Equal(t, false, status["is_shutting_down"])
+		assert.Equal(t, "initialized", status["status"])
 	})
 }
 
-func TestMessagingRepository_ClassifyNATSError(t *testing.T) {
+func TestMessagingRepository_PublicMethods(t *testing.T) {
 	logger := setupTestLogger()
 	repo := NewMessagingRepository(nil, nil, logger, 5*time.Second)
 
-	tests := []struct {
-		name     string
-		error    error
-		expected string
-	}{
-		{"nil_error", nil, "none"},
-		{"connection_closed", fmt.Errorf("connection closed"), "connection_closed"},
-		{"no_responders", fmt.Errorf("no responders available"), "no_responders"},
-		{"timeout", fmt.Errorf("operation timeout"), "timeout"},
-		{"invalid_subject", fmt.Errorf("invalid subject name"), "invalid_subject"},
-		{"permission_denied", fmt.Errorf("permission denied"), "permission_denied"},
-		{"slow_consumer", fmt.Errorf("slow consumer detected"), "slow_consumer"},
-		{"connection_refused", fmt.Errorf("connection refused"), "connection_refused"},
-		{"reconnecting", fmt.Errorf("connection reconnecting"), "reconnecting"},
-		{"unknown_error", fmt.Errorf("some unknown error"), "unknown_error"},
-	}
+	t.Run("connection_info", func(t *testing.T) {
+		// Test that GetConnection works with nil connection
+		conn := repo.GetConnection()
+		assert.Nil(t, conn)
+	})
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := repo.classifyNATSError(tt.error)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
+	t.Run("subscription_count", func(t *testing.T) {
+		// Test subscription count starts at 0
+		count := repo.GetSubscriptionCount()
+		assert.Equal(t, 0, count)
+	})
+
+	t.Run("is_connected", func(t *testing.T) {
+		// Test that connection status is false with nil connection
+		connected := repo.IsConnected()
+		assert.False(t, connected)
+	})
+
+	t.Run("metrics", func(t *testing.T) {
+		// Test metrics can be retrieved
+		metrics := repo.GetMetrics()
+		assert.NotNil(t, metrics)
+		assert.Contains(t, metrics, "connection_status")
+		assert.Contains(t, metrics, "total_subscriptions")
+		assert.Contains(t, metrics, "active_subscriptions")
+	})
+
+	t.Run("connection_status", func(t *testing.T) {
+		// Test connection status details
+		status := repo.GetConnectionStatus()
+		assert.NotNil(t, status)
+		assert.Contains(t, status, "status")
+		assert.Contains(t, status, "component")
+		
+		// Should have basic connection info for nil connection
+		assert.Equal(t, "messaging_repository", status["component"])
+		assert.Equal(t, "initialized", status["status"])
+	})
 }
 
-func TestMessagingRepository_GenerateMessageID(t *testing.T) {
+func TestMessagingRepository_UtilityMethods(t *testing.T) {
 	logger := setupTestLogger()
 	repo := NewMessagingRepository(nil, nil, logger, 5*time.Second)
 
-	// Test that generateMessageID returns unique IDs
-	id1 := repo.generateMessageID()
-	time.Sleep(1 * time.Microsecond) // Ensure time difference
-	id2 := repo.generateMessageID()
+	t.Run("metrics_structure", func(t *testing.T) {
+		// Test that metrics have expected structure
+		metrics := repo.GetMetrics()
+		assert.NotNil(t, metrics)
+		
+		// Verify expected keys exist
+		_, hasConnectionStatus := metrics["connection_status"]
+		_, hasTotalSubscriptions := metrics["total_subscriptions"]
+		_, hasActiveSubscriptions := metrics["active_subscriptions"]
+		
+		assert.True(t, hasConnectionStatus)
+		assert.True(t, hasTotalSubscriptions)
+		assert.True(t, hasActiveSubscriptions)
+	})
 
-	assert.NotEmpty(t, id1)
-	assert.NotEmpty(t, id2)
-	assert.NotEqual(t, id1, id2)
-	assert.Contains(t, id1, "msg_")
-	assert.Contains(t, id2, "msg_")
+	t.Run("connection_status_details", func(t *testing.T) {
+		// Test connection status provides useful information
+		status := repo.GetConnectionStatus()
+		assert.NotNil(t, status)
+		
+		// Should have basic connection info
+		component, hasComponent := status["component"]
+		assert.True(t, hasComponent)
+		assert.Equal(t, "messaging_repository", component.(string))
+		
+		statusValue, hasStatus := status["status"]
+		assert.True(t, hasStatus)
+		assert.Equal(t, "initialized", statusValue.(string))
+	})
+
+	t.Run("subscription_management", func(t *testing.T) {
+		// Test subscription count consistency
+		initialCount := repo.GetSubscriptionCount()
+		assert.Equal(t, 0, initialCount)
+		
+		// Test that connection state is consistent
+		assert.False(t, repo.IsConnected())
+		assert.Nil(t, repo.GetConnection())
+	})
 }
 
-func TestMessagingRepository_GetConnectionInfo(t *testing.T) {
+func TestMessagingRepository_StateManagement(t *testing.T) {
 	logger := setupTestLogger()
 	repo := NewMessagingRepository(nil, nil, logger, 5*time.Second)
 
-	info := repo.getConnectionInfo()
+	t.Run("connection_info_nil_safe", func(t *testing.T) {
+		// Test that GetConnectionStatus handles nil connection gracefully
+		status := repo.GetConnectionStatus()
+		assert.NotNil(t, status)
+		assert.Equal(t, "messaging_repository", status["component"])
+		assert.Equal(t, "initialized", status["status"])
+		assert.Equal(t, 0, status["subscription_count"])
+		assert.Equal(t, false, status["is_shutting_down"])
+	})
 
-	assert.NotNil(t, info)
-	assert.Equal(t, "nil", info["status"])
-	assert.Equal(t, false, info["connected"])
-	assert.Equal(t, []string{}, info["servers"])
-	assert.Equal(t, 0, info["subscriptions"])
-}
-
-func TestMessagingRepository_LogConnectionState(t *testing.T) {
-	logger := setupTestLogger()
-	repo := NewMessagingRepository(nil, nil, logger, 5*time.Second)
-
-	// This should not panic or error
-	repo.logConnectionState("test_context")
-
-	// Test with different contexts
-	repo.logConnectionState("initialization")
-	repo.logConnectionState("before_subscribe")
-	repo.logConnectionState("after_subscribe")
-}
-
-func TestMessagingRepository_LogSubscriptionHealth(t *testing.T) {
-	logger := setupTestLogger()
-	repo := NewMessagingRepository(nil, nil, logger, 5*time.Second)
-
-	// This should not panic or error with empty subscriptions
-	repo.logSubscriptionHealth()
+	t.Run("metrics_with_nil_connection", func(t *testing.T) {
+		// Test that metrics work with nil connection
+		metrics := repo.GetMetrics()
+		assert.NotNil(t, metrics)
+		assert.Equal(t, "unknown", metrics["connection_status"])
+		assert.Equal(t, false, metrics["connected"])
+		assert.Equal(t, 0, metrics["total_subscriptions"])
+		assert.Equal(t, 0, metrics["active_subscriptions"])
+	})
 }
 
 // Performance benchmarks
-func BenchmarkMessagingRepository_GenerateMessageID(b *testing.B) {
+func BenchmarkMessagingRepository_PublicMethods(b *testing.B) {
 	logger := setupTestLogger()
 	repo := NewMessagingRepository(nil, nil, logger, 5*time.Second)
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = repo.generateMessageID()
-	}
-}
+	b.Run("GetConnection", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_ = repo.GetConnection()
+		}
+	})
 
-func BenchmarkMessagingRepository_ClassifyNATSError(b *testing.B) {
-	logger := setupTestLogger()
-	repo := NewMessagingRepository(nil, nil, logger, 5*time.Second)
+	b.Run("IsConnected", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_ = repo.IsConnected()
+		}
+	})
 
-	testError := fmt.Errorf("connection closed")
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = repo.classifyNATSError(testError)
-	}
-}
-
-func BenchmarkMessagingRepository_GetConnectionInfo(b *testing.B) {
-	logger := setupTestLogger()
-	repo := NewMessagingRepository(nil, nil, logger, 5*time.Second)
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = repo.getConnectionInfo()
-	}
+	b.Run("GetMetrics", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_ = repo.GetMetrics()
+		}
+	})
 }
 
 func BenchmarkMessagingRepository_GetMetrics(b *testing.B) {

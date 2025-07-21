@@ -4,13 +4,13 @@
 package enrichers
 
 import (
-	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/entities"
+	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/contracts"
 )
 
 // Enricher defines the interface for object-specific enrichment logic
 type Enricher interface {
 	// EnrichData enriches the transaction body with object-specific data
-	EnrichData(body *entities.TransactionBody, transaction *entities.LFXTransaction) error
+	EnrichData(body *contracts.TransactionBody, transaction *contracts.LFXTransaction) error
 
 	// ObjectType returns the object type this enricher handles
 	ObjectType() string

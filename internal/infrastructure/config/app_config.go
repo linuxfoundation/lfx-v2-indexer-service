@@ -151,35 +151,17 @@ func LoadConfig() (*AppConfig, error) {
 	// Log configuration summary
 	logger.Info("Configuration loading completed",
 		"env_vars_used", len(envVarsUsed),
-		"defaults_used", len(defaultsUsed),
-		"total_config_items", len(envVarsUsed)+len(defaultsUsed))
-
-	// Log environment vs defaults breakdown
-	if len(envVarsUsed) > 0 {
-		envKeys := make([]string, 0, len(envVarsUsed))
-		for key := range envVarsUsed {
-			envKeys = append(envKeys, key)
-		}
-		logger.Debug("Environment variables used", "keys", envKeys)
-	}
-
-	if len(defaultsUsed) > 0 {
-		defaultKeys := make([]string, 0, len(defaultsUsed))
-		for key := range defaultsUsed {
-			defaultKeys = append(defaultKeys, key)
-		}
-		logger.Debug("Default values used", "keys", defaultKeys)
-	}
+		"defaults_used", len(defaultsUsed))
 
 	return config, nil
 }
 
-// Validate validates the configuration with detailed logging
+// Validate validates the configuration
 func (c *AppConfig) Validate() error {
 	logger := slog.Default()
 	logger.Info("Configuration validation started")
 
-	// Validate each configuration domain separately for better separation of concerns
+	// Validate each configuration domain
 	validationSteps := []struct {
 		name string
 		fn   func() error
@@ -194,14 +176,12 @@ func (c *AppConfig) Validate() error {
 	}
 
 	for _, step := range validationSteps {
-		logger.Debug("Validating configuration section", "section", step.name)
 		if err := step.fn(); err != nil {
 			logger.Error("Configuration validation failed",
 				"section", step.name,
 				"error", err.Error())
 			return fmt.Errorf("%s configuration: %w", step.name, err)
 		}
-		logger.Debug("Configuration section validation passed", "section", step.name)
 	}
 
 	logger.Info("Configuration validation completed successfully")
@@ -320,21 +300,14 @@ func (c *AppConfig) validateJanitor() error {
 	return nil
 }
 
-// Enhanced environment variable helper functions with logging
+// Environment variable helper functions
 
 func getEnvStringWithLogging(key, defaultValue string, envVarsUsed, defaultsUsed map[string]bool, logger *slog.Logger) string {
 	if value := os.Getenv(key); value != "" {
 		envVarsUsed[key] = true
-		logger.Debug("Environment variable loaded",
-			"key", key,
-			"value_length", len(value),
-			"has_value", true)
 		return value
 	}
 	defaultsUsed[key] = true
-	logger.Debug("Using default value",
-		"key", key,
-		"default_value", defaultValue)
 	return defaultValue
 }
 
@@ -342,9 +315,6 @@ func getEnvIntWithLogging(key string, defaultValue int, envVarsUsed, defaultsUse
 	if value := os.Getenv(key); value != "" {
 		if intValue, err := strconv.Atoi(value); err == nil {
 			envVarsUsed[key] = true
-			logger.Debug("Environment variable loaded as integer",
-				"key", key,
-				"value", intValue)
 			return intValue
 		} else {
 			logger.Warn("Invalid integer in environment variable, using default",
@@ -355,9 +325,6 @@ func getEnvIntWithLogging(key string, defaultValue int, envVarsUsed, defaultsUse
 		}
 	}
 	defaultsUsed[key] = true
-	logger.Debug("Using default integer value",
-		"key", key,
-		"default_value", defaultValue)
 	return defaultValue
 }
 
@@ -365,9 +332,6 @@ func getEnvBoolWithLogging(key string, defaultValue bool, envVarsUsed, defaultsU
 	if value := os.Getenv(key); value != "" {
 		if boolValue, err := strconv.ParseBool(value); err == nil {
 			envVarsUsed[key] = true
-			logger.Debug("Environment variable loaded as boolean",
-				"key", key,
-				"value", boolValue)
 			return boolValue
 		} else {
 			logger.Warn("Invalid boolean in environment variable, using default",
@@ -378,9 +342,6 @@ func getEnvBoolWithLogging(key string, defaultValue bool, envVarsUsed, defaultsU
 		}
 	}
 	defaultsUsed[key] = true
-	logger.Debug("Using default boolean value",
-		"key", key,
-		"default_value", defaultValue)
 	return defaultValue
 }
 
@@ -388,10 +349,6 @@ func getEnvDurationWithLogging(key string, defaultValue time.Duration, envVarsUs
 	if value := os.Getenv(key); value != "" {
 		if duration, err := time.ParseDuration(value); err == nil {
 			envVarsUsed[key] = true
-			logger.Debug("Environment variable loaded as duration",
-				"key", key,
-				"value", duration,
-				"raw_value", value)
 			return duration
 		} else {
 			logger.Warn("Invalid duration in environment variable, using default",
@@ -402,9 +359,6 @@ func getEnvDurationWithLogging(key string, defaultValue time.Duration, envVarsUs
 		}
 	}
 	defaultsUsed[key] = true
-	logger.Debug("Using default duration value",
-		"key", key,
-		"default_value", defaultValue)
 	return defaultValue
 }
 

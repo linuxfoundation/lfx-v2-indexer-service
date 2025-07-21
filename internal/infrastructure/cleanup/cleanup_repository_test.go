@@ -1,7 +1,7 @@
 // Copyright The Linux Foundation and each contributor to LFX.
 // SPDX-License-Identifier: MIT
 
-package janitor
+package cleanup
 
 import (
 	"context"
@@ -61,20 +61,20 @@ func (m *MockTransactionRepository) SearchWithVersions(ctx context.Context, inde
 	return args.Get(0).([]contracts.VersionedDocument), args.Error(1)
 }
 
-func TestNewJanitorService(t *testing.T) {
+func TestNewCleanupRepository(t *testing.T) {
 	mockRepo := &MockTransactionRepository{}
 	logger, _ := logging.TestLogger(t)
-	service := NewJanitorService(mockRepo, logger, "test-index")
+	service := NewCleanupRepository(mockRepo, logger, "test-index")
 
 	assert.NotNil(t, service)
 	assert.Equal(t, "test-index", service.index)
 	assert.False(t, service.IsRunning())
 }
 
-func TestJanitorService_CheckItem(t *testing.T) {
+func TestCleanupRepository_CheckItem(t *testing.T) {
 	mockRepo := &MockTransactionRepository{}
 	logger, _ := logging.TestLogger(t)
-	service := NewJanitorService(mockRepo, logger, "test-index")
+	service := NewCleanupRepository(mockRepo, logger, "test-index")
 
 	// Clear the channel first
 	for len(globalJanitorChan) > 0 {
@@ -117,10 +117,10 @@ func TestJanitorService_CheckItem(t *testing.T) {
 	mockRepo.AssertExpectations(t)
 }
 
-func TestJanitorService_ProcessItemWithError(t *testing.T) {
+func TestCleanupRepository_ProcessItemWithError(t *testing.T) {
 	mockRepo := &MockTransactionRepository{}
 	logger, _ := logging.TestLogger(t)
-	service := NewJanitorService(mockRepo, logger, "test-index")
+	service := NewCleanupRepository(mockRepo, logger, "test-index")
 
 	ctx := context.Background()
 	objectRef := "test-object-ref"
@@ -135,10 +135,10 @@ func TestJanitorService_ProcessItemWithError(t *testing.T) {
 	mockRepo.AssertExpectations(t)
 }
 
-func TestJanitorService_ProcessItemWithInvalidObjectRef(t *testing.T) {
+func TestCleanupRepository_ProcessItemWithInvalidObjectRef(t *testing.T) {
 	mockRepo := &MockTransactionRepository{}
 	logger, _ := logging.TestLogger(t)
-	service := NewJanitorService(mockRepo, logger, "test-index")
+	service := NewCleanupRepository(mockRepo, logger, "test-index")
 
 	ctx := context.Background()
 	objectRef := `test"object"ref` // Contains quotes - should be invalid
@@ -150,10 +150,10 @@ func TestJanitorService_ProcessItemWithInvalidObjectRef(t *testing.T) {
 	mockRepo.AssertNotCalled(t, "SearchWithVersions")
 }
 
-func TestJanitorService_ProcessMultipleHits(t *testing.T) {
+func TestCleanupRepository_ProcessMultipleHits(t *testing.T) {
 	mockRepo := &MockTransactionRepository{}
 	logger, _ := logging.TestLogger(t)
-	service := NewJanitorService(mockRepo, logger, "test-index")
+	service := NewCleanupRepository(mockRepo, logger, "test-index")
 
 	ctx := context.Background()
 	objectRef := "test-object-ref"
@@ -208,10 +208,10 @@ func TestJanitorService_ProcessMultipleHits(t *testing.T) {
 	mockRepo.AssertExpectations(t)
 }
 
-func TestJanitorService_ProcessVersionConflict(t *testing.T) {
+func TestCleanupRepository_ProcessVersionConflict(t *testing.T) {
 	mockRepo := &MockTransactionRepository{}
 	logger, _ := logging.TestLogger(t)
-	service := NewJanitorService(mockRepo, logger, "test-index")
+	service := NewCleanupRepository(mockRepo, logger, "test-index")
 
 	ctx := context.Background()
 	objectRef := "test-object-ref"
@@ -268,10 +268,10 @@ func TestJanitorService_ProcessVersionConflict(t *testing.T) {
 	mockRepo.AssertExpectations(t)
 }
 
-func TestJanitorService_ProcessWithMarshalError(t *testing.T) {
+func TestCleanupRepository_ProcessWithMarshalError(t *testing.T) {
 	mockRepo := &MockTransactionRepository{}
 	logger, _ := logging.TestLogger(t)
-	service := NewJanitorService(mockRepo, logger, "test-index")
+	service := NewCleanupRepository(mockRepo, logger, "test-index")
 
 	ctx := context.Background()
 	objectRef := "test-object-ref"
@@ -312,10 +312,10 @@ func TestJanitorService_ProcessWithMarshalError(t *testing.T) {
 	mockRepo.AssertNotCalled(t, "UpdateWithOptimisticLock")
 }
 
-func TestJanitorService_StartStopItemLoop(t *testing.T) {
+func TestCleanupRepository_StartStopItemLoop(t *testing.T) {
 	mockRepo := &MockTransactionRepository{}
 	logger, _ := logging.TestLogger(t)
-	service := NewJanitorService(mockRepo, logger, "test-index")
+	service := NewCleanupRepository(mockRepo, logger, "test-index")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -336,10 +336,10 @@ func TestJanitorService_StartStopItemLoop(t *testing.T) {
 	assert.False(t, service.IsRunning())
 }
 
-func TestJanitorService_ProcessQueuedItem(t *testing.T) {
+func TestCleanupRepository_ProcessQueuedItem(t *testing.T) {
 	mockRepo := &MockTransactionRepository{}
 	logger, _ := logging.TestLogger(t)
-	service := NewJanitorService(mockRepo, logger, "test-index")
+	service := NewCleanupRepository(mockRepo, logger, "test-index")
 
 	// Clear the channel
 	for len(globalJanitorChan) > 0 {

@@ -11,7 +11,6 @@ import (
 	"io"
 	"log/slog"
 	"strings"
-	"time"
 
 	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/contracts"
 	"github.com/linuxfoundation/lfx-indexer-service/pkg/constants"
@@ -34,73 +33,10 @@ func NewStorageRepository(client *opensearch.Client, logger *slog.Logger) *Stora
 	}
 }
 
-// Helper functions for timing and metrics
-func (r *StorageRepository) logOperationStart(logger *slog.Logger, operation string, metadata map[string]any) (*slog.Logger, time.Time) {
-	start := time.Now()
-	enhancedLogger := logging.WithFields(logger, map[string]any{
-		"started_at": start,
-		"operation":  operation,
-	})
-	if metadata != nil {
-		enhancedLogger = logging.WithFields(enhancedLogger, metadata)
-	}
-	enhancedLogger.Info("Storage operation started")
-	return enhancedLogger, start
-}
-
-func (r *StorageRepository) logOperationEnd(logger *slog.Logger, operation string, start time.Time, err error, metadata map[string]any) {
-	duration := time.Since(start)
-	fields := map[string]any{
-		"duration_ms": duration.Milliseconds(),
-		"operation":   operation,
-	}
-	for k, v := range metadata {
-		fields[k] = v
-	}
-
-	if err != nil {
-		fields["error"] = err.Error()
-		fields["error_type"] = classifyError(err)
-		logging.WithFields(logger, fields).Error("Storage operation failed")
-	} else {
-		logging.WithFields(logger, fields).Info("Storage operation completed successfully")
-	}
-}
-
-func classifyError(err error) string {
-	if err == nil {
-		return ""
-	}
-	errStr := err.Error()
-	switch {
-	case strings.Contains(errStr, "connection") || strings.Contains(errStr, "timeout"):
-		return "network"
-	case strings.Contains(errStr, "409") || strings.Contains(errStr, "version_conflict"):
-		return "version_conflict"
-	case strings.Contains(errStr, "400"):
-		return "bad_request"
-	case strings.Contains(errStr, "401") || strings.Contains(errStr, "403"):
-		return "authentication"
-	case strings.Contains(errStr, "404"):
-		return "not_found"
-	case strings.Contains(errStr, "marshal") || strings.Contains(errStr, "unmarshal") || strings.Contains(errStr, "decode"):
-		return "serialization"
-	default:
-		return "unknown"
-	}
-}
-
 // Index indexes a transaction body into OpenSearch
 func (r *StorageRepository) Index(ctx context.Context, index string, docID string, body io.Reader) error {
-	baseLogger := logging.WithFields(
-		logging.FromContext(ctx, r.logger),
-		map[string]any{
-			"document_id": docID,
-			"index":       index,
-		},
-	)
-
-	logger, start := r.logOperationStart(baseLogger, "index", nil)
+	logger := logging.FromContext(ctx, r.logger)
+	logger.Debug("Indexing document", "document_id", docID, "index", index)
 
 	req := opensearchapi.IndexRequest{
 		Index:      index,
@@ -111,44 +47,28 @@ func (r *StorageRepository) Index(ctx context.Context, index string, docID strin
 
 	res, err := req.Do(ctx, r.client)
 	if err != nil {
-		r.logOperationEnd(logger, "index", start, err, map[string]any{
-			"stage": "request_execution",
-		})
+		logger.Error("Failed to index document", "error", err.Error())
 		return fmt.Errorf("%s: %w", constants.ErrIndexDocument, err)
 	}
 	defer res.Body.Close()
 
 	if res.IsError() {
-		apiErr := fmt.Errorf("status: %s", res.Status())
-		r.logOperationEnd(logger, "index", start, apiErr, map[string]any{
-			"stage":       "response_processing",
-			"status_code": res.Status(),
-		})
+		logger.Error("Index request failed", "status", res.Status())
 		return fmt.Errorf("%s: %s", constants.ErrIndexDocument, res.Status())
 	}
 
-	r.logOperationEnd(logger, "index", start, nil, map[string]any{
-		"status_code": res.Status(),
-	})
+	logger.Debug("Document indexed successfully", "status", res.Status())
 	return nil
 }
 
 // Search searches for documents in OpenSearch
 func (r *StorageRepository) Search(ctx context.Context, index string, query map[string]any) ([]map[string]any, error) {
-	baseLogger := logging.WithFields(
-		logging.FromContext(ctx, r.logger),
-		map[string]any{
-			"index": index,
-		},
-	)
-
-	logger, start := r.logOperationStart(baseLogger, "search", nil)
+	logger := logging.FromContext(ctx, r.logger)
+	logger.Debug("Searching documents", "index", index)
 
 	queryBytes, err := json.Marshal(query)
 	if err != nil {
-		r.logOperationEnd(logger, "search", start, err, map[string]any{
-			"stage": "query_marshaling",
-		})
+		logger.Error("Failed to marshal query", "error", err.Error())
 		return nil, fmt.Errorf("%s: %w", constants.ErrMarshalQuery, err)
 	}
 
@@ -159,19 +79,13 @@ func (r *StorageRepository) Search(ctx context.Context, index string, query map[
 
 	res, err := req.Do(ctx, r.client)
 	if err != nil {
-		r.logOperationEnd(logger, "search", start, err, map[string]any{
-			"stage": "request_execution",
-		})
+		logger.Error("Search request failed", "error", err.Error())
 		return nil, fmt.Errorf("%s: %w", constants.ErrSearchFailed, err)
 	}
 	defer res.Body.Close()
 
 	if res.IsError() {
-		apiErr := fmt.Errorf("status: %s", res.Status())
-		r.logOperationEnd(logger, "search", start, apiErr, map[string]any{
-			"stage":       "response_processing",
-			"status_code": res.Status(),
-		})
+		logger.Error("Search response error", "status", res.Status())
 		return nil, fmt.Errorf("%s: %s", constants.ErrSearchFailed, res.Status())
 	}
 
@@ -187,9 +101,7 @@ func (r *StorageRepository) Search(ctx context.Context, index string, query map[
 	}
 
 	if err := json.NewDecoder(res.Body).Decode(&response); err != nil {
-		r.logOperationEnd(logger, "search", start, err, map[string]any{
-			"stage": "response_decoding",
-		})
+		logger.Error("Failed to decode response", "error", err.Error())
 		return nil, fmt.Errorf("%s: %w", constants.ErrDecodeResponse, err)
 	}
 
@@ -198,31 +110,18 @@ func (r *StorageRepository) Search(ctx context.Context, index string, query map[
 		results = append(results, hit.Source)
 	}
 
-	r.logOperationEnd(logger, "search", start, nil, map[string]any{
-		"result_count": len(results),
-		"total_hits":   response.Hits.Total.Value,
-		"status_code":  res.Status(),
-	})
-
+	logger.Debug("Search completed successfully", "result_count", len(results), "total_hits", response.Hits.Total.Value)
 	return results, nil
 }
 
 // SearchWithVersions searches for documents and includes version tracking information
 func (r *StorageRepository) SearchWithVersions(ctx context.Context, index string, query map[string]any) ([]contracts.VersionedDocument, error) {
-	baseLogger := logging.WithFields(
-		logging.FromContext(ctx, r.logger),
-		map[string]any{
-			"index": index,
-		},
-	)
-
-	logger, start := r.logOperationStart(baseLogger, "search_with_versions", nil)
+	logger := logging.FromContext(ctx, r.logger)
+	logger.Debug("Searching documents with versions", "index", index)
 
 	queryBytes, err := json.Marshal(query)
 	if err != nil {
-		r.logOperationEnd(logger, "search_with_versions", start, err, map[string]any{
-			"stage": "query_marshaling",
-		})
+		logger.Error("Failed to marshal query", "error", err.Error())
 		return nil, fmt.Errorf("%s: %w", constants.ErrMarshalQuery, err)
 	}
 
@@ -233,19 +132,13 @@ func (r *StorageRepository) SearchWithVersions(ctx context.Context, index string
 
 	res, err := req.Do(ctx, r.client)
 	if err != nil {
-		r.logOperationEnd(logger, "search_with_versions", start, err, map[string]any{
-			"stage": "request_execution",
-		})
+		logger.Error("Search request failed", "error", err.Error())
 		return nil, fmt.Errorf("%s: %w", constants.ErrSearchFailed, err)
 	}
 	defer res.Body.Close()
 
 	if res.IsError() {
-		apiErr := fmt.Errorf("status: %s", res.Status())
-		r.logOperationEnd(logger, "search_with_versions", start, apiErr, map[string]any{
-			"stage":       "response_processing",
-			"status_code": res.Status(),
-		})
+		logger.Error("Search response error", "status", res.Status())
 		return nil, fmt.Errorf("%s: %s", constants.ErrSearchFailed, res.Status())
 	}
 
@@ -264,9 +157,7 @@ func (r *StorageRepository) SearchWithVersions(ctx context.Context, index string
 	}
 
 	if err := json.NewDecoder(res.Body).Decode(&response); err != nil {
-		r.logOperationEnd(logger, "search_with_versions", start, err, map[string]any{
-			"stage": "response_decoding",
-		})
+		logger.Error("Failed to decode response", "error", err.Error())
 		return nil, fmt.Errorf("%s: %w", constants.ErrDecodeResponse, err)
 	}
 
@@ -280,26 +171,14 @@ func (r *StorageRepository) SearchWithVersions(ctx context.Context, index string
 		})
 	}
 
-	r.logOperationEnd(logger, "search_with_versions", start, nil, map[string]any{
-		"result_count": len(results),
-		"total_hits":   response.Hits.Total.Value,
-		"status_code":  res.Status(),
-	})
-
+	logger.Debug("Search with versions completed successfully", "result_count", len(results), "total_hits", response.Hits.Total.Value)
 	return results, nil
 }
 
 // Update updates a document in OpenSearch
 func (r *StorageRepository) Update(ctx context.Context, index string, docID string, body io.Reader) error {
-	baseLogger := logging.WithFields(
-		logging.FromContext(ctx, r.logger),
-		map[string]any{
-			"document_id": docID,
-			"index":       index,
-		},
-	)
-
-	logger, start := r.logOperationStart(baseLogger, "update", nil)
+	logger := logging.FromContext(ctx, r.logger)
+	logger.Debug("Updating document", "document_id", docID, "index", index)
 
 	req := opensearchapi.UpdateRequest{
 		Index:      index,
@@ -310,31 +189,23 @@ func (r *StorageRepository) Update(ctx context.Context, index string, docID stri
 
 	res, err := req.Do(ctx, r.client)
 	if err != nil {
-		r.logOperationEnd(logger, "update", start, err, map[string]any{
-			"stage": "request_execution",
-		})
+		logger.Error("Failed to update document", "error", err.Error())
 		return fmt.Errorf("%s: %w", constants.ErrUpdateDocument, err)
 	}
 	defer res.Body.Close()
 
 	if res.IsError() {
-		apiErr := fmt.Errorf("status: %s", res.Status())
-		r.logOperationEnd(logger, "update", start, apiErr, map[string]any{
-			"stage":       "response_processing",
-			"status_code": res.Status(),
-		})
+		logger.Error("Update request failed", "status", res.Status())
 		return fmt.Errorf("%s: %s", constants.ErrUpdateDocument, res.Status())
 	}
 
-	r.logOperationEnd(logger, "update", start, nil, map[string]any{
-		"status_code": res.Status(),
-	})
+	logger.Debug("Document updated successfully", "status", res.Status())
 	return nil
 }
 
 // Delete deletes a document from OpenSearch
 func (r *StorageRepository) Delete(ctx context.Context, index string, docID string) error {
-	baseLogger := logging.WithFields(
+	logger := logging.WithFields(
 		logging.FromContext(ctx, r.logger),
 		map[string]any{
 			"document_id": docID,
@@ -342,7 +213,7 @@ func (r *StorageRepository) Delete(ctx context.Context, index string, docID stri
 		},
 	)
 
-	logger, start := r.logOperationStart(baseLogger, "delete", nil)
+	logger.Debug("Deleting document from OpenSearch")
 
 	req := opensearchapi.DeleteRequest{
 		Index:      index,
@@ -352,9 +223,7 @@ func (r *StorageRepository) Delete(ctx context.Context, index string, docID stri
 
 	res, err := req.Do(ctx, r.client)
 	if err != nil {
-		r.logOperationEnd(logger, "delete", start, err, map[string]any{
-			"stage": "request_execution",
-		})
+		logger.Error("Failed to execute delete request", "error", err.Error())
 		return fmt.Errorf("%s: %w", constants.ErrDeleteDocument, err)
 	}
 	defer res.Body.Close()
@@ -362,25 +231,15 @@ func (r *StorageRepository) Delete(ctx context.Context, index string, docID stri
 	if res.IsError() {
 		// 404 is not an error for delete operations
 		if strings.Contains(res.Status(), "404") {
-			r.logOperationEnd(logger, "delete", start, nil, map[string]any{
-				"status_code": res.Status(),
-				"result":      "document_not_found",
-			})
+			logger.Debug("Document not found for deletion", "status", res.Status())
 			return nil
 		}
 
-		apiErr := fmt.Errorf("status: %s", res.Status())
-		r.logOperationEnd(logger, "delete", start, apiErr, map[string]any{
-			"stage":       "response_processing",
-			"status_code": res.Status(),
-		})
+		logger.Error("Delete request failed", "status", res.Status())
 		return fmt.Errorf("%s: %s", constants.ErrDeleteDocument, res.Status())
 	}
 
-	r.logOperationEnd(logger, "delete", start, nil, map[string]any{
-		"status_code": res.Status(),
-		"result":      "document_deleted",
-	})
+	logger.Debug("Document deleted successfully", "status", res.Status())
 	return nil
 }
 
@@ -390,14 +249,14 @@ func (r *StorageRepository) BulkIndex(ctx context.Context, operations []contract
 		return nil
 	}
 
-	baseLogger := logging.WithFields(
+	logger := logging.WithFields(
 		logging.FromContext(ctx, r.logger),
 		map[string]any{
 			"operation_count": len(operations),
 		},
 	)
 
-	logger, start := r.logOperationStart(baseLogger, "bulk_index", nil)
+	logger.Debug("Starting bulk index operation")
 
 	var buf bytes.Buffer
 	for _, op := range operations {
@@ -411,9 +270,7 @@ func (r *StorageRepository) BulkIndex(ctx context.Context, operations []contract
 
 		actionBytes, err := json.Marshal(action)
 		if err != nil {
-			r.logOperationEnd(logger, "bulk_index", start, err, map[string]any{
-				"stage": "action_marshaling",
-			})
+			logger.Error("Failed to marshal bulk action", "error", err.Error())
 			return fmt.Errorf("%s: %w", constants.ErrMarshalBulkAction, err)
 		}
 
@@ -423,9 +280,7 @@ func (r *StorageRepository) BulkIndex(ctx context.Context, operations []contract
 		// Add the document body if it's not a delete operation
 		if op.Action != "delete" && op.Body != nil {
 			if _, err := buf.ReadFrom(op.Body); err != nil {
-				r.logOperationEnd(logger, "bulk_index", start, err, map[string]any{
-					"stage": "body_reading",
-				})
+				logger.Error("Failed to read bulk body", "error", err.Error())
 				return fmt.Errorf("%s: %w", constants.ErrReadBulkBody, err)
 			}
 			buf.WriteByte('\n')
@@ -439,21 +294,13 @@ func (r *StorageRepository) BulkIndex(ctx context.Context, operations []contract
 
 	res, err := req.Do(ctx, r.client)
 	if err != nil {
-		r.logOperationEnd(logger, "bulk_index", start, err, map[string]any{
-			"stage":     "request_execution",
-			"body_size": buf.Len(),
-		})
+		logger.Error("Failed to execute bulk request", "error", err.Error(), "body_size", buf.Len())
 		return fmt.Errorf("%s: %w", constants.ErrBulkOperation, err)
 	}
 	defer res.Body.Close()
 
 	if res.IsError() {
-		apiErr := fmt.Errorf("status: %s", res.Status())
-		r.logOperationEnd(logger, "bulk_index", start, apiErr, map[string]any{
-			"stage":       "response_processing",
-			"status_code": res.Status(),
-			"body_size":   buf.Len(),
-		})
+		logger.Error("Bulk request failed", "status", res.Status(), "body_size", buf.Len())
 		return fmt.Errorf("%s: %s", constants.ErrBulkOperation, res.Status())
 	}
 
@@ -467,9 +314,7 @@ func (r *StorageRepository) BulkIndex(ctx context.Context, operations []contract
 	}
 
 	if err := json.NewDecoder(res.Body).Decode(&bulkResponse); err != nil {
-		r.logOperationEnd(logger, "bulk_index", start, err, map[string]any{
-			"stage": "response_decoding",
-		})
+		logger.Error("Failed to decode bulk response", "error", err.Error())
 		return fmt.Errorf("%s: %w", constants.ErrDecodeBulkResponse, err)
 	}
 
@@ -488,25 +333,20 @@ func (r *StorageRepository) BulkIndex(ctx context.Context, operations []contract
 			}
 		}
 
-		r.logOperationEnd(logger, "bulk_index", start, fmt.Errorf("bulk operation completed with %d errors", errorCount), map[string]any{
-			"success_count": successCount,
-			"error_count":   errorCount,
-			"body_size":     buf.Len(),
-		})
+		logger.Error("Bulk operation completed with errors", "error_count", errorCount, "success_count", successCount)
 		return fmt.Errorf("bulk operation completed with %d errors", errorCount)
 	}
 
-	r.logOperationEnd(logger, "bulk_index", start, nil, map[string]any{
-		"operations_processed": len(operations),
-		"body_size":            buf.Len(),
-		"status_code":          res.Status(),
-	})
+	logger.Debug("Bulk index operation completed successfully",
+		"operations_processed", len(operations),
+		"body_size", buf.Len(),
+		"status", res.Status())
 	return nil
 }
 
 // UpdateWithOptimisticLock updates a document with optimistic concurrency control
 func (r *StorageRepository) UpdateWithOptimisticLock(ctx context.Context, index, docID string, body io.Reader, params *contracts.OptimisticUpdateParams) error {
-	baseLogger := logging.WithFields(
+	logger := logging.WithFields(
 		logging.FromContext(ctx, r.logger),
 		map[string]any{
 			"document_id": docID,
@@ -514,15 +354,14 @@ func (r *StorageRepository) UpdateWithOptimisticLock(ctx context.Context, index,
 		},
 	)
 
-	var metadata map[string]any
 	if params != nil {
-		metadata = map[string]any{
+		logger = logging.WithFields(logger, map[string]any{
 			"seq_no":       params.SeqNo,
 			"primary_term": params.PrimaryTerm,
-		}
+		})
 	}
 
-	logger, start := r.logOperationStart(baseLogger, "update_with_lock", metadata)
+	logger.Debug("Updating document with optimistic lock")
 
 	req := opensearchapi.UpdateRequest{
 		Index:      index,
@@ -545,9 +384,7 @@ func (r *StorageRepository) UpdateWithOptimisticLock(ctx context.Context, index,
 
 	res, err := req.Do(ctx, r.client)
 	if err != nil {
-		r.logOperationEnd(logger, "update_with_lock", start, err, map[string]any{
-			"stage": "request_execution",
-		})
+		logger.Error("Failed to execute update with lock request", "error", err.Error())
 		return fmt.Errorf("%s: %w", constants.ErrOptimisticUpdate, err)
 	}
 	defer res.Body.Close()
@@ -561,54 +398,37 @@ func (r *StorageRepository) UpdateWithOptimisticLock(ctx context.Context, index,
 				ExpectedSeq: 0, // Would need to be extracted from params
 				Err:         fmt.Errorf("version conflict: %s", res.Status()),
 			}
-			r.logOperationEnd(logger, "update_with_lock", start, versionErr, map[string]any{
-				"stage":       "version_conflict",
-				"status_code": res.Status(),
-			})
+			logger.Warn("Version conflict during update", "status", res.Status())
 			return versionErr
 		}
 
-		apiErr := fmt.Errorf("status: %s", res.Status())
-		r.logOperationEnd(logger, "update_with_lock", start, apiErr, map[string]any{
-			"stage":       "response_processing",
-			"status_code": res.Status(),
-		})
+		logger.Error("Update with lock request failed", "status", res.Status())
 		return fmt.Errorf("%s: %s", constants.ErrOptimisticUpdate, res.Status())
 	}
 
-	r.logOperationEnd(logger, "update_with_lock", start, nil, map[string]any{
-		"status_code": res.Status(),
-	})
+	logger.Debug("Update with optimistic lock completed successfully", "status", res.Status())
 	return nil
 }
 
 // HealthCheck checks the health of the OpenSearch connection
 func (r *StorageRepository) HealthCheck(ctx context.Context) error {
-	baseLogger := logging.FromContext(ctx, r.logger)
-	logger, start := r.logOperationStart(baseLogger, "health_check", nil)
+	logger := logging.FromContext(ctx, r.logger)
+	logger.Debug("Checking OpenSearch health")
 
 	req := opensearchapi.InfoRequest{}
 
 	res, err := req.Do(ctx, r.client)
 	if err != nil {
-		r.logOperationEnd(logger, "health_check", start, err, map[string]any{
-			"stage": "request_execution",
-		})
+		logger.Error("Failed to execute health check request", "error", err.Error())
 		return fmt.Errorf("%s: %w", constants.ErrHealthCheck, err)
 	}
 	defer res.Body.Close()
 
 	if res.IsError() {
-		apiErr := fmt.Errorf("status: %s", res.Status())
-		r.logOperationEnd(logger, "health_check", start, apiErr, map[string]any{
-			"stage":       "response_processing",
-			"status_code": res.Status(),
-		})
+		logger.Error("Health check request failed", "status", res.Status())
 		return fmt.Errorf("%s: %s", constants.ErrHealthCheck, res.Status())
 	}
 
-	r.logOperationEnd(logger, "health_check", start, nil, map[string]any{
-		"status_code": res.Status(),
-	})
+	logger.Debug("Health check completed successfully", "status", res.Status())
 	return nil
 }

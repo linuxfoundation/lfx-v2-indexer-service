@@ -1,13 +1,11 @@
 // Copyright The Linux Foundation and each contributor to LFX.
 // SPDX-License-Identifier: MIT
 
-package entities
+package contracts
 
 import (
 	"fmt"
 	"time"
-
-	"github.com/linuxfoundation/lfx-indexer-service/pkg/constants"
 )
 
 // TransactionBody represents the OpenSearch document structure
@@ -75,71 +73,6 @@ type LFXTransaction struct {
 	// Enhanced fields for improved validation and processing
 	IsV1             bool        `json:"-"`
 	ParsedPrincipals []Principal `json:"-"`
-}
-
-// =================
-// BASIC HELPERS (Inherent to data structure)
-// =================
-
-// IsCreateAction returns true if this is a create action (both V1 and V2)
-func (t *LFXTransaction) IsCreateAction() bool {
-	return t.Action == constants.ActionCreate || t.Action == constants.ActionCreated
-}
-
-// IsUpdateAction returns true if this is an update action (both V1 and V2)
-func (t *LFXTransaction) IsUpdateAction() bool {
-	return t.Action == constants.ActionUpdate || t.Action == constants.ActionUpdated
-}
-
-// IsDeleteAction returns true if this is a delete action (both V1 and V2)
-func (t *LFXTransaction) IsDeleteAction() bool {
-	return t.Action == constants.ActionDelete || t.Action == constants.ActionDeleted
-}
-
-// IsV1Transaction returns true if this transaction originated from V1 system
-func (t *LFXTransaction) IsV1Transaction() bool {
-	return t.IsV1
-}
-
-// =================
-// BASIC GETTERS (Simple data access)
-// =================
-
-// GetObjectID returns the parsed object ID
-func (t *LFXTransaction) GetObjectID() string {
-	return t.ParsedObjectID
-}
-
-// GetObjectType returns the object type
-func (t *LFXTransaction) GetObjectType() string {
-	return t.ObjectType
-}
-
-// GetParsedData returns the parsed data
-func (t *LFXTransaction) GetParsedData() map[string]any {
-	return t.ParsedData
-}
-
-// GetParsedPrincipals returns the parsed principals
-func (t *LFXTransaction) GetParsedPrincipals() []Principal {
-	return t.ParsedPrincipals
-}
-
-// GetTimestamp returns the transaction timestamp
-func (t *LFXTransaction) GetTimestamp() time.Time {
-	return t.Timestamp
-}
-
-// =================
-// SIMPLE TRANSACTION BODY HELPERS
-// =================
-
-// NewTransactionBody creates a new transaction body
-func NewTransactionBody() *TransactionBody {
-	latest := true
-	return &TransactionBody{
-		Latest: &latest,
-	}
 }
 
 // =================

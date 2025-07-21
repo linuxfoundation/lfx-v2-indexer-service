@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/entities"
+	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/contracts"
 	"github.com/linuxfoundation/lfx-indexer-service/internal/mocks"
 	"github.com/linuxfoundation/lfx-indexer-service/pkg/constants"
 	"github.com/linuxfoundation/lfx-indexer-service/pkg/logging"
@@ -23,7 +23,7 @@ func TestIndexerService_ProcessTransaction_Success(t *testing.T) {
 	service := NewIndexerService(mockStorageRepo, mockMessagingRepo, logger)
 
 	// Test data
-	transaction := &entities.LFXTransaction{
+	transaction := &contracts.LFXTransaction{
 		Action:     constants.ActionCreated,
 		ObjectType: constants.ObjectTypeProject,
 		Headers: map[string]string{
@@ -35,7 +35,7 @@ func TestIndexerService_ProcessTransaction_Success(t *testing.T) {
 			"public": true, // Required for access control
 		},
 		Timestamp: time.Now(),
-		ParsedPrincipals: []entities.Principal{
+		ParsedPrincipals: []contracts.Principal{
 			{
 				Principal: "test_user",
 				Email:     "test@example.com",
@@ -67,7 +67,7 @@ func TestIndexerService_ProcessTransaction_EnrichmentSuccess(t *testing.T) {
 	service := NewIndexerService(mockStorageRepo, mockMessagingRepo, logger)
 
 	// Test data - transaction without parsed principals
-	transaction := &entities.LFXTransaction{
+	transaction := &contracts.LFXTransaction{
 		Action:     constants.ActionUpdated,
 		ObjectType: constants.ObjectTypeProject,
 		Headers: map[string]string{
@@ -104,7 +104,7 @@ func TestIndexerService_ProcessTransaction_InvalidAction(t *testing.T) {
 	service := NewIndexerService(mockStorageRepo, mockMessagingRepo, logger)
 
 	// Test data with invalid action
-	transaction := &entities.LFXTransaction{
+	transaction := &contracts.LFXTransaction{
 		Action:     "invalid-action",
 		ObjectType: constants.ObjectTypeProject,
 		Data: map[string]any{
@@ -132,7 +132,7 @@ func TestIndexerService_ProcessTransaction_InvalidObjectType(t *testing.T) {
 	service := NewIndexerService(mockStorageRepo, mockMessagingRepo, logger)
 
 	// Test data with invalid object type
-	transaction := &entities.LFXTransaction{
+	transaction := &contracts.LFXTransaction{
 		Action:     constants.ActionCreated,
 		ObjectType: "invalid-type",
 		Data: map[string]any{
@@ -160,7 +160,7 @@ func TestIndexerService_ProcessTransaction_BasicValidation(t *testing.T) {
 	service := NewIndexerService(mockStorageRepo, mockMessagingRepo, logger)
 
 	// Test that basic processing works and mocks are functional
-	transaction := &entities.LFXTransaction{
+	transaction := &contracts.LFXTransaction{
 		Action:     constants.ActionCreated,
 		ObjectType: constants.ObjectTypeProject,
 		Headers: map[string]string{
@@ -172,7 +172,7 @@ func TestIndexerService_ProcessTransaction_BasicValidation(t *testing.T) {
 			"public": true, // Required for access control
 		},
 		Timestamp: time.Now(),
-		ParsedPrincipals: []entities.Principal{
+		ParsedPrincipals: []contracts.Principal{
 			{
 				Principal: "test_user",
 				Email:     "test@example.com",
@@ -284,14 +284,14 @@ func TestIndexerService_ValidateObjectType_RegistryBased(t *testing.T) {
 	service := NewIndexerService(mockStorageRepo, mockMessagingRepo, logger)
 
 	// Test valid object type (project is registered in the enricher registry)
-	validTransaction := &entities.LFXTransaction{
+	validTransaction := &contracts.LFXTransaction{
 		ObjectType: constants.ObjectTypeProject,
 	}
 	err := service.ValidateObjectType(validTransaction)
 	assert.NoError(t, err, "Project object type should be valid")
 
 	// Test invalid object type (committee is not registered in the enricher registry)
-	invalidTransaction := &entities.LFXTransaction{
+	invalidTransaction := &contracts.LFXTransaction{
 		ObjectType: constants.ObjectTypeCommittee,
 	}
 	err = service.ValidateObjectType(invalidTransaction)
@@ -299,7 +299,7 @@ func TestIndexerService_ValidateObjectType_RegistryBased(t *testing.T) {
 	assert.Contains(t, err.Error(), "no enricher found for object type: committee")
 
 	// Test completely unknown object type
-	unknownTransaction := &entities.LFXTransaction{
+	unknownTransaction := &contracts.LFXTransaction{
 		ObjectType: "unknown-type",
 	}
 	err = service.ValidateObjectType(unknownTransaction)

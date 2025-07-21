@@ -7,11 +7,10 @@ A high-performance, indexer service for the LFX V2 platform that processes resou
 The LFX V2 Indexer Service is responsible for:
 - **Message Processing**: NATS stream processing with queue group load balancing across multiple instances
 - **Transaction Enrichment**: JWT authentication, data validation, and principal parsing with delegation support
-- **Search Indexing**: High-performance OpenSearch document indexing with optimistic concurrency control  
-- **Data Consistency**: Event-driven janitor service for conflict resolution (production-proven pattern)
+- **Search Indexing**: OpenSearch document indexing with optimistic concurrency control  
+- **Data Consistency**: Event-driven janitor service for conflict resolution 
 - **Dual Format Support**: Both LFX v2 (past-tense actions) and legacy v1 (present-tense actions) message formats
 - **Health Monitoring**: Kubernetes-ready health check endpoints
-- **Clean Architecture**: Maintainable, testable code following clean architecture principles
 
 ## 🚀 Quick Start
 
@@ -68,7 +67,6 @@ curl http://localhost:8080/health   # General health
 
 ## 🏗️ Architecture Overview
 
-The service follows Clean Architecture principles with clear separation of concerns:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -87,14 +85,14 @@ The service follows Clean Architecture principles with clear separation of conce
 ├─────────────────────────────────────────────────────────────────┤
 │  Domain Layer (Business Logic)                                 │
 │  ├─ IndexerService - Consolidated transaction + health logic  │
-│  ├─ LFXTransaction Entity - Domain model with validation      │
+│  ├─ Contracts Package - Pure domain interfaces & entities    │
 │  └─ Repository Interfaces - Clean abstractions                │
 ├─────────────────────────────────────────────────────────────────┤
 │  Infrastructure Layer (External Services)                      │
 │  ├─ MessagingRepository - NATS client with queue groups       │
 │  ├─ StorageRepository - OpenSearch client                     │
 │  ├─ AuthRepository - JWT validation (Heimdall integration)    │
-│  ├─ JanitorService - Event-driven conflict resolution         │
+│  ├─ CleanupRepository - Background cleanup operations         │
 │  └─ Container - Pure dependency injection                     │
 └─────────────────────────────────────────────────────────────────┘
                                  │
@@ -138,16 +136,17 @@ graph TB
     MESSAGE_PROCESSOR["MessageProcessor<br/>(Workflow Coordination)"]
     
     %% Domain Layer
-    INDEXER_SVC["IndexerService<br/>(Business Logic + Health)"]
-    AUTH_REPO["AuthRepository<br/>(JWT Validation)"]
-    TRANSACTION_ENTITY["LFXTransaction<br/>(Domain Model)"]
+    INDEXER_SVC["IndexerService<br/>(Business Logic + Health + Action Validation)"]
+    CONTRACTS_PKG["Contracts Package<br/>(Pure Domain Interfaces & Entities)"]
+    TRANSACTION_ENTITY["LFXTransaction Entity<br/>(Pure Data Structure)"]
     
     %% Infrastructure Layer
     STORAGE_REPO["StorageRepository<br/>(OpenSearch Client)"]
+    AUTH_REPO["AuthRepository<br/>(JWT Validation)"]
     OPENSEARCH["OpenSearch Cluster<br/>resources index"]
     
-    %% Janitor System
-    JANITOR_SVC["JanitorService<br/>(Background Cleanup)"]
+    %% Cleanup System
+    CLEANUP_REPO["CleanupRepository<br/>(Background Cleanup)"]
     
     %% External Services
     JWT_SERVICE["Heimdall JWT Service<br/>(Token Validation)"]
@@ -175,11 +174,14 @@ graph TB
     %% Processing Flow
     UNIFIED_HANDLER --> MESSAGE_PROCESSOR
     MESSAGE_PROCESSOR --> INDEXER_SVC
-    MESSAGE_PROCESSOR --> JANITOR_SVC
+    MESSAGE_PROCESSOR --> CLEANUP_REPO
     
+    INDEXER_SVC --> CONTRACTS_PKG
     INDEXER_SVC --> TRANSACTION_ENTITY
     INDEXER_SVC --> AUTH_REPO
     INDEXER_SVC --> STORAGE_REPO
+    
+    CONTRACTS_PKG --> TRANSACTION_ENTITY
     
     STORAGE_REPO --> OPENSEARCH
     AUTH_REPO --> JWT_SERVICE
@@ -191,8 +193,8 @@ graph TB
     classDef external fill:#fff3e0,stroke:#f57c00,stroke-width:2px
     
     class MESSAGE_PROCESSOR,UNIFIED_HANDLER application
-    class INDEXER_SVC,TRANSACTION_ENTITY,AUTH_REPO domain
-    class CONTAINER,MSG_REPO,STORAGE_REPO,JANITOR_SVC infrastructure
+    class INDEXER_SVC,CONTRACTS_PKG,TRANSACTION_ENTITY domain
+    class CONTAINER,MSG_REPO,STORAGE_REPO,AUTH_REPO,CLEANUP_REPO infrastructure
     class V2_APPS,V1_APPS,JWT_SERVICE,OPENSEARCH,NATS_SERVER external
 ```
 
@@ -210,9 +212,9 @@ sequenceDiagram
     participant TE as LFXTransaction
     participant SR as StorageRepository
     participant OS as OpenSearch
-    participant JS as JanitorService
+    participant CR as CleanupRepository
 
-    Note over NATS,JS: Clean Architecture Message Processing Flow
+    Note over NATS,CR: Message Processing Flow
 
     %% Message Arrival & Presentation Layer
     NATS->>MR: NATS Message arrives<br/>Subject: lfx.index.project OR lfx.v1.index.project<br/>Queue: lfx.indexer.queue
@@ -226,13 +228,13 @@ sequenceDiagram
     
     %% Transaction Creation & Validation
     MP->>TE: createTransaction(data, subject)
-    TE->>TE: Parse message format<br/>Extract object type from subject<br/>Validate required fields
-    TE-->>MP: LFXTransaction entity
+    TE->>TE: Parse message format<br/>Extract object type from subject<br/>Validate required fields (pure data)
+    TE-->>MP: LFXTransaction entity (clean data structure)
     
     %% Domain Layer Business Logic
     MP->>IS: ProcessTransaction(ctx, transaction, index)
     
-    Note over IS: Consolidated processing:<br/>• EnrichTransaction()<br/>• GenerateTransactionBody()<br/>• Index document
+    Note over IS: Consolidated processing:<br/>• EnrichTransaction() with action validation<br/>• GenerateTransactionBody()<br/>• Index document<br/>(Action helpers moved to service layer)
     
     %% Authentication & Authorization
     IS->>AR: ParsePrincipals(ctx, headers)
@@ -253,8 +255,8 @@ sequenceDiagram
         
         %% Background Conflict Resolution
         IS-->>MP: ProcessingResult{Success: true, DocumentID}
-        MP->>JS: CheckItem(documentID)
-        Note over JS: Background cleanup<br/>Event-driven processing
+        MP->>CR: CheckItem(documentID)
+        Note over CR: Background cleanup<br/>Event-driven processing
         
     else Index Conflict/Error
         OS-->>SR: 409 Conflict / 4xx Error
@@ -308,8 +310,8 @@ PORT=8080                                    # Health check server port
 LOG_LEVEL=info                               # Logging level (debug,info,warn,error)
 LOG_FORMAT=text                              # Log format (text,json)
 
-# Janitor Service (Background Cleanup)
-JANITOR_ENABLED=true                         # Enable janitor service
+# Cleanup Service (Background Cleanup)
+CLEANUP_ENABLED=true                         # Enable cleanup service
 ```
 
 ### NATS Subject Patterns & Load Balancing
@@ -337,13 +339,14 @@ JANITOR_ENABLED=true                         # Enable janitor service
 │   │   ├── message_processor.go  # Message processing coordination
 │   │   └── message_processor_test.go # Application layer tests
 │   ├── domain/                   # Domain layer (business logic)
-│   │   ├── contracts/            # Domain contracts/interfaces
+│   │   ├── contracts/            # Domain contracts/interfaces & entities
+│   │   │   ├── auth.go           # Auth repository interface
+│   │   │   ├── cleanup.go        # Cleanup repository interface
 │   │   │   ├── messaging.go      # Messaging repository interface
-│   │   │   └── storage.go        # Storage repository interface
-│   │   ├── entities/             # Domain entities
-│   │   │   └── transaction.go    # LFX transaction entity & validation
+│   │   │   ├── storage.go        # Storage repository interface
+│   │   │   └── transaction.go    # Transaction interfaces & entity types (pure data)
 │   │   └── services/             # Domain services
-│   │       ├── indexer_service.go # Core indexer business logic
+│   │       ├── indexer_service.go # Core indexer business logic + action validation
 │   │       └── indexer_service_test.go # Domain service tests
 │   ├── infrastructure/           # Infrastructure layer
 │   │   ├── auth/                 # Authentication
@@ -352,9 +355,9 @@ JANITOR_ENABLED=true                         # Enable janitor service
 │   │   ├── config/               # Configuration management
 │   │   │   ├── app_config.go     # Application configuration
 │   │   │   └── cli_config.go     # CLI configuration
-│   │   ├── janitor/              # Background cleanup service
-│   │   │   ├── janitor_service.go # Event-driven conflict resolution
-│   │   │   └── janitor_service_test.go # Janitor tests
+│   │   ├── cleanup/               # Background cleanup operations
+│   │   │   ├── cleanup_repository.go # Background cleanup repository
+│   │   │   └── cleanup_repository_test.go # Cleanup tests
 │   │   ├── messaging/            # NATS messaging
 │   │   │   ├── messaging_repository.go # NATS client wrapper
 │   │   │   └── messaging_repository_test.go # Messaging tests
@@ -388,8 +391,6 @@ JANITOR_ENABLED=true                         # Enable janitor service
 │       └── testing.go            # Test logging utilities
 ├── deployment/                   # Deployment configurations
 │   └── deployment.yaml          # Kubernetes deployment
-├── docs/                         # Documentation
-│   └── MOCK_DATA_SUPPORT_PLAN.md # Mock data support documentation
 ├── Dockerfile                    # Container definition
 ├── Makefile                      # Build automation
 ├── go.mod                        # Go module definition
@@ -405,8 +406,8 @@ JANITOR_ENABLED=true                         # Enable janitor service
 | **Entry Point** | `cmd/lfx-indexer/main.go` | Pure application startup and dependency injection |
 | **Presentation** | `IndexingMessageHandler`, `HealthHandler` | NATS protocol concerns, message parsing, response handling, health checks |
 | **Application** | `MessageProcessor` | Workflow coordination, use case orchestration |
-| **Domain** | `IndexerService`, `LFXTransaction`, Repository Interfaces | Business logic, domain rules, data validation |
-| **Infrastructure** | `Container`, `MessagingRepository`, `StorageRepository`, `AuthRepository`, `JanitorService` | External service integration, data persistence, event-driven processing |
+| **Domain** | `IndexerService`, `Contracts Package`, `LFXTransaction Entity` | Business logic, action validation, pure domain data structures, repository interfaces |
+| **Infrastructure** | `Container`, `MessagingRepository`, `StorageRepository`, `AuthRepository`, `CleanupRepository` | External service integration, data persistence, event-driven processing |
 
 ## 🧑‍💻 Development
 
@@ -568,6 +569,9 @@ spec:
     matchLabels:
       app: lfx-indexer-service
   template:
+    metadata:
+      labels:
+        app: lfx-indexer-service
     spec:
       containers:
       - name: lfx-indexer
@@ -591,8 +595,6 @@ spec:
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the MIT License.
 
 ---
-
-**Contributing**: Please follow the clean architecture principles and include comprehensive tests for any new features.
