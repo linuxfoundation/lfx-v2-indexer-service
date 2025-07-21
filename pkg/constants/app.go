@@ -1,6 +1,7 @@
 // Copyright The Linux Foundation and each contributor to LFX.
 // SPDX-License-Identifier: MIT
 
+// Package constants defines application-wide constants for the LFX indexer service.
 package constants
 
 import "time"

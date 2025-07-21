@@ -1,6 +1,7 @@
 // Copyright The Linux Foundation and each contributor to LFX.
 // SPDX-License-Identifier: MIT
 
+// Package auth provides authentication and authorization infrastructure for the indexer service.
 package auth
 
 import (
@@ -27,9 +28,13 @@ type HeimdallClaims struct {
 
 // Validate provides additional middleware validation of any claims defined in HeimdallClaims
 func (c *HeimdallClaims) Validate(ctx context.Context) error {
+	// Create a basic logger for validation - this method doesn't have access to AuthRepository logger
+	logger := slog.With("component", "auth_validation")
 	if c.Principal == "" {
+		logger.WarnContext(ctx, "Principal validation failed: missing principal")
 		return errors.New(constants.ErrPrincipalMissing)
 	}
+	logger.DebugContext(ctx, "Principal validation passed", "principal", c.Principal)
 	return nil
 }
 
@@ -274,11 +279,15 @@ func (r *AuthRepository) HealthCheck(ctx context.Context) error {
 		return errors.New("auth repository logger not initialized")
 	}
 
+	r.logger.DebugContext(ctx, "Auth repository health check initiated")
+
+	// Check if validator is properly initialized
 	if r.validator == nil {
-		r.logger.Error("Health check failed: JWT validator not initialized")
+		r.logger.ErrorContext(ctx, "Auth repository health check failed: validator not initialized")
 		return errors.New(constants.ErrJWTValidatorNotInit)
 	}
 
+	r.logger.DebugContext(ctx, "Auth repository health check passed")
 	return nil
 }
 

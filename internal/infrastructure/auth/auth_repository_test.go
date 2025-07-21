@@ -22,7 +22,7 @@ const (
 	testIssuer   = "https://test.auth0.com/"
 	testAudience = "test-audience"
 	testJWKSURL  = "https://test.auth0.com/.well-known/jwks.json"
-	testToken    = "eyJhbGciOiJQUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.invalid-signature"
+	testToken    = "eyJhbGciOiJQUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.invalid-signature" // #nosec G101 - This is a test JWT token with invalid signature
 )
 
 // Helper function to create a test logger
@@ -404,7 +404,7 @@ func TestAuthRepository_HelperMethods(t *testing.T) {
 		assert.Equal(t, "<too_short>", result)
 
 		// Test long token
-		longToken := "eyJhbGciOiJQUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.invalid-signature"
+		longToken := "eyJhbGciOiJQUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.invalid-signature" // #nosec G101 - This is a test JWT token with invalid signature
 		result = repo.safeTokenLog(longToken)
 		assert.Contains(t, result, "...")
 		assert.True(t, len(result) < len(longToken))
@@ -412,6 +412,8 @@ func TestAuthRepository_HelperMethods(t *testing.T) {
 
 	t.Run("generateAuthID", func(t *testing.T) {
 		id1 := repo.generateAuthID()
+		// Small delay to ensure different timestamps
+		time.Sleep(1 * time.Microsecond)
 		id2 := repo.generateAuthID()
 
 		assert.NotEqual(t, id1, id2)

@@ -1,6 +1,7 @@
 // Copyright The Linux Foundation and each contributor to LFX.
 // SPDX-License-Identifier: MIT
 
+// Package messaging provides NATS-based messaging infrastructure for the indexer service.
 package messaging
 
 import (
@@ -40,7 +41,7 @@ func NewMessagingRepository(conn *nats.Conn, authRepo contracts.AuthRepository, 
 		isShuttingDown: false,
 	}
 
-	// Log initialization 
+	// Log initialization
 	msgLogger.Info("NATS messaging repository initialized", "drain_timeout", drainTimeout, "auth_repo_configured", authRepo != nil)
 
 	return repo
@@ -55,7 +56,7 @@ func (r *MessagingRepository) Subscribe(ctx context.Context, subject string, han
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.logger.Info("Creating NATS subscription", "subject", subject)
+	r.logger.InfoContext(ctx, "Creating NATS subscription", "subject", subject)
 
 	// Create the NATS message handler
 	natsHandler := func(msg *nats.Msg) {
@@ -89,7 +90,7 @@ func (r *MessagingRepository) QueueSubscribe(ctx context.Context, subject string
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.logger.Info("Creating NATS queue subscription", "subject", subject, "queue", queue)
+	r.logger.InfoContext(ctx, "Creating NATS queue subscription", "subject", subject, "queue", queue)
 
 	// Create the NATS message handler
 	natsHandler := func(msg *nats.Msg) {
@@ -123,7 +124,7 @@ func (r *MessagingRepository) QueueSubscribeWithReply(ctx context.Context, subje
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.logger.Info("Creating NATS queue subscription with reply", "subject", subject, "queue", queue)
+	r.logger.InfoContext(ctx, "Creating NATS queue subscription with reply", "subject", subject, "queue", queue)
 
 	// Create the NATS message handler with reply support
 	natsHandler := func(msg *nats.Msg) {

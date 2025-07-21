@@ -33,9 +33,8 @@ func (h *IndexingMessageHandler) Handle(ctx context.Context, data []byte, subjec
 	// Determine message version and delegate to appropriate processor method
 	if strings.HasPrefix(subject, constants.FromV1Prefix) {
 		return h.messageProcessor.ProcessV1IndexingMessage(ctx, data, subject)
-	} else {
-		return h.messageProcessor.ProcessIndexingMessage(ctx, data, subject)
 	}
+	return h.messageProcessor.ProcessIndexingMessage(ctx, data, subject)
 }
 
 // HandleWithReply processes indexing messages with NATS reply support

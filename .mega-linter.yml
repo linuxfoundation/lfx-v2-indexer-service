@@ -40,3 +40,9 @@ API_SPECTRAL_FILTER_REGEX_EXCLUDE: "gen/"
 # Ignore YAML files with templating macros; these typically fail linting and/or
 # schema checking.
 FILTER_REGEX_EXCLUDE: '(templates/.*\.yml|templates/.*\.yaml)'
+
+# Go linter configuration
+GO_REVIVE_FILTER_REGEX_EXCLUDE: "(stutters|Repository by other packages|function-length|file-length|cyclomatic)"
+
+# Gitleaks configuration to use our ignore file
+REPOSITORY_GITLEAKS_CONFIG_FILE: ".gitleaksignore"

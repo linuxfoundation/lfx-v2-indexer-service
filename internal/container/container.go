@@ -1,6 +1,7 @@
 // Copyright The Linux Foundation and each contributor to LFX.
 // SPDX-License-Identifier: MIT
 
+// Package container provides dependency injection and service container functionality.
 package container
 
 import (
@@ -450,9 +451,11 @@ func (c *Container) GracefulShutdown() error {
 // Shutdown gracefully shuts down all services and connections
 func (c *Container) Shutdown(ctx context.Context) error {
 	logger := logging.WithComponent(c.Logger, constants.ComponentContainer)
+	logger.InfoContext(ctx, "Initiating container shutdown sequence")
 
 	// Stop cleanup service first
 	if c.CleanupRepository != nil {
+		logger.DebugContext(ctx, "Shutting down cleanup repository")
 		c.CleanupRepository.Shutdown()
 	}
 

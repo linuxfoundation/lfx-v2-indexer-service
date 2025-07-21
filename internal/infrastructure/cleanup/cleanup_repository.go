@@ -1,15 +1,18 @@
 // Copyright The Linux Foundation and each contributor to LFX.
 // SPDX-License-Identifier: MIT
 
+// Package cleanup provides background cleanup services for managing indexed documents.
 package cleanup
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"expvar"
 	"fmt"
 	"log/slog"
-	mathRand "math/rand"
+	"math/big"
 	"strings"
 	"sync"
 	"time"
@@ -43,6 +46,7 @@ type CleanupRepository struct {
 	logger      *slog.Logger
 	index       string
 	workerWG    sync.WaitGroup
+	retryWG     sync.WaitGroup // Track async retry goroutines
 	shutdown    chan struct{}
 	isRunning   bool
 	mu          sync.RWMutex
@@ -197,6 +201,10 @@ func (j *CleanupRepository) Shutdown() {
 	// Wait for worker to finish
 	j.logger.Info("Waiting for janitor worker to finish...")
 	j.workerWG.Wait()
+
+	// Wait for any pending retry goroutines to complete
+	j.logger.Info("Waiting for pending retry operations to complete...")
+	j.retryWG.Wait()
 
 	j.logger.Info("Janitor service shutdown completed")
 }
@@ -369,8 +377,9 @@ func (j *CleanupRepository) processItem(ctx context.Context, objectRef *string) 
 
 		// Update the hit to `latest=false` with optimistic concurrency control
 		if err := j.updateLatestFlag(ctx, doc, false, *objectRef); err != nil {
-			// Check for version conflict
-			if vErr, ok := err.(*contracts.VersionConflictError); ok {
+			// Check for version conflict using errors.As for wrapped errors
+			var vErr *contracts.VersionConflictError
+			if errors.As(err, &vErr) {
 				j.logger.Warn("Version conflict detected, scheduling retry",
 					"object_ref", safeLogString(objectRef),
 					"document_id", vErr.DocumentID,
@@ -454,14 +463,23 @@ func (j *CleanupRepository) updateLatestFlag(ctx context.Context, doc contracts.
 
 // asyncRetry handles version conflicts with enhanced logging
 func (j *CleanupRepository) asyncRetry(ctx context.Context, objectRef, docID string) {
-	retryDelay := time.Duration(5+mathRand.Intn(5)) * time.Second
+	// Use cryptographically secure random number for retry delay (5-10 seconds)
+	randomDelay, err := rand.Int(rand.Reader, big.NewInt(5))
+	if err != nil {
+		// Fallback to fixed delay if crypto/rand fails
+		randomDelay = big.NewInt(2)
+	}
+	retryDelay := time.Duration(5+randomDelay.Int64()) * time.Second
 
 	j.logger.Info("Scheduling janitor retry due to version conflict",
 		"object_ref", objectRef,
 		"document_id", docID,
 		"retry_delay", retryDelay)
 
+	j.retryWG.Add(1)
 	go func() {
+		defer j.retryWG.Done()
+
 		select {
 		case <-time.After(retryDelay):
 			j.logger.Info("Executing scheduled janitor retry",

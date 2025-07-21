@@ -1,6 +1,7 @@
 // Copyright The Linux Foundation and each contributor to LFX.
 // SPDX-License-Identifier: MIT
 
+// Package services provides domain services for the LFX indexer application.
 package services
 
 import (
@@ -736,11 +737,14 @@ func (s *IndexerService) CheckReadiness(ctx context.Context) *HealthStatus {
 
 // CheckLiveness performs liveness checks with simplified caching
 func (s *IndexerService) CheckLiveness(ctx context.Context) *HealthStatus {
+	s.logger.DebugContext(ctx, "Liveness check initiated")
+
 	// Simple inline cache check
 	s.mu.RLock()
 	if s.lastLiveness != nil && time.Since(s.lastLiveness.timestamp) < s.cacheDuration {
 		cached := s.lastLiveness.status
 		s.mu.RUnlock()
+		s.logger.DebugContext(ctx, "Liveness check completed using cache", "status", cached.Status)
 		return cached
 	}
 	s.mu.RUnlock()

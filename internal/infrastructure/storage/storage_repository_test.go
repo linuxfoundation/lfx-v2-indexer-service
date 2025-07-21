@@ -60,7 +60,7 @@ func TestStorageRepository_StructureValidation(t *testing.T) {
 	}
 
 	// Verify all expected methods exist on the repository
-	t.Run("methods_exist", func(t *testing.T) {
+	t.Run("methods_exist", func(_ *testing.T) {
 		// These tests verify method signatures exist
 		var _ func(context.Context, string, string, io.Reader) error = repo.Index
 		var _ func(context.Context, string, map[string]any) ([]map[string]any, error) = repo.Search
@@ -110,7 +110,7 @@ func TestStorageRepository_OptimisticUpdateParams(t *testing.T) {
 	t.Run("optimistic_params_construction", func(t *testing.T) {
 		seqNo := int64(1)
 		primaryTerm := int64(1)
-		
+
 		params := &contracts.OptimisticUpdateParams{
 			SeqNo:       &seqNo,
 			PrimaryTerm: &primaryTerm,
@@ -139,7 +139,7 @@ func TestStorageRepository_OptimisticUpdateParams(t *testing.T) {
 
 	t.Run("optimistic_params_partial_values", func(t *testing.T) {
 		seqNo := int64(42)
-		
+
 		// Test params with only one field set
 		params := &contracts.OptimisticUpdateParams{
 			SeqNo:       &seqNo,
@@ -167,7 +167,7 @@ func TestStorageRepository_BulkOperationEdgeCases(t *testing.T) {
 			{
 				Action: "update",
 				Index:  "test-index",
-				DocID:  "doc-2", 
+				DocID:  "doc-2",
 				Body:   strings.NewReader(`{"doc": {"field": "value2"}}`),
 			},
 			{
@@ -208,7 +208,7 @@ func TestStorageRepository_ParameterValidation(t *testing.T) {
 	// Test parameter validation scenarios that don't require external calls
 	t.Run("repository_initialization", func(t *testing.T) {
 		logger := setupTestLogger(t)
-		
+
 		// Test repository can be created with various client states
 		repo1 := &StorageRepository{
 			client: &opensearch.Client{},
@@ -267,7 +267,7 @@ func TestStorageRepository_ParameterValidation(t *testing.T) {
 //
 // Current test coverage:
 // ✅ Repository construction and initialization (TestNewStorageRepository)
-// ✅ Empty operations validation (TestBulkIndex_EmptyOperations) 
+// ✅ Empty operations validation (TestBulkIndex_EmptyOperations)
 // ✅ Method signature validation (TestStorageRepository_StructureValidation)
 // ✅ Contract construction and validation (BulkOperation, OptimisticUpdateParams)
 // ✅ Edge case handling (nil values, different operation types)

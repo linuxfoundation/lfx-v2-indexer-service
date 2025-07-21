@@ -1,6 +1,7 @@
 // Copyright The Linux Foundation and each contributor to LFX.
 // SPDX-License-Identifier: MIT
 
+// Package contracts defines interfaces and data structures for domain contracts.
 package contracts
 
 import (
@@ -10,7 +11,7 @@ import (
 // AuthRepository defines the contract for authentication operations
 // Handles JWT validation and principal parsing for authorization
 type AuthRepository interface {
-		// ValidateToken validates a JWT token and returns principal information
+	// ValidateToken validates a JWT token and returns principal information
 	ValidateToken(ctx context.Context, token string) (*Principal, error)
 
 	// ParsePrincipals parses principals from HTTP headers with delegation support

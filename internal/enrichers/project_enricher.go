@@ -1,6 +1,7 @@
 // Copyright The Linux Foundation and each contributor to LFX.
 // SPDX-License-Identifier: MIT
 
+// Package enrichers provides data enrichment functionality for different object types.
 package enrichers
 
 import (
@@ -44,11 +45,11 @@ func (e *ProjectEnricher) EnrichData(body *contracts.TransactionBody, transactio
 	body.ObjectID = objectID
 
 	// Set public flag - required for access control
-	if public, ok := data["public"].(bool); !ok {
+	public, ok := data["public"].(bool)
+	if !ok {
 		return fmt.Errorf("%s: missing or invalid public flag", constants.ErrMappingPublic)
-	} else {
-		body.Public = public
 	}
+	body.Public = public
 
 	// Set access control with reference implementation logic (computed defaults)
 	// Only apply defaults when fields are completely missing from data

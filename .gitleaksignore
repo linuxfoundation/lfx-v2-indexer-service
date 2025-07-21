@@ -3,19 +3,28 @@
 
 # Ignore false positives for legitimate code patterns
 
-# GitHub workflow secrets (legitimate usage)
+# GitHub Actions workflow files (using secrets correctly)
 .github/workflows/mega-linter.yml
 
 # JWT token validation code (not actual secrets)
 internal/infrastructure/auth/auth_repository.go
 internal/infrastructure/auth/auth_repository_test.go
 
-# Test files with mock data (all test files)
+# Configuration code with environment variable references (not hardcoded secrets)
+internal/infrastructure/config/app_config.go
+
+# Constants files with error messages and prefixes
+pkg/constants/auth.go
+
+# Test files with mock/example data
 **/*_test.go
 
-# Documentation examples
+# Documentation with examples
 README.md
 
-# Environment variable references in workflows
+# All YAML/YML files (contain env var references, not actual secrets)
 **/*.yml
 **/*.yaml
+
+# Messaging test files with mock tokens
+internal/infrastructure/messaging/messaging_repository_test.go

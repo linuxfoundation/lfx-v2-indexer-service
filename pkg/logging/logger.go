@@ -1,6 +1,7 @@
 // Copyright The Linux Foundation and each contributor to LFX.
 // SPDX-License-Identifier: MIT
 
+// Package logging provides structured logging functionality for the LFX indexer service.
 package logging
 
 import (

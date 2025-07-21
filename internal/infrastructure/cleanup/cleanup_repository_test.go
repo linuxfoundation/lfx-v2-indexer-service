@@ -213,7 +213,9 @@ func TestCleanupRepository_ProcessVersionConflict(t *testing.T) {
 	logger, _ := logging.TestLogger(t)
 	service := NewCleanupRepository(mockRepo, logger, "test-index")
 
-	ctx := context.Background()
+	// Use a cancelled context to prevent async retry from executing
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
 	objectRef := "test-object-ref"
 
 	seqNo1, primaryTerm1 := int64(1), int64(1)
@@ -329,8 +331,8 @@ func TestCleanupRepository_StartStopItemLoop(t *testing.T) {
 	// Stop the service
 	service.Shutdown()
 
-	// Wait a bit for shutdown to complete
-	time.Sleep(100 * time.Millisecond)
+	// Wait longer for shutdown to complete and ensure all goroutines are done
+	time.Sleep(200 * time.Millisecond)
 
 	// Verify it's no longer running
 	assert.False(t, service.IsRunning())
@@ -341,7 +343,7 @@ func TestCleanupRepository_ProcessQueuedItem(t *testing.T) {
 	logger, _ := logging.TestLogger(t)
 	service := NewCleanupRepository(mockRepo, logger, "test-index")
 
-	// Clear the channel
+	// Clear the channel first
 	for len(globalJanitorChan) > 0 {
 		<-globalJanitorChan
 	}

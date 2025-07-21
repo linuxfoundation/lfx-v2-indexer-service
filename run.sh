@@ -1,4 +1,6 @@
 #!/usr/bin/env sh
+# Copyright The Linux Foundation and each contributor to LFX.
+# SPDX-License-Identifier: MIT
 #
 # Build and run the application.
 

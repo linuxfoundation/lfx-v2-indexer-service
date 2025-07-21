@@ -1,6 +1,7 @@
 // Copyright The Linux Foundation and each contributor to LFX.
 // SPDX-License-Identifier: MIT
 
+// Package storage provides Elasticsearch-based storage infrastructure for the indexer service.
 package storage
 
 import (

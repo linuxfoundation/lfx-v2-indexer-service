@@ -15,7 +15,7 @@ The LFX V2 Indexer Service is responsible for:
 ## 🚀 Quick Start
 
 ### Prerequisites
-- **Go 1.23+**
+- **Go 1.24**
 - **NATS Server** (message streaming)  
 - **OpenSearch/Elasticsearch** (document indexing)
 - **Heimdall JWT Service** (authentication)

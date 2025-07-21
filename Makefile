@@ -1,3 +1,6 @@
+# Copyright The Linux Foundation and each contributor to LFX.
+# SPDX-License-Identifier: MIT
+
 # Variables
 APP_NAME := lfx-indexer
 VERSION := $(shell git describe --tags --always --dirty)

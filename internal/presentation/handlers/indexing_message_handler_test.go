@@ -53,9 +53,8 @@ func NewTestableIndexingMessageHandler(messageProcessor MessageProcessorInterfac
 func (h *TestableIndexingMessageHandler) Handle(ctx context.Context, data []byte, subject string) error {
 	if strings.HasPrefix(subject, constants.FromV1Prefix) {
 		return h.messageProcessor.ProcessV1IndexingMessage(ctx, data, subject)
-	} else {
-		return h.messageProcessor.ProcessIndexingMessage(ctx, data, subject)
 	}
+	return h.messageProcessor.ProcessIndexingMessage(ctx, data, subject)
 }
 
 // HandleWithReply processes indexing messages with NATS reply support (same logic as IndexingMessageHandler)
@@ -77,13 +76,13 @@ func (h *TestableIndexingMessageHandler) HandleWithReply(ctx context.Context, da
 }
 
 // Helper methods for testing (simplified versions)
-func (h *TestableIndexingMessageHandler) respondErrorWithContext(ctx context.Context, reply func([]byte) error, err error, msg string, subject string) {
+func (h *TestableIndexingMessageHandler) respondErrorWithContext(_ context.Context, reply func([]byte) error, _ error, msg string, _ string) {
 	if reply != nil {
 		_ = reply([]byte("ERROR: " + msg)) // Test helper - ignore reply errors
 	}
 }
 
-func (h *TestableIndexingMessageHandler) respondSuccessWithContext(ctx context.Context, reply func([]byte) error, subject string) {
+func (h *TestableIndexingMessageHandler) respondSuccessWithContext(_ context.Context, reply func([]byte) error, _ string) {
 	if reply != nil {
 		_ = reply([]byte("OK")) // Test helper - ignore reply errors
 	}
@@ -304,7 +303,7 @@ func TestIndexingMessageHandler_HandleWithReply_ReplyError(t *testing.T) {
 	subject := "lfx.index.project"
 	replyError := errors.New("reply error")
 
-	reply := func(data []byte) error {
+	reply := func(_ []byte) error {
 		return replyError
 	}
 
@@ -330,7 +329,7 @@ func TestIndexingMessageHandler_HandleWithReply_ProcessingErrorAndReplyError(t *
 	processingError := errors.New("processing error")
 	replyError := errors.New("reply error")
 
-	reply := func(data []byte) error {
+	reply := func(_ []byte) error {
 		return replyError
 	}
 
@@ -525,7 +524,7 @@ func TestIndexingMessageHandler_EdgeCases(t *testing.T) {
 		handler := NewTestableIndexingMessageHandler(mockProcessor)
 
 		ctx := context.Background()
-		var data []byte = nil
+		var data []byte
 		subject := "lfx.index.project"
 
 		mockProcessor.On("ProcessIndexingMessage", ctx, data, subject).Return(nil)

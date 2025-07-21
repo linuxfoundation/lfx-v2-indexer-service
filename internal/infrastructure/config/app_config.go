@@ -1,6 +1,7 @@
 // Copyright The Linux Foundation and each contributor to LFX.
 // SPDX-License-Identifier: MIT
 
+// Package config provides configuration management for the LFX indexer service.
 package config
 
 import (
@@ -47,7 +48,7 @@ type NATSConfig struct {
 type OpenSearchConfig struct {
 	URL      string        `json:"url"`
 	Username string        `json:"username"`
-	Password string        `json:"password"`
+	Password string        `json:"password"` // #nosec G101 - This is a configuration field, not a hardcoded password
 	Index    string        `json:"index"`
 	Timeout  time.Duration `json:"timeout"`
 }
@@ -304,25 +305,27 @@ func (c *AppConfig) validateJanitor() error {
 
 func getEnvStringWithLogging(key, defaultValue string, envVarsUsed, defaultsUsed map[string]bool, logger *slog.Logger) string {
 	if value := os.Getenv(key); value != "" {
+		logger.Debug("Using environment variable", "key", key, "value_set", true)
 		envVarsUsed[key] = true
 		return value
 	}
+	logger.Debug("Using default value for environment variable", "key", key, "default_value", defaultValue)
 	defaultsUsed[key] = true
 	return defaultValue
 }
 
 func getEnvIntWithLogging(key string, defaultValue int, envVarsUsed, defaultsUsed map[string]bool, logger *slog.Logger) int {
 	if value := os.Getenv(key); value != "" {
-		if intValue, err := strconv.Atoi(value); err == nil {
+		intValue, err := strconv.Atoi(value)
+		if err == nil {
 			envVarsUsed[key] = true
 			return intValue
-		} else {
-			logger.Warn("Invalid integer in environment variable, using default",
-				"key", key,
-				"invalid_value", value,
-				"error", err.Error(),
-				"default_value", defaultValue)
 		}
+		logger.Warn("Invalid integer in environment variable, using default",
+			"key", key,
+			"invalid_value", value,
+			"error", err.Error(),
+			"default_value", defaultValue)
 	}
 	defaultsUsed[key] = true
 	return defaultValue
@@ -330,16 +333,16 @@ func getEnvIntWithLogging(key string, defaultValue int, envVarsUsed, defaultsUse
 
 func getEnvBoolWithLogging(key string, defaultValue bool, envVarsUsed, defaultsUsed map[string]bool, logger *slog.Logger) bool {
 	if value := os.Getenv(key); value != "" {
-		if boolValue, err := strconv.ParseBool(value); err == nil {
+		boolValue, err := strconv.ParseBool(value)
+		if err == nil {
 			envVarsUsed[key] = true
 			return boolValue
-		} else {
-			logger.Warn("Invalid boolean in environment variable, using default",
-				"key", key,
-				"invalid_value", value,
-				"error", err.Error(),
-				"default_value", defaultValue)
 		}
+		logger.Warn("Invalid boolean in environment variable, using default",
+			"key", key,
+			"invalid_value", value,
+			"error", err.Error(),
+			"default_value", defaultValue)
 	}
 	defaultsUsed[key] = true
 	return defaultValue
@@ -347,16 +350,16 @@ func getEnvBoolWithLogging(key string, defaultValue bool, envVarsUsed, defaultsU
 
 func getEnvDurationWithLogging(key string, defaultValue time.Duration, envVarsUsed, defaultsUsed map[string]bool, logger *slog.Logger) time.Duration {
 	if value := os.Getenv(key); value != "" {
-		if duration, err := time.ParseDuration(value); err == nil {
+		duration, err := time.ParseDuration(value)
+		if err == nil {
 			envVarsUsed[key] = true
 			return duration
-		} else {
-			logger.Warn("Invalid duration in environment variable, using default",
-				"key", key,
-				"invalid_value", value,
-				"error", err.Error(),
-				"default_value", defaultValue)
 		}
+		logger.Warn("Invalid duration in environment variable, using default",
+			"key", key,
+			"invalid_value", value,
+			"error", err.Error(),
+			"default_value", defaultValue)
 	}
 	defaultsUsed[key] = true
 	return defaultValue

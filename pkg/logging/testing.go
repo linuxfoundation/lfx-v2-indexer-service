@@ -11,7 +11,7 @@ import (
 )
 
 // TestLogger creates a logger that captures output for testing
-func TestLogger(t *testing.T) (*slog.Logger, *bytes.Buffer) {
+func TestLogger(_ *testing.T) (*slog.Logger, *bytes.Buffer) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{
 		Level: slog.LevelDebug,
@@ -20,7 +20,7 @@ func TestLogger(t *testing.T) (*slog.Logger, *bytes.Buffer) {
 }
 
 // TestContext creates a context with request_id for testing
-func TestContext(t *testing.T, logger *slog.Logger) context.Context {
+func TestContext(_ *testing.T, logger *slog.Logger) context.Context {
 	ctx, _ := WithRequestID(context.Background(), logger)
 	return ctx
 }

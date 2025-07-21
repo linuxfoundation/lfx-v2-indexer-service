@@ -1,6 +1,7 @@
 // Copyright The Linux Foundation and each contributor to LFX.
 // SPDX-License-Identifier: MIT
 
+// Package application provides the core business logic and message processing for the indexer service.
 package application
 
 import (
@@ -24,9 +25,9 @@ import (
 // Handles both V2 and V1 message processing use cases
 type MessageProcessor struct {
 	// Dependencies
-	indexerService    *services.IndexerService         // Domain service for business logic
-	messagingRepo     contracts.MessagingRepository    // Infrastructure for NATS operations
-	cleanupRepository contracts.CleanupRepository      // Infrastructure for cleanup operations
+	indexerService    *services.IndexerService      // Domain service for business logic
+	messagingRepo     contracts.MessagingRepository // Infrastructure for NATS operations
+	cleanupRepository contracts.CleanupRepository   // Infrastructure for cleanup operations
 	logger            *slog.Logger
 
 	// Configuration
@@ -46,8 +47,8 @@ func NewMessageProcessor(
 		messagingRepo:     messagingRepo,
 		cleanupRepository: cleanupRepository,
 		logger:            logging.WithComponent(logger, "message_processor"),
-		index:          constants.DefaultIndex,
-		queue:          constants.DefaultQueue,
+		index:             constants.DefaultIndex,
+		queue:             constants.DefaultQueue,
 	}
 }
 

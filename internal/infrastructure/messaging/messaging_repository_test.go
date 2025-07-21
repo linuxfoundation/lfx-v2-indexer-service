@@ -65,7 +65,7 @@ func TestMessagingRepository_ValidateToken_NoAuthRepo(t *testing.T) {
 	repo := NewMessagingRepository(nil, nil, logger, 5*time.Second)
 
 	ctx := context.Background()
-	token := "test.jwt.token"
+	token := "test.jwt.token" // #nosec G101 - This is a test token, not a real secret
 
 	principal, err := repo.ValidateToken(ctx, token)
 
@@ -228,7 +228,7 @@ func TestMessagingRepository_PublicMethods(t *testing.T) {
 		assert.NotNil(t, status)
 		assert.Contains(t, status, "status")
 		assert.Contains(t, status, "component")
-		
+
 		// Should have basic connection info for nil connection
 		assert.Equal(t, "messaging_repository", status["component"])
 		assert.Equal(t, "initialized", status["status"])
@@ -243,12 +243,12 @@ func TestMessagingRepository_UtilityMethods(t *testing.T) {
 		// Test that metrics have expected structure
 		metrics := repo.GetMetrics()
 		assert.NotNil(t, metrics)
-		
+
 		// Verify expected keys exist
 		_, hasConnectionStatus := metrics["connection_status"]
 		_, hasTotalSubscriptions := metrics["total_subscriptions"]
 		_, hasActiveSubscriptions := metrics["active_subscriptions"]
-		
+
 		assert.True(t, hasConnectionStatus)
 		assert.True(t, hasTotalSubscriptions)
 		assert.True(t, hasActiveSubscriptions)
@@ -258,12 +258,12 @@ func TestMessagingRepository_UtilityMethods(t *testing.T) {
 		// Test connection status provides useful information
 		status := repo.GetConnectionStatus()
 		assert.NotNil(t, status)
-		
+
 		// Should have basic connection info
 		component, hasComponent := status["component"]
 		assert.True(t, hasComponent)
 		assert.Equal(t, "messaging_repository", component.(string))
-		
+
 		statusValue, hasStatus := status["status"]
 		assert.True(t, hasStatus)
 		assert.Equal(t, "initialized", statusValue.(string))
@@ -273,7 +273,7 @@ func TestMessagingRepository_UtilityMethods(t *testing.T) {
 		// Test subscription count consistency
 		initialCount := repo.GetSubscriptionCount()
 		assert.Equal(t, 0, initialCount)
-		
+
 		// Test that connection state is consistent
 		assert.False(t, repo.IsConnected())
 		assert.Nil(t, repo.GetConnection())
@@ -430,7 +430,7 @@ func TestMessagingRepository_IntegrationWithNATS(t *testing.T) {
 		mockHandler := &MockMessageHandler{}
 		mockHandler.On("Handle", mock.Anything, mock.MatchedBy(func(data []byte) bool {
 			return string(data) == string(testData)
-		}), subject).Run(func(args mock.Arguments) {
+		}), subject).Run(func(_ mock.Arguments) {
 			messageReceived <- true
 		}).Return(nil)
 

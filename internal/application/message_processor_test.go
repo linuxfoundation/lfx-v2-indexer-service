@@ -72,7 +72,11 @@ func (m *MockMessagingRepository) ValidateToken(ctx context.Context, token strin
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*contracts.Principal), args.Error(1)
+	principal, ok := args.Get(0).(*contracts.Principal)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return principal, args.Error(1)
 }
 
 func (m *MockMessagingRepository) ParsePrincipals(ctx context.Context, headers map[string]string) ([]contracts.Principal, error) {
@@ -80,7 +84,11 @@ func (m *MockMessagingRepository) ParsePrincipals(ctx context.Context, headers m
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]contracts.Principal), args.Error(1)
+	principals, ok := args.Get(0).([]contracts.Principal)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return principals, args.Error(1)
 }
 
 type MockStorageRepository struct {
@@ -193,7 +201,8 @@ func TestMessageProcessor_ProcessIndexingMessage_Success(t *testing.T) {
 			"authorization": "Bearer test-token",
 		},
 	}
-	data, _ := json.Marshal(testData)
+	data, err := json.Marshal(testData)
+	require.NoError(t, err, "Failed to marshal test data")
 	subject := "lfx.index.project"
 
 	// Mock expectations
@@ -201,7 +210,7 @@ func TestMessageProcessor_ProcessIndexingMessage_Success(t *testing.T) {
 	mockMessagingRepo.On("ParsePrincipals", mock.Anything, mock.Anything).Return([]contracts.Principal{}, nil)
 
 	// Execute
-	err := mp.ProcessIndexingMessage(ctx, data, subject)
+	err = mp.ProcessIndexingMessage(ctx, data, subject)
 
 	// Assertions
 	assert.NoError(t, err)
@@ -236,11 +245,12 @@ func TestMessageProcessor_ProcessIndexingMessage_InvalidSubject(t *testing.T) {
 		"action": "created",
 		"data":   map[string]any{"id": "test-123"},
 	}
-	data, _ := json.Marshal(testData)
+	data, err := json.Marshal(testData)
+	require.NoError(t, err, "Failed to marshal test data")
 	subject := "invalid.subject"
 
 	// Execute
-	err := mp.ProcessIndexingMessage(ctx, data, subject)
+	err = mp.ProcessIndexingMessage(ctx, data, subject)
 
 	// Assertions
 	assert.Error(t, err)
@@ -611,12 +621,12 @@ func TestMessageProcessor_HelperMethods(t *testing.T) {
 	t.Run("generateMessageID", func(t *testing.T) {
 		// Test message ID generation through public interface
 		ctx := context.Background()
-		
+
 		// Since we can't access the private method directly,
 		// we test that the processor works correctly
 		assert.NotNil(t, mp)
 		assert.NotNil(t, mp.logger)
-		
+
 		// This ensures the processor is properly initialized
 		// and can handle message processing
 		_, cancel := context.WithTimeout(ctx, time.Second)
@@ -773,7 +783,7 @@ func BenchmarkIndexingHandler_HandleWithReply(b *testing.B) {
 	subject := "lfx.index.project"
 
 	handler := &indexingHandler{useCase: mp}
-	replyFunc := func(response []byte) error { return nil }
+	replyFunc := func(_ []byte) error { return nil }
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
