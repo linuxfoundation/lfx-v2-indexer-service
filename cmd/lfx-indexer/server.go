@@ -1,6 +1,7 @@
 // Copyright The Linux Foundation and each contributor to LFX.
 // SPDX-License-Identifier: MIT
 
+// Package main provides the entry point for the LFX indexer service application.
 package main
 
 import (

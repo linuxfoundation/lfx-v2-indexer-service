@@ -32,4 +32,8 @@ USER nonroot
 
 COPY --from=builder /go/bin/lfx-indexer /lfx-indexer
 
+# Add basic health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD ["/lfx-indexer", "health"]
+
 ENTRYPOINT ["/lfx-indexer"] 

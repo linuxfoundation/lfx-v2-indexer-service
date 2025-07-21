@@ -1,10 +1,4 @@
-# Copyright The Linux Foundation and each contributor to LFX.
-# SPDX-License-Identifier: MIT
-
 # Ignore false positives for legitimate code patterns
-
-# GitHub Actions workflow files (using secrets correctly)
-.github/workflows/mega-linter.yml
 
 # JWT token validation code (not actual secrets)
 internal/infrastructure/auth/auth_repository.go
@@ -19,8 +13,9 @@ pkg/constants/auth.go
 # Test files with mock/example data
 **/*_test.go
 
-# Documentation with examples
+# Documentation with examples and mock data
 README.md
+docs/**/*.md
 
 # All YAML/YML files (contain env var references, not actual secrets)
 **/*.yml

@@ -1,0 +1,60 @@
+# Copyright The Linux Foundation and each contributor to LFX.
+# SPDX-License-Identifier: MIT
+
+# Revive configuration for Go linting
+# See: https://revive.run/docs#configuration
+
+# Global settings
+ignoreGeneratedHeader = false
+severity = "warning"
+confidence = 0.8
+errorCode = 1
+warningCode = 0
+
+# Enable all rules by default, then disable specific ones
+[rule.blank-imports]
+[rule.context-as-argument]
+[rule.context-keys-type]
+[rule.dot-imports]
+[rule.error-return]
+[rule.error-strings]
+[rule.error-naming]
+[rule.exported]
+[rule.if-return]
+[rule.increment-decrement]
+[rule.var-naming]
+[rule.var-declaration]
+[rule.package-comments]
+[rule.range]
+[rule.receiver-naming]
+[rule.time-naming]
+[rule.unexported-return]
+[rule.indent-error-flow]
+[rule.errorf]
+[rule.empty-block]
+[rule.superfluous-else]
+[rule.unused-parameter]
+[rule.unreachable-code]
+[rule.redefines-builtin-id]
+
+# Disable the stuttering rule since we handle it via filter in MegaLinter
+# This prevents the "type name will be used as package.Type by other packages, and that stutters" warnings
+# We handle these via GO_REVIVE_FILTER_REGEX_EXCLUDE in .mega-linter.yml
+[rule.package-comments]
+  disabled = false
+
+# Configure specific rules
+[rule.line-length-limit]
+  arguments = [120]
+
+[rule.function-length]
+  arguments = [50, 0]
+
+[rule.max-public-structs]
+  arguments = [10]
+
+[rule.cognitive-complexity]
+  arguments = [15]
+
+[rule.cyclomatic]
+  arguments = [10]

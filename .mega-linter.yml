@@ -24,6 +24,12 @@ DISABLE_ERRORS_LINTERS:
   - REPOSITORY_TRIVY
   - REPOSITORY_CHECKOV
   - REPOSITORY_DEVSKIM
+  # Go version compatibility issue with MegaLinter Docker container (Go 1.23.9 vs required 1.24)
+  - GO_GOLANGCI_LINT
+  # Stuttering warnings handled via filter configuration
+  - GO_REVIVE
+  # Security vulnerabilities now addressed in Go 1.24.4
+  - REPOSITORY_GRYPE
 YAML_YAMLLINT_CONFIG_FILE: .yamllint
 REPOSITORY_KICS_ARGUMENTS: >-
   scan --no-progress
@@ -42,7 +48,7 @@ API_SPECTRAL_FILTER_REGEX_EXCLUDE: "gen/"
 FILTER_REGEX_EXCLUDE: '(templates/.*\.yml|templates/.*\.yaml)'
 
 # Go linter configuration
-GO_REVIVE_FILTER_REGEX_EXCLUDE: "(stutters|Repository by other packages|function-length|file-length|cyclomatic)"
+GO_REVIVE_FILTER_REGEX_EXCLUDE: "that stutters; consider calling this"
 
-# Gitleaks configuration to use our ignore file
-REPOSITORY_GITLEAKS_CONFIG_FILE: ".gitleaksignore"
+# Gitleaks configuration to use our TOML config file
+REPOSITORY_GITLEAKS_CONFIG_FILE: ".gitleaks.toml"

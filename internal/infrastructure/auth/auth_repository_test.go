@@ -22,7 +22,7 @@ const (
 	testIssuer   = "https://test.auth0.com/"
 	testAudience = "test-audience"
 	testJWKSURL  = "https://test.auth0.com/.well-known/jwks.json"
-	testToken    = "eyJhbGciOiJQUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.invalid-signature" // #nosec G101 - This is a test JWT token with invalid signature
+	testToken    = "eyJhbGciOiJQUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.invalid-signature" // #nosec G101 // gitleaks:allow - This is a test JWT token with invalid signature
 )
 
 // Helper function to create a test logger
@@ -404,7 +404,7 @@ func TestAuthRepository_HelperMethods(t *testing.T) {
 		assert.Equal(t, "<too_short>", result)
 
 		// Test long token
-		longToken := "eyJhbGciOiJQUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.invalid-signature" // #nosec G101 - This is a test JWT token with invalid signature
+		longToken := "eyJhbGciOiJQUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.invalid-signature" // #nosec G101 // gitleaks:allow - Test JWT token with invalid signature
 		result = repo.safeTokenLog(longToken)
 		assert.Contains(t, result, "...")
 		assert.True(t, len(result) < len(longToken))
@@ -619,7 +619,7 @@ func BenchmarkAuthRepository_SafeTokenLog(b *testing.B) {
 	)
 	require.NoError(b, err)
 
-	longToken := "eyJhbGciOiJQUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.invalid-signature"
+	longToken := "eyJhbGciOiJQUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.invalid-signature" // #nosec G101 // gitleaks:allow - Test JWT token
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

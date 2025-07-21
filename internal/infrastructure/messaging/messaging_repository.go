@@ -487,10 +487,13 @@ func (r *MessagingRepository) GetConnectionStatus() map[string]interface{} {
 		if r.conn.ConnectedUrl() != "" {
 			status["connected_url"] = r.conn.ConnectedUrl()
 		}
-	} else if r.conn != nil && r.conn.IsClosed() {
-		status["status"] = "closed"
-	} else if r.conn != nil && r.conn.IsReconnecting() {
-		status["status"] = "reconnecting"
+	} else if r.conn != nil {
+		switch {
+		case r.conn.IsClosed():
+			status["status"] = "closed"
+		case r.conn.IsReconnecting():
+			status["status"] = "reconnecting"
+		}
 	}
 
 	return status

@@ -1,0 +1,44 @@
+# Copyright The Linux Foundation and each contributor to LFX.
+# SPDX-License-Identifier: MIT
+
+title = "gitleaks config"
+
+[extend]
+# useDefault will extend the base configuration with the default gitleaks config:
+# https://github.com/gitleaks/gitleaks/blob/master/config/gitleaks.toml
+useDefault = true
+
+[allowlist]
+description = "ignore test fixtures and legitimate code patterns"
+
+paths = [
+    # JWT token validation code (not actual secrets)
+    '''internal/infrastructure/auth/auth_repository\.go''',
+    '''internal/infrastructure/auth/auth_repository_test\.go''',
+    
+    # Configuration code with environment variable references
+    '''internal/infrastructure/config/app_config\.go''',
+    
+    # Constants files with error messages and prefixes
+    '''pkg/constants/auth\.go''',
+    
+    # Test files with mock/example data
+    '''.*_test\.go$''',
+    
+    # Documentation with examples and mock data
+    '''README\.md''',
+    '''docs/.*\.md''',
+    
+    # YAML files with env var references, not actual secrets
+    '''.*\.ya?ml$''',
+    
+    # Messaging test files
+    '''internal/infrastructure/messaging/messaging_repository_test\.go''',
+]
+
+# Specific regexes to ignore in any file
+regexes = [
+    # Test JWT tokens with gitleaks:allow comments
+    '''testToken.*// gitleaks:allow''',
+    '''longToken.*// gitleaks:allow''',
+]

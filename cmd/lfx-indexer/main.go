@@ -1,6 +1,7 @@
 // Copyright The Linux Foundation and each contributor to LFX.
 // SPDX-License-Identifier: MIT
 
+// Package main provides the entry point for the LFX indexer service application.
 package main
 
 import (
@@ -68,7 +69,7 @@ func main() {
 
 	if err := container.StartServicesWithWaitGroup(ctx, gracefulCloseWG); err != nil {
 		logger.Error("Failed to start background services", "error", err.Error())
-		os.Exit(1)
+		return // Let deferred cancel() run naturally
 	}
 
 	logger.Info("Background services started successfully")

@@ -1,6 +1,7 @@
 // Copyright The Linux Foundation and each contributor to LFX.
 // SPDX-License-Identifier: MIT
 
+// Package constants provides shared constants used throughout the LFX indexer service.
 package constants
 
 // Error messages (centralized from scattered string literals)

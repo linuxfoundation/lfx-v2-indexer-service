@@ -1,6 +1,7 @@
 // Copyright The Linux Foundation and each contributor to LFX.
 // SPDX-License-Identifier: MIT
 
+// Package contracts defines the interfaces and contracts for the domain layer of the LFX indexer service.
 package contracts
 
 import "context"

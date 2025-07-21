@@ -56,7 +56,7 @@ type CleanupRepository struct {
 func NewCleanupRepository(storageRepo contracts.StorageRepository, logger *slog.Logger, index string) *CleanupRepository {
 	return &CleanupRepository{
 		storageRepo: storageRepo,
-		logger:      logging.WithComponent(logger, "janitor_service"),
+		logger:      logging.WithComponent(logger, "cleanup_repository"),
 		index:       index,
 		shutdown:    make(chan struct{}),
 	}
@@ -178,7 +178,7 @@ func (j *CleanupRepository) StartItemLoop(ctx context.Context) {
 		}
 	}()
 
-	j.logger.Info("Janitor service started successfully")
+	j.logger.Info("cleanup(Janitor) started successfully")
 }
 
 // Shutdown gracefully shuts down the janitor service

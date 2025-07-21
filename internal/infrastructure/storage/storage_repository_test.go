@@ -5,7 +5,6 @@ package storage
 
 import (
 	"context"
-	"io"
 	"log/slog"
 	"strings"
 	"testing"
@@ -62,14 +61,14 @@ func TestStorageRepository_StructureValidation(t *testing.T) {
 	// Verify all expected methods exist on the repository
 	t.Run("methods_exist", func(_ *testing.T) {
 		// These tests verify method signatures exist
-		var _ func(context.Context, string, string, io.Reader) error = repo.Index
-		var _ func(context.Context, string, map[string]any) ([]map[string]any, error) = repo.Search
-		var _ func(context.Context, string, map[string]any) ([]contracts.VersionedDocument, error) = repo.SearchWithVersions
-		var _ func(context.Context, string, string, io.Reader) error = repo.Update
-		var _ func(context.Context, string, string) error = repo.Delete
-		var _ func(context.Context, []contracts.BulkOperation) error = repo.BulkIndex
-		var _ func(context.Context, string, string, io.Reader, *contracts.OptimisticUpdateParams) error = repo.UpdateWithOptimisticLock
-		var _ func(context.Context) error = repo.HealthCheck
+		_ = repo.Index
+		_ = repo.Search
+		_ = repo.SearchWithVersions
+		_ = repo.Update
+		_ = repo.Delete
+		_ = repo.BulkIndex
+		_ = repo.UpdateWithOptimisticLock
+		_ = repo.HealthCheck
 	})
 }
 

@@ -1,6 +1,7 @@
 // Copyright The Linux Foundation and each contributor to LFX.
 // SPDX-License-Identifier: MIT
 
+// Package handlers provides HTTP and message handlers for the LFX indexer service presentation layer.
 package handlers
 
 import (
