@@ -382,13 +382,13 @@ func (c *Container) SetupNATSSubscriptions(ctx context.Context) error {
 	}
 
 	// Subscribe to indexing messages with queue group for load balancing
-	indexingSubject := constants.SubjectIndexing
+	indexingSubject := c.Config.NATS.IndexingSubject
 	if err := c.MessagingRepository.QueueSubscribe(ctx, indexingSubject, c.Config.NATS.Queue, c.IndexingMessageHandler); err != nil {
 		return fmt.Errorf("failed to subscribe to %s: %w", indexingSubject, err)
 	}
 
 	// Subscribe to v1 indexing messages with the same unified handler
-	v1IndexingSubject := constants.SubjectV1Indexing
+	v1IndexingSubject := c.Config.NATS.V1IndexingSubject
 	if err := c.MessagingRepository.QueueSubscribe(ctx, v1IndexingSubject, c.Config.NATS.Queue, c.IndexingMessageHandler); err != nil {
 		return fmt.Errorf("failed to subscribe to %s: %w", v1IndexingSubject, err)
 	}

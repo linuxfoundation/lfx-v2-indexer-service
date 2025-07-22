@@ -543,6 +543,27 @@ LOG_LEVEL=debug make run
 
 ## 🐳 Deployment
 
+### Helm Chart
+```bash
+# Install with Helm
+helm install lfx-indexer ./charts/lfx-v2-indexer-service \
+  --namespace lfx \
+  --create-namespace
+
+# Install with custom values
+helm install lfx-indexer ./charts/lfx-v2-indexer-service \
+  --namespace lfx \
+  --create-namespace \
+  --values custom-values.yaml
+
+# Upgrade
+helm upgrade lfx-indexer ./charts/lfx-v2-indexer-service \
+  --namespace lfx
+
+# Uninstall
+helm uninstall lfx-indexer --namespace lfx
+```
+
 ### Docker
 ```bash
 # Build container
@@ -556,45 +577,23 @@ docker run -p 8080:8080 \
   lfx-indexer-service:latest
 ```
 
-### Kubernetes
-```yaml
-# See deployment/deployment.yaml for complete configuration
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: lfx-indexer-service
-spec:
-  replicas: 3
-  selector:
-    matchLabels:
-      app: lfx-indexer-service
-  template:
-    metadata:
-      labels:
-        app: lfx-indexer-service
-    spec:
-      containers:
-      - name: lfx-indexer
-        image: lfx-indexer-service:latest
-        ports:
-        - containerPort: 8080
-        env:
-        - name: NATS_URL
-          value: "nats://nats:4222"
-        - name: OPENSEARCH_URL
-          value: "http://opensearch:9200"
-        livenessProbe:
-          httpGet:
-            path: /livez
-            port: 8080
-        readinessProbe:
-          httpGet:
-            path: /readyz
-            port: 8080
-```
-
 ## 📄 License
 
-This project is licensed under the MIT License.
+This project uses dual licensing to cover different types of content:
+
+### Software License (MIT)
+The source code in this project is licensed under the **MIT License**. See the [LICENSE](LICENSE) file for the complete license text.
+
+**Copyright**: The Linux Foundation and each contributor to LFX.
+
+### Documentation License (Creative Commons)
+The documentation in this project is licensed under the **Creative Commons Attribution 4.0 International License**. See the [LICENSE-docs](LICENSE-docs) file for the complete license text.
+
+
+### Security Policy
+For information about reporting security vulnerabilities, please see our [SECURITY.md](SECURITY.md) file.
+
+### Code Ownership
+Code review and maintenance responsibilities are defined in the [CODEOWNERS](CODEOWNERS) file.
 
 ---

@@ -43,9 +43,9 @@ SPELL_VALE_PRE_COMMANDS:
   - command: vale sync
     cwd: "workspace"
 API_SPECTRAL_FILTER_REGEX_EXCLUDE: "gen/"
-# Ignore YAML files with templating macros; these typically fail linting and/or
+# Ignore YAML files with templating macros and Helm charts; these typically fail linting and/or
 # schema checking.
-FILTER_REGEX_EXCLUDE: '(templates/.*\.yml|templates/.*\.yaml)'
+FILTER_REGEX_EXCLUDE: '(templates/.*\.yml|templates/.*\.yaml|charts/.*\.yml|charts/.*\.yaml)'
 
 # Go linter configuration
 GO_REVIVE_FILTER_REGEX_EXCLUDE: "that stutters; consider calling this"
