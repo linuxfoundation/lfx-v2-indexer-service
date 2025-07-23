@@ -109,9 +109,6 @@ func LoadConfig() (*AppConfig, error) {
 		OpenSearch: OpenSearchConfig{
 			URL:   getEnvStringWithLogging("OPENSEARCH_URL", "http://localhost:9200", envVarsUsed, defaultsUsed, logger),
 			Index: getEnvStringWithLogging("OPENSEARCH_INDEX", "resources", envVarsUsed, defaultsUsed, logger),
-			/*Username: getEnvString("OPENSEARCH_USERNAME", "admin"),
-			Password: getEnvString("OPENSEARCH_PASSWORD", "admin"),
-			Timeout:  getEnvDuration("OPENSEARCH_TIMEOUT", 30*time.Second),*/
 		},
 		JWT: JWTConfig{
 			Issuer: getEnvStringWithLogging("JWT_ISSUER", "heimdall", envVarsUsed, defaultsUsed, logger),

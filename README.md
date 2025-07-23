@@ -57,6 +57,23 @@ go build -o bin/lfx-indexer ./cmd/lfx-indexer
 ./bin/lfx-indexer -check-config
 ```
 
+### CLI Flags
+```bash
+# Service configuration
+./bin/lfx-indexer -p 9090              # Custom health check port
+./bin/lfx-indexer --bind 0.0.0.0       # Bind to all interfaces
+./bin/lfx-indexer -d                   # Enable debug logging
+
+# Feature toggles
+./bin/lfx-indexer --nojanitor          # Disable janitor service (overrides JANITOR_ENABLED)
+./bin/lfx-indexer --simple-health      # Use simple 'OK' health responses
+
+# Utilities
+./bin/lfx-indexer --help              # Show help message
+```
+
+**Note**: CLI flags have highest precedence: `CLI flags > Environment variables > Defaults`
+
 ### Health Check
 ```bash
 # Kubernetes probes
@@ -311,7 +328,7 @@ LOG_LEVEL=info                               # Logging level (debug,info,warn,er
 LOG_FORMAT=text                              # Log format (text,json)
 
 # Cleanup Service (Background Cleanup)
-CLEANUP_ENABLED=true                         # Enable cleanup service
+JANITOR_ENABLED=true                         # Enable cleanup service (default: true)
 ```
 
 ### NATS Subject Patterns & Load Balancing

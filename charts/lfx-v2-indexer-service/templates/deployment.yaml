@@ -54,7 +54,7 @@ spec:
             - name: JWT_CLOCK_SKEW
               value: {{ .Values.jwt.clockSkew }}
             - name: PORT
-              value: {{ .Values.app.port }}
+              value: {{ .Values.app.port | quote }}
             - name: READ_TIMEOUT
               value: {{ .Values.app.readTimeout }}
             - name: WRITE_TIMEOUT
