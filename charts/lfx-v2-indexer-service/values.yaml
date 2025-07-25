@@ -1,0 +1,78 @@
+# Copyright The Linux Foundation and each contributor to LFX.
+#
+# SPDX-License-Identifier: MIT
+---
+# nats is the configuration for the NATS server
+nats:
+  # url is the URL of the NATS server
+  url: nats://lfx-platform-nats.lfx.svc.cluster.local:4222
+  # maxReconnects is the maximum number of reconnection attempts
+  maxReconnects: 10
+  # reconnectWait is the time to wait between reconnection attempts
+  reconnectWait: "2s"
+  # connectionTimeout is the timeout for establishing a connection
+  connectionTimeout: "10s"
+  # indexingSubject is the NATS subject for indexing messages
+  indexingSubject: "lfx.index.>"
+  # v1IndexingSubject is the NATS subject for v1 indexing messages
+  v1IndexingSubject: "lfx.v1.index.>"
+  # drainTimeout is the timeout for draining NATS connections
+  drainTimeout: "55s"
+
+# opensearch is the configuration for the OpenSearch server
+opensearch:
+  # url is the URL of the OpenSearch server
+  url: http://opensearch.lfx.svc.cluster.local:9200
+  # index is the index name for storing resources
+  index: resources
+
+# heimdall is the configuration for the heimdall middleware
+heimdall:
+  enabled: true
+  url: http://heimdall.lfx.svc.cluster.local:4456
+
+# jwt is the configuration for JWT authentication
+jwt:
+  # issuer is the JWT issuer
+  issuer: "heimdall"
+  # audiences is an array of JWT audiences
+  audiences:
+    - "projects-api"
+  # clockSkew is the allowed clock skew for JWT validation
+  clockSkew: "6h"
+
+# app is the configuration for the application
+app:
+  # replicas is the number of replicas for the deployment
+  replicas: 2
+  # terminationGracePeriodSeconds is the grace period for pod termination
+  terminationGracePeriodSeconds: 60
+  # port is the port the application listens on
+  port: "8080"
+  # logLevel is the log level for the application
+  logLevel: "info"
+  # logFormat is the log format (json,text)
+  logFormat: "json"
+  # server timeouts
+  readTimeout: "5s"
+  writeTimeout: "5s"
+  shutdownTimeout: "10s"
+
+# janitor is the configuration for the janitor service
+janitor:
+  # enabled controls whether the janitor service is enabled
+  enabled: true
+
+# health is the configuration for health checks
+health:
+  # checkTimeout is the timeout for health checks
+  checkTimeout: "5s"
+  # cacheDuration is how long to cache health check results
+  cacheDuration: "5s"
+  # enableDetailedResponse enables detailed health check responses
+  enableDetailedResponse: true
+
+# messaging is the configuration for messaging
+messaging:
+  # queue is the NATS queue name
+  queue: "lfx.indexer.queue"

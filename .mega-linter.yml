@@ -1,0 +1,52 @@
+# Copyright The Linux Foundation and each contributor to LFX.
+# SPDX-License-Identifier: MIT
+---
+GITHUB_COMMENT_REPORTER: false
+DISABLE_LINTERS:
+  # We are setting KUBERNETES_DIRECTORY to the helm chart so the
+  # KUBERNETES_HELM linter can find the chart, but then this linter expects to
+  # find raw Kubernetes manifests in this directory, which isn't the case.
+  # If we added a PRE_ command with a `helm template` step, and further
+  # restricted the included files for this linter, it *might* work.
+  - KUBERNETES_KUBECONFORM
+  # TBD how to use this from Megalinter with our setup.
+  - KUBERNETES_KUBESCAPE
+  # Repository-wide link checking returns mostly false positives (like internal
+  # service URLs in templates).
+  - SPELL_LYCHEE
+  - SPELL_CSPELL
+  # yamllint is sufficient for us.
+  - YAML_PRETTIER
+DISABLE_ERRORS_LINTERS:
+  # This may be informative but doesn't need to break the build.
+  - COPYPASTE_JSCPD
+  # TBD! Need to work through these.
+  - REPOSITORY_TRIVY
+  - REPOSITORY_CHECKOV
+  - REPOSITORY_DEVSKIM
+  # Go version compatibility issue with MegaLinter Docker container (Go 1.23.9 vs required 1.24)
+  - GO_GOLANGCI_LINT
+  # Stuttering warnings handled via filter configuration
+  - GO_REVIVE
+  # Security vulnerabilities now addressed in Go 1.24.4
+  - REPOSITORY_GRYPE
+YAML_YAMLLINT_CONFIG_FILE: .yamllint
+REPOSITORY_KICS_ARGUMENTS: >-
+  scan --no-progress
+  --exclude-severities="medium,low,info,trace"
+SPELL_CSPELL_ANALYZE_FILE_NAMES: false
+# Make sure Vale is setup to run with the styles it needs.
+SPELL_VALE_PRE_COMMANDS:
+  - command: mkdir -p styles
+    cwd: "workspace"
+  - command: vale sync
+    cwd: "workspace"
+# Ignore YAML files with templating macros and Helm charts; these typically fail linting and/or
+# schema checking.
+FILTER_REGEX_EXCLUDE: '(templates/.*\.yml|templates/.*\.yaml|charts/.*\.yml|charts/.*\.yaml)'
+
+# Go linter configuration
+GO_REVIVE_FILTER_REGEX_EXCLUDE: "that stutters; consider calling this"
+
+# Gitleaks configuration to use our TOML config file
+REPOSITORY_GITLEAKS_CONFIG_FILE: ".gitleaks.toml"

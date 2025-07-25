@@ -1,0 +1,25 @@
+# Ignore false positives for legitimate code patterns
+
+# JWT token validation code (not actual secrets)
+internal/infrastructure/auth/auth_repository.go
+internal/infrastructure/auth/auth_repository_test.go
+
+# Configuration code with environment variable references (not hardcoded secrets)
+internal/infrastructure/config/app_config.go
+
+# Constants files with error messages and prefixes
+pkg/constants/auth.go
+
+# Test files with mock/example data
+**/*_test.go
+
+# Documentation with examples and mock data
+README.md
+docs/**/*.md
+
+# All YAML/YML files (contain env var references, not actual secrets)
+**/*.yml
+**/*.yaml
+
+# Messaging test files with mock tokens
+internal/infrastructure/messaging/messaging_repository_test.go

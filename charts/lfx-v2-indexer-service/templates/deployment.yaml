@@ -1,0 +1,96 @@
+# Copyright The Linux Foundation and each contributor to LFX.
+#
+# SPDX-License-Identifier: MIT
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lfx-v2-indexer-service
+  namespace: lfx
+spec:
+  replicas: {{ .Values.app.replicas }}
+  selector:
+    matchLabels:
+      app: lfx-v2-indexer-service
+  template:
+    metadata:
+      labels:
+        app: lfx-v2-indexer-service
+    spec:
+      terminationGracePeriodSeconds: {{ .Values.app.terminationGracePeriodSeconds }}
+      containers:
+        - name: app
+          image: linuxfoundation/lfx-v2-indexer-service:{{ .Chart.AppVersion }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          imagePullPolicy: Never # The image is expected to exist locally with the same name and tag. It is not deployed to a registry.
+          env:
+            - name: NATS_URL
+              value: {{ .Values.nats.url }}
+            - name: NATS_MAX_RECONNECTS
+              value: {{ .Values.nats.maxReconnects | quote }}
+            - name: NATS_RECONNECT_WAIT
+              value: {{ .Values.nats.reconnectWait }}
+            - name: NATS_CONNECTION_TIMEOUT
+              value: {{ .Values.nats.connectionTimeout }}
+            - name: NATS_INDEXING_SUBJECT
+              value: {{ .Values.nats.indexingSubject }}
+            - name: NATS_V1_INDEXING_SUBJECT
+              value: {{ .Values.nats.v1IndexingSubject }}
+            - name: NATS_QUEUE
+              value: {{ .Values.messaging.queue }}
+            - name: NATS_DRAIN_TIMEOUT
+              value: {{ .Values.nats.drainTimeout }}
+            - name: OPENSEARCH_URL
+              value: {{ .Values.opensearch.url }}
+            - name: OPENSEARCH_INDEX
+              value: {{ .Values.opensearch.index }}
+            - name: JWKS_URL
+              value: {{ .Values.heimdall.url }}
+            - name: JWT_ISSUER
+              value: {{ .Values.jwt.issuer }}
+            - name: JWT_AUDIENCES
+              value: {{ .Values.jwt.audiences | join "," }}
+            - name: JWT_CLOCK_SKEW
+              value: {{ .Values.jwt.clockSkew }}
+            - name: PORT
+              value: {{ .Values.app.port | quote }}
+            - name: READ_TIMEOUT
+              value: {{ .Values.app.readTimeout }}
+            - name: WRITE_TIMEOUT
+              value: {{ .Values.app.writeTimeout }}
+            - name: SHUTDOWN_TIMEOUT
+              value: {{ .Values.app.shutdownTimeout }}
+            - name: LOG_LEVEL
+              value: {{ .Values.app.logLevel }}
+            - name: LOG_FORMAT
+              value: {{ .Values.app.logFormat }}
+            - name: JANITOR_ENABLED
+              value: {{ .Values.janitor.enabled | quote }}
+            - name: HEALTH_CHECK_TIMEOUT
+              value: {{ .Values.health.checkTimeout }}
+            - name: HEALTH_CACHE_DURATION
+              value: {{ .Values.health.cacheDuration }}
+            - name: HEALTH_DETAILED_RESPONSE
+              value: {{ .Values.health.enableDetailedResponse | quote }}
+          ports:
+            - containerPort: {{ .Values.app.port }}
+              name: web
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: web
+            failureThreshold: 3
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: web
+            failureThreshold: 1
+            periodSeconds: 10
+          startupProbe:
+            httpGet:
+              path: /readyz
+              port: web
+            failureThreshold: 30
+            periodSeconds: 1
