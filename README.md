@@ -5,22 +5,25 @@ A high-performance, indexer service for the LFX V2 platform that processes resou
 ## 📋 Overview
 
 The LFX V2 Indexer Service is responsible for:
+
 - **Message Processing**: NATS stream processing with queue group load balancing across multiple instances
 - **Transaction Enrichment**: JWT authentication, data validation, and principal parsing with delegation support
 - **Search Indexing**: OpenSearch document indexing with optimistic concurrency control  
-- **Data Consistency**: Event-driven janitor service for conflict resolution 
+- **Data Consistency**: Event-driven janitor service for conflict resolution
 - **Dual Format Support**: Both LFX v2 (past-tense actions) and legacy v1 (present-tense actions) message formats
 - **Health Monitoring**: Kubernetes-ready health check endpoints
 
 ## 🚀 Quick Start
 
 ### Prerequisites
+
 - **Go 1.24**
 - **NATS Server** (message streaming)  
 - **OpenSearch/Elasticsearch** (document indexing)
 - **Heimdall JWT Service** (authentication)
 
 ### Environment Setup
+
 ```bash
 # Core Services (Required)
 export NATS_URL=nats://nats:4222
@@ -37,6 +40,7 @@ export PORT=8080
 ```
 
 ### Install & Run
+
 ```bash
 # Install dependencies
 go mod download
@@ -58,6 +62,7 @@ go build -o bin/lfx-indexer ./cmd/lfx-indexer
 ```
 
 ### CLI Flags
+
 ```bash
 # Service configuration
 ./bin/lfx-indexer -p 9090              # Custom health check port
@@ -75,6 +80,7 @@ go build -o bin/lfx-indexer ./cmd/lfx-indexer
 **Note**: CLI flags have highest precedence: `CLI flags > Environment variables > Defaults`
 
 ### Health Check
+
 ```bash
 # Kubernetes probes
 curl http://localhost:8080/livez    # Liveness probe
@@ -83,7 +89,6 @@ curl http://localhost:8080/health   # General health
 ```
 
 ## 🏗️ Architecture Overview
-
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -339,6 +344,7 @@ JANITOR_ENABLED=true                         # Enable cleanup service (default: 
 | `lfx.v1.index.*` | V1 legacy support | `lfx.v1.index.project` | Queue group distribution |
 
 **Queue Group**: `lfx.indexer.queue`
+
 - **Load Balancing**: Automatic distribution across service instances
 - **Durability**: Messages processed exactly once per queue group  
 - **Fault Tolerance**: Failed instances don't lose messages
@@ -488,6 +494,7 @@ nats sub "lfx.index.>" --server nats://your-nats-server:4222
 ### Common Issues
 
 **1. NATS Connection Failures**
+
 ```bash
 # Check NATS connectivity
 nats server check --server $NATS_URL
@@ -501,6 +508,7 @@ nats sub test.subject --server $NATS_URL
 ```
 
 **2. OpenSearch Issues**
+
 ```bash
 # Check OpenSearch health
 curl $OPENSEARCH_URL/_cluster/health
@@ -513,6 +521,7 @@ curl $OPENSEARCH_URL/resources/_search?size=5&sort=@timestamp:desc
 ```
 
 **3. JWT Validation Failures**
+
 ```bash
 # Check Heimdall connectivity
 curl $JWKS_URL
@@ -524,6 +533,7 @@ LOG_LEVEL=debug ./bin/lfx-indexer
 ### Performance Monitoring
 
 **Health Endpoints:**
+
 ```bash
 curl http://localhost:8080/livez    # Kubernetes liveness
 curl http://localhost:8080/readyz   # Kubernetes readiness  
@@ -531,6 +541,7 @@ curl http://localhost:8080/health   # General health status
 ```
 
 **Debug Configuration:**
+
 ```bash
 # Enable comprehensive debugging
 export LOG_LEVEL=debug
@@ -543,17 +554,20 @@ LOG_LEVEL=debug make run
 ## 🔒 Security
 
 **JWT Authentication:**
+
 - **Heimdall Integration**: All messages validated against JWT service
 - **Multiple Audiences**: Configurable audience validation
 - **Principal Parsing**: Authorization header and X-On-Behalf-Of delegation support
 - **Machine User Detection**: `clients@` prefix identification
 
 **Input Validation:**
+
 - **Domain Validation**: LFXTransaction entity validates all inputs
 - **Subject Format Validation**: String prefix validation with enhanced error messages
 - **Data Structure Validation**: Comprehensive JSON schema validation
 
 **Error Handling:**
+
 - **Safe Error Messages**: No sensitive data leakage
 - **Structured Logging**: Detailed error context for debugging
 - **Graceful Degradation**: Continue processing on non-critical failures
@@ -561,27 +575,27 @@ LOG_LEVEL=debug make run
 ## 🐳 Deployment
 
 ### Helm Chart
-```bash
-# Install with Helm
-helm install lfx-indexer ./charts/lfx-v2-indexer-service \
-  --namespace lfx \
-  --create-namespace
 
-# Install with custom values
+```bash
+# Install with Make
+make helm-install
+
+# Uninstall with Make
+make helm-uninstall
+
+# Manual installation with custom namespace/values
 helm install lfx-indexer ./charts/lfx-v2-indexer-service \
   --namespace lfx \
   --create-namespace \
   --values custom-values.yaml
 
-# Upgrade
+# Manual upgrade
 helm upgrade lfx-indexer ./charts/lfx-v2-indexer-service \
   --namespace lfx
-
-# Uninstall
-helm uninstall lfx-indexer --namespace lfx
 ```
 
 ### Docker
+
 ```bash
 # Build container
 make docker-build
@@ -599,18 +613,21 @@ docker run -p 8080:8080 \
 This project uses dual licensing to cover different types of content:
 
 ### Software License (MIT)
+
 The source code in this project is licensed under the **MIT License**. See the [LICENSE](LICENSE) file for the complete license text.
 
 **Copyright**: The Linux Foundation and each contributor to LFX.
 
 ### Documentation License (Creative Commons)
+
 The documentation in this project is licensed under the **Creative Commons Attribution 4.0 International License**. See the [LICENSE-docs](LICENSE-docs) file for the complete license text.
 
-
 ### Security Policy
+
 For information about reporting security vulnerabilities, please see our [SECURITY.md](SECURITY.md) file.
 
 ### Code Ownership
+
 Code review and maintenance responsibilities are defined in the [CODEOWNERS](CODEOWNERS) file.
 
 ---

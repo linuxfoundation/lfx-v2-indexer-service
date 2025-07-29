@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: MIT
 
 # Variables
-APP_NAME := lfx-indexer
-VERSION := $(shell git describe --tags --always --dirty)
+APP_NAME := lfx-v2-indexer-service
+VERSION := 0.1.0
 BUILD_TIME := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 GIT_COMMIT := $(shell git rev-parse HEAD)
 
 # Docker
-DOCKER_REGISTRY := ghcr.io/linuxfoundation
+DOCKER_REGISTRY := linuxfoundation
 DOCKER_IMAGE := $(DOCKER_REGISTRY)/$(APP_NAME)
 DOCKER_TAG := $(VERSION)
 
@@ -213,6 +213,19 @@ docker-stop: ## Stop Docker container
 	docker stop $(APP_NAME) || true
 	docker rm $(APP_NAME) || true
 
+##@ Helm
+
+.PHONY: helm-install
+helm-install: ## Install the application using Helm
+	@echo "Installing application using Helm..."
+	helm upgrade --install lfx-v2-indexer-service charts/lfx-v2-indexer-service
+
+.PHONY: helm-uninstall
+helm-uninstall: ## Uninstall the application using Helm
+	@echo "Uninstalling application using Helm..."
+	helm uninstall lfx-v2-indexer-service
+
+
 ##@ Development Tools
 
 .PHONY: dev-setup
@@ -302,4 +315,4 @@ outdated: ## Check for outdated dependencies
 .PHONY: licenses
 licenses: ## Show dependency licenses
 	@echo "Showing dependency licenses..."
-	go-licenses report ./... || echo "Install go-licenses: go install github.com/google/go-licenses@latest" 
+	go-licenses report ./... || echo "Install go-licenses: go install github.com/google/go-licenses@latest"
