@@ -6,6 +6,7 @@ package enrichers
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
@@ -81,17 +82,17 @@ func (e *ProjectEnricher) EnrichData(body *contracts.TransactionBody, transactio
 	}
 
 	// Handle parent project reference (enhanced requirement)
-	if parentID, ok := data["parentID"].(string); ok && parentID != "" {
-		body.ParentRefs = []string{parentID}
+	if parentUID, ok := data["parent_uid"].(string); ok && parentUID != "" {
+		body.ParentRefs = []string{"project:" + parentUID}
 	}
 
-	// Also handle legacy parent_uid field for backwards compatibility
-	if parentUID, ok := data["parent_uid"].(string); ok && parentUID != "" {
-		// If we already have ParentRefs from parentID, append to it
+	// Also handle legacy parentID field for backwards compatibility
+	if parentID, ok := data["parentID"].(string); ok && parentID != "" {
+		// If we already have ParentRefs from parent_uid, append to it
 		if body.ParentRefs == nil {
-			body.ParentRefs = []string{"project:" + parentUID}
+			body.ParentRefs = []string{"project:" + parentID}
 		} else {
-			body.ParentRefs = append(body.ParentRefs, "project:"+parentUID)
+			body.ParentRefs = append(body.ParentRefs, "project:"+parentID)
 		}
 	}
 
@@ -122,7 +123,7 @@ func (e *ProjectEnricher) EnrichData(body *contracts.TransactionBody, transactio
 		}
 	}
 	// Include description if not already in fulltext
-	if body.Fulltext != "" && !contains(fulltext, body.Fulltext) {
+	if body.Fulltext != "" && !slices.Contains(fulltext, body.Fulltext) {
 		fulltext = append(fulltext, body.Fulltext)
 	}
 
@@ -132,14 +133,4 @@ func (e *ProjectEnricher) EnrichData(body *contracts.TransactionBody, transactio
 	}
 
 	return nil
-}
-
-// Helper function to check if slice contains string
-func contains(slice []string, item string) bool {
-	for _, s := range slice {
-		if s == item {
-			return true
-		}
-	}
-	return false
 }

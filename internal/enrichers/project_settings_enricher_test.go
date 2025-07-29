@@ -6,14 +6,19 @@ package enrichers
 import (
 	"testing"
 
-	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
-	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
+	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/contracts"
+	"github.com/linuxfoundation/lfx-indexer-service/pkg/constants"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestProjectEnricher_EnrichData(t *testing.T) {
-	enricher := &ProjectEnricher{}
+func TestProjectSettingsEnricher_ObjectType(t *testing.T) {
+	enricher := NewProjectSettingsEnricher()
+	assert.Equal(t, constants.ObjectTypeProjectSettings, enricher.ObjectType())
+}
+
+func TestProjectSettingsEnricher_EnrichData(t *testing.T) {
+	enricher := NewProjectSettingsEnricher()
 
 	tests := []struct {
 		name           string
@@ -25,24 +30,22 @@ func TestProjectEnricher_EnrichData(t *testing.T) {
 		{
 			name: "successful enrichment with uid field",
 			parsedData: map[string]any{
-				"uid":    "project-123",
-				"public": true,
+				"uid": "project-123",
 			},
 			expectedBody: &contracts.TransactionBody{
 				ObjectID: "project-123",
-				Public:   true,
+				Public:   false, // Always false for project settings
 			},
 			expectedFields: []string{"ObjectID", "Public"},
 		},
 		{
 			name: "successful enrichment with legacy id field",
 			parsedData: map[string]any{
-				"id":     "project-456",
-				"public": false,
+				"id": "project-456",
 			},
 			expectedBody: &contracts.TransactionBody{
 				ObjectID: "project-456",
-				Public:   false,
+				Public:   false, // Always false for project settings
 			},
 			expectedFields: []string{"ObjectID", "Public"},
 		},
@@ -50,31 +53,29 @@ func TestProjectEnricher_EnrichData(t *testing.T) {
 			name: "successful enrichment with access control attributes",
 			parsedData: map[string]any{
 				"uid":                  "project-789",
-				"public":               true,
-				"accessCheckObject":    "project",
-				"accessCheckRelation":  "member",
-				"historyCheckObject":   "project",
-				"historyCheckRelation": "viewer",
+				"accessCheckObject":    "custom-object",
+				"accessCheckRelation":  "admin",
+				"historyCheckObject":   "custom-history",
+				"historyCheckRelation": "member",
 			},
 			expectedBody: &contracts.TransactionBody{
 				ObjectID:             "project-789",
-				Public:               true,
-				AccessCheckObject:    "project", // Override from data
-				AccessCheckRelation:  "member",  // Override from data
-				HistoryCheckObject:   "project", // Override from data
-				HistoryCheckRelation: "viewer",  // Override from data
+				Public:               false,
+				AccessCheckObject:    "custom-object",  // Override from data
+				AccessCheckRelation:  "admin",          // Override from data
+				HistoryCheckObject:   "custom-history", // Override from data
+				HistoryCheckRelation: "member",         // Override from data
 			},
 			expectedFields: []string{"ObjectID", "Public", "AccessCheckObject", "AccessCheckRelation", "HistoryCheckObject", "HistoryCheckRelation"},
 		},
 		{
 			name: "access control with computed defaults",
 			parsedData: map[string]any{
-				"uid":    "project-defaults",
-				"public": true,
+				"uid": "project-defaults",
 			},
 			expectedBody: &contracts.TransactionBody{
 				ObjectID:             "project-defaults",
-				Public:               true,
+				Public:               false,
 				AccessCheckObject:    "project:project-defaults", // Computed default
 				AccessCheckRelation:  "viewer",                   // Computed default
 				HistoryCheckObject:   "project:project-defaults", // Computed default
@@ -83,43 +84,17 @@ func TestProjectEnricher_EnrichData(t *testing.T) {
 			expectedFields: []string{"ObjectID", "Public", "AccessCheckObject", "AccessCheckRelation", "HistoryCheckObject", "HistoryCheckRelation"},
 		},
 		{
-			name: "successful enrichment with parent reference",
-			parsedData: map[string]any{
-				"uid":      "project-child",
-				"public":   true,
-				"parentID": "project-parent",
-			},
-			expectedBody: &contracts.TransactionBody{
-				ObjectID:   "project-child",
-				Public:     true,
-				ParentRefs: []string{"project:project-parent"},
-			},
-			expectedFields: []string{"ObjectID", "Public", "ParentRefs"},
-		},
-		{
-			name: "successful enrichment with empty parent reference",
-			parsedData: map[string]any{
-				"uid":      "project-orphan",
-				"public":   true,
-				"parentID": "",
-			},
-			expectedBody: &contracts.TransactionBody{
-				ObjectID:   "project-orphan",
-				Public:     true,
-				ParentRefs: nil,
-			},
-			expectedFields: []string{"ObjectID", "Public"},
-		},
-		{
-			name: "complete enrichment with all fields",
+			name: "complete enrichment with all fields and settings data",
 			parsedData: map[string]any{
 				"uid":                  "project-complete",
-				"public":               false,
 				"accessCheckObject":    "organization",
 				"accessCheckRelation":  "admin",
 				"historyCheckObject":   "organization",
-				"historyCheckRelation": "member",
-				"parentID":             "org-parent",
+				"historyCheckRelation": "admin",
+				"settings": map[string]any{
+					"feature_enabled": true,
+					"config_value":    "production",
+				},
 			},
 			expectedBody: &contracts.TransactionBody{
 				ObjectID:             "project-complete",
@@ -127,72 +102,52 @@ func TestProjectEnricher_EnrichData(t *testing.T) {
 				AccessCheckObject:    "organization",
 				AccessCheckRelation:  "admin",
 				HistoryCheckObject:   "organization",
-				HistoryCheckRelation: "member",
-				ParentRefs:           []string{"project:org-parent"},
+				HistoryCheckRelation: "admin",
 			},
-			expectedFields: []string{"ObjectID", "Public", "AccessCheckObject", "AccessCheckRelation", "HistoryCheckObject", "HistoryCheckRelation", "ParentRefs"},
+			expectedFields: []string{"ObjectID", "Public", "AccessCheckObject", "AccessCheckRelation", "HistoryCheckObject", "HistoryCheckRelation"},
 		},
 		{
-			name: "complete enrichment with search fields",
+			name: "project settings with configuration data",
 			parsedData: map[string]any{
-				"uid":         "project-search",
-				"public":      true,
-				"name":        "Example Project",
-				"slug":        "example-project",
-				"description": "A sample project for testing search functionality",
+				"uid": "project-config",
+				"configuration": map[string]any{
+					"notifications_enabled": false,
+					"email_frequency":       "weekly",
+					"privacy_settings": map[string]any{
+						"show_contributors": true,
+					},
+				},
 			},
 			expectedBody: &contracts.TransactionBody{
-				ObjectID:       "project-search",
-				Public:         true,
-				SortName:       "Example Project",
-				NameAndAliases: []string{"Example Project", "example-project"},
-				Fulltext:       "Example Project example-project A sample project for testing search functionality",
+				ObjectID:             "project-config",
+				Public:               false,
+				AccessCheckObject:    "project:project-config",
+				AccessCheckRelation:  "viewer",
+				HistoryCheckObject:   "project:project-config",
+				HistoryCheckRelation: "writer",
 			},
-			expectedFields: []string{"ObjectID", "Public", "SortName", "NameAndAliases", "Fulltext"},
-		},
-		{
-			name: "parent reference with legacy field",
-			parsedData: map[string]any{
-				"uid":        "project-child-legacy",
-				"public":     false,
-				"parent_uid": "parent-legacy",
-			},
-			expectedBody: &contracts.TransactionBody{
-				ObjectID:   "project-child-legacy",
-				Public:     false,
-				ParentRefs: []string{"project:parent-legacy"},
-			},
-			expectedFields: []string{"ObjectID", "Public", "ParentRefs"},
+			expectedFields: []string{"ObjectID", "Public", "AccessCheckObject", "AccessCheckRelation", "HistoryCheckObject", "HistoryCheckRelation"},
 		},
 		{
 			name: "error: missing uid and id",
 			parsedData: map[string]any{
-				"public": true,
+				"settings": map[string]any{"enabled": true},
 			},
 			expectedError: constants.ErrMappingUID,
 		},
 		{
 			name: "error: invalid uid type",
 			parsedData: map[string]any{
-				"uid":    123,
-				"public": true,
+				"uid": 123,
 			},
 			expectedError: constants.ErrMappingUID,
 		},
 		{
-			name: "error: missing public field",
+			name: "error: invalid id type",
 			parsedData: map[string]any{
-				"uid": "project-missing-public",
+				"id": false,
 			},
-			expectedError: constants.ErrMappingPublic,
-		},
-		{
-			name: "error: invalid public type",
-			parsedData: map[string]any{
-				"uid":    "project-invalid-public",
-				"public": "not-a-boolean",
-			},
-			expectedError: constants.ErrMappingPublic,
+			expectedError: constants.ErrMappingUID,
 		},
 	}
 
@@ -213,6 +168,9 @@ func TestProjectEnricher_EnrichData(t *testing.T) {
 
 			require.NoError(t, err)
 
+			// Verify that data is set on body
+			assert.Equal(t, tt.parsedData, body.Data, "Data should be set on body")
+
 			// Verify specified fields
 			for _, field := range tt.expectedFields {
 				switch field {
@@ -228,29 +186,20 @@ func TestProjectEnricher_EnrichData(t *testing.T) {
 					assert.Equal(t, tt.expectedBody.HistoryCheckObject, body.HistoryCheckObject, "HistoryCheckObject mismatch")
 				case "HistoryCheckRelation":
 					assert.Equal(t, tt.expectedBody.HistoryCheckRelation, body.HistoryCheckRelation, "HistoryCheckRelation mismatch")
-				case "ParentRefs":
-					assert.Equal(t, tt.expectedBody.ParentRefs, body.ParentRefs, "ParentRefs mismatch")
-				case "SortName":
-					assert.Equal(t, tt.expectedBody.SortName, body.SortName, "SortName mismatch")
-				case "NameAndAliases":
-					assert.Equal(t, tt.expectedBody.NameAndAliases, body.NameAndAliases, "NameAndAliases mismatch")
-				case "Fulltext":
-					assert.Equal(t, tt.expectedBody.Fulltext, body.Fulltext, "Fulltext mismatch")
 				}
 			}
 		})
 	}
 }
 
-func TestProjectEnricher_EnrichData_AccessControlComputedDefaults(t *testing.T) {
-	enricher := &ProjectEnricher{}
+func TestProjectSettingsEnricher_EnrichData_AccessControlComputedDefaults(t *testing.T) {
+	enricher := NewProjectSettingsEnricher()
 	body := &contracts.TransactionBody{}
 
 	// Test that access control fields get computed defaults when not provided
 	transaction := &contracts.LFXTransaction{
 		ParsedData: map[string]any{
-			"uid":    "project-computed-defaults",
-			"public": true,
+			"uid": "project-computed-defaults",
 		},
 	}
 
@@ -258,44 +207,42 @@ func TestProjectEnricher_EnrichData_AccessControlComputedDefaults(t *testing.T) 
 	require.NoError(t, err)
 
 	assert.Equal(t, "project-computed-defaults", body.ObjectID)
-	assert.True(t, body.Public)
+	assert.False(t, body.Public) // Always false for project settings
 	assert.Equal(t, "project:project-computed-defaults", body.AccessCheckObject)
 	assert.Equal(t, "viewer", body.AccessCheckRelation)
 	assert.Equal(t, "project:project-computed-defaults", body.HistoryCheckObject)
 	assert.Equal(t, "writer", body.HistoryCheckRelation)
 }
 
-func TestProjectEnricher_EnrichData_ParentReferenceOptional(t *testing.T) {
-	enricher := &ProjectEnricher{}
+func TestProjectSettingsEnricher_EnrichData_AlwaysPrivate(t *testing.T) {
+	enricher := NewProjectSettingsEnricher()
 	body := &contracts.TransactionBody{}
 
-	// Test that parent reference is optional
+	// Test that project settings are always private, regardless of input
 	transaction := &contracts.LFXTransaction{
 		ParsedData: map[string]any{
-			"uid":    "project-no-parent",
-			"public": false,
+			"uid":    "project-privacy-test",
+			"public": true, // This should be ignored
 		},
 	}
 
 	err := enricher.EnrichData(body, transaction)
 	require.NoError(t, err)
 
-	assert.Equal(t, "project-no-parent", body.ObjectID)
-	assert.False(t, body.Public)
-	assert.Nil(t, body.ParentRefs)
+	assert.Equal(t, "project-privacy-test", body.ObjectID)
+	assert.False(t, body.Public, "Project settings should always be private")
 }
 
-func TestProjectEnricher_EnrichData_BackwardsCompatibility(t *testing.T) {
-	enricher := &ProjectEnricher{}
+func TestProjectSettingsEnricher_EnrichData_BackwardsCompatibility(t *testing.T) {
+	enricher := NewProjectSettingsEnricher()
 
 	// Test that both 'uid' and 'id' fields work, with 'uid' taking precedence
 	t.Run("uid takes precedence over id", func(t *testing.T) {
 		body := &contracts.TransactionBody{}
 		transaction := &contracts.LFXTransaction{
 			ParsedData: map[string]any{
-				"uid":    "project-uid",
-				"id":     "project-id",
-				"public": true,
+				"uid": "project-uid",
+				"id":  "project-id",
 			},
 		}
 
@@ -308,8 +255,7 @@ func TestProjectEnricher_EnrichData_BackwardsCompatibility(t *testing.T) {
 		body := &contracts.TransactionBody{}
 		transaction := &contracts.LFXTransaction{
 			ParsedData: map[string]any{
-				"id":     "project-legacy",
-				"public": true,
+				"id": "project-legacy",
 			},
 		}
 
@@ -319,15 +265,14 @@ func TestProjectEnricher_EnrichData_BackwardsCompatibility(t *testing.T) {
 	})
 }
 
-func TestProjectEnricher_EnrichData_EdgeCases(t *testing.T) {
-	enricher := &ProjectEnricher{}
+func TestProjectSettingsEnricher_EnrichData_EdgeCases(t *testing.T) {
+	enricher := NewProjectSettingsEnricher()
 
 	t.Run("empty string values for access control", func(t *testing.T) {
 		body := &contracts.TransactionBody{}
 		transaction := &contracts.LFXTransaction{
 			ParsedData: map[string]any{
 				"uid":                  "project-empty-strings",
-				"public":               true,
 				"accessCheckObject":    "",
 				"accessCheckRelation":  "",
 				"historyCheckObject":   "",
@@ -350,7 +295,6 @@ func TestProjectEnricher_EnrichData_EdgeCases(t *testing.T) {
 		transaction := &contracts.LFXTransaction{
 			ParsedData: map[string]any{
 				"uid":                  "project-non-string",
-				"public":               true,
 				"accessCheckObject":    123,
 				"accessCheckRelation":  false,
 				"historyCheckObject":   nil,
@@ -361,27 +305,84 @@ func TestProjectEnricher_EnrichData_EdgeCases(t *testing.T) {
 		err := enricher.EnrichData(body, transaction)
 		require.NoError(t, err)
 
-		// Non-string values should be ignored (not set)
-		assert.Empty(t, body.AccessCheckObject)
-		assert.Empty(t, body.AccessCheckRelation)
-		assert.Empty(t, body.HistoryCheckObject)
-		assert.Empty(t, body.HistoryCheckRelation)
+		// Non-string values should be ignored (left empty, no override)
+		assert.Equal(t, "", body.AccessCheckObject)
+		assert.Equal(t, "", body.AccessCheckRelation)
+		assert.Equal(t, "", body.HistoryCheckObject)
+		assert.Equal(t, "", body.HistoryCheckRelation)
 	})
 
-	t.Run("non-string parent ID ignored", func(t *testing.T) {
+	t.Run("complex settings data preserved", func(t *testing.T) {
+		body := &contracts.TransactionBody{}
+		complexData := map[string]any{
+			"uid": "project-complex",
+			"settings": map[string]any{
+				"notifications": map[string]any{
+					"email":  true,
+					"slack":  false,
+					"digest": "weekly",
+				},
+				"permissions": []string{"read", "write", "admin"},
+				"metadata": map[string]any{
+					"created_by": "admin@example.com",
+					"version":    "1.0.0",
+				},
+			},
+		}
+		transaction := &contracts.LFXTransaction{
+			ParsedData: complexData,
+		}
+
+		err := enricher.EnrichData(body, transaction)
+		require.NoError(t, err)
+
+		// Complex data should be preserved exactly
+		assert.Equal(t, complexData, body.Data, "Complex settings data should be preserved")
+		assert.Equal(t, "project-complex", body.ObjectID)
+		assert.False(t, body.Public)
+	})
+
+	t.Run("nil and missing fields handled correctly", func(t *testing.T) {
 		body := &contracts.TransactionBody{}
 		transaction := &contracts.LFXTransaction{
 			ParsedData: map[string]any{
-				"uid":      "project-non-string-parent",
-				"public":   true,
-				"parentID": 123,
+				"uid":              "project-minimal",
+				"some_other_field": nil,
 			},
 		}
 
 		err := enricher.EnrichData(body, transaction)
 		require.NoError(t, err)
 
-		// Non-string parent ID should be ignored
-		assert.Nil(t, body.ParentRefs)
+		assert.Equal(t, "project-minimal", body.ObjectID)
+		assert.False(t, body.Public)
+		// Should have computed defaults since access control fields don't exist
+		assert.Equal(t, "project:project-minimal", body.AccessCheckObject)
+		assert.Equal(t, "viewer", body.AccessCheckRelation)
+		assert.Equal(t, "project:project-minimal", body.HistoryCheckObject)
+		assert.Equal(t, "writer", body.HistoryCheckRelation)
 	})
+}
+
+func TestProjectSettingsEnricher_EnrichData_DataOwnership(t *testing.T) {
+	enricher := NewProjectSettingsEnricher()
+	body := &contracts.TransactionBody{}
+
+	originalData := map[string]any{
+		"uid": "project-data-test",
+		"settings": map[string]any{
+			"feature": "enabled",
+		},
+	}
+
+	transaction := &contracts.LFXTransaction{
+		ParsedData: originalData,
+	}
+
+	err := enricher.EnrichData(body, transaction)
+	require.NoError(t, err)
+
+	// Enricher should own the data assignment
+	assert.Equal(t, originalData, body.Data, "Enricher should set the data on the body")
+	assert.NotNil(t, body.Data, "Data should not be nil")
 }

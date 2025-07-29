@@ -7,6 +7,7 @@ package services
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -74,6 +75,7 @@ func NewIndexerService(
 	// Initialize enricher registry with project enricher
 	registry := enrichers.NewRegistry()
 	registry.Register(enrichers.NewProjectEnricher())
+	registry.Register(enrichers.NewProjectSettingsEnricher())
 
 	return &IndexerService{
 		storageRepo:      storageRepo,
@@ -195,6 +197,16 @@ func (s *IndexerService) ValidateTransactionData(transaction *contracts.LFXTrans
 		return err
 	}
 
+	// Try to decode the data
+	if err := s.decodeTransactionData(transaction); err != nil {
+		logging.LogError(logger, "Transaction data validation failed: failed to decode data", err,
+			"transaction_id", transactionID,
+			"validation_step", "data_decode",
+			"action", transaction.Action,
+			"object_type", transaction.ObjectType)
+		return err
+	}
+
 	switch {
 	case s.isCreateAction(transaction) || s.isUpdateAction(transaction):
 		if _, ok := transaction.Data.(map[string]any); !ok {
@@ -204,6 +216,7 @@ func (s *IndexerService) ValidateTransactionData(transaction *contracts.LFXTrans
 				"validation_step", "data_type",
 				"action", transaction.Action,
 				"object_type", transaction.ObjectType,
+				"transaction_data", transaction.Data,
 				"expected_type", "object")
 			return err
 		}
@@ -228,6 +241,37 @@ func (s *IndexerService) ValidateTransactionData(transaction *contracts.LFXTrans
 
 	logger.Debug("Transaction data validation completed successfully",
 		"transaction_id", transactionID)
+	return nil
+}
+
+// decodeTransactionData decodes the transaction data
+func (s *IndexerService) decodeTransactionData(transaction *contracts.LFXTransaction) error {
+	logger := s.logger
+	transactionID := s.generateTransactionID(transaction)
+
+	// Decode the data if it is base64 encoded
+	if data, ok := transaction.Data.(string); ok {
+		decodedData, err := base64.StdEncoding.DecodeString(data)
+		if err == nil {
+			// If there is no error, then we can unmarshal the data.
+			// Otherwise, it means the data wasn't base64 encoded and therefore
+			// we can just use the data as is.
+			switch {
+			case s.isCreateAction(transaction) || s.isUpdateAction(transaction):
+				var data map[string]any
+				if err := json.Unmarshal(decodedData, &data); err != nil {
+					logging.LogError(logger, "Failed to unmarshal JSON", err,
+						"validation_step", "json_unmarshal",
+						"transaction_data", transaction.Data,
+						"transaction_id", transactionID)
+					return err
+				}
+				transaction.Data = data
+			case s.isDeleteAction(transaction):
+				transaction.Data = string(decodedData)
+			}
+		}
+	}
 	return nil
 }
 
