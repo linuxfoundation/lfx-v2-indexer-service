@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/services"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/services"
 )
 
 // HealthHandler handles Kubernetes health check requests

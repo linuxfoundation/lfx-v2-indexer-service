@@ -15,9 +15,9 @@ import (
 
 	"github.com/auth0/go-jwt-middleware/v2/jwks"
 	"github.com/auth0/go-jwt-middleware/v2/validator"
-	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/contracts"
-	"github.com/linuxfoundation/lfx-indexer-service/pkg/constants"
-	"github.com/linuxfoundation/lfx-indexer-service/pkg/logging"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
 )
 
 // HeimdallClaims contains extra custom claims we want to parse from the JWT token

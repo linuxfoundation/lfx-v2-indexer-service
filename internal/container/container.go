@@ -16,17 +16,17 @@ import (
 	natsgo "github.com/nats-io/nats.go"
 	opensearchgo "github.com/opensearch-project/opensearch-go/v2"
 
-	"github.com/linuxfoundation/lfx-indexer-service/internal/application"
-	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/contracts"
-	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/services"
-	"github.com/linuxfoundation/lfx-indexer-service/internal/infrastructure/auth"
-	"github.com/linuxfoundation/lfx-indexer-service/internal/infrastructure/cleanup"
-	"github.com/linuxfoundation/lfx-indexer-service/internal/infrastructure/config"
-	"github.com/linuxfoundation/lfx-indexer-service/internal/infrastructure/messaging"
-	"github.com/linuxfoundation/lfx-indexer-service/internal/infrastructure/storage"
-	"github.com/linuxfoundation/lfx-indexer-service/internal/presentation/handlers"
-	"github.com/linuxfoundation/lfx-indexer-service/pkg/constants"
-	"github.com/linuxfoundation/lfx-indexer-service/pkg/logging"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/application"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/services"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/infrastructure/auth"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/infrastructure/cleanup"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/infrastructure/config"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/infrastructure/messaging"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/infrastructure/storage"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/presentation/handlers"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
 )
 
 // Container holds all dependencies

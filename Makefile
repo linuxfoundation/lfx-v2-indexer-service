@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 
 # Variables
-APP_NAME := lfx-indexer
+APP_NAME := lfx-v2-indexer-service
 VERSION := $(shell git describe --tags --always --dirty)
 BUILD_TIME := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 GIT_COMMIT := $(shell git rev-parse HEAD)
@@ -42,7 +42,7 @@ deps: ## Download dependencies
 fmt: ## Format code
 	@echo "Formatting code..."
 	go fmt ./...
-	goimports -local github.com/linuxfoundation/lfx-indexer-service -w .
+	goimports -local github.com/linuxfoundation/lfx-v2-indexer-service -w .
 
 .PHONY: vet
 vet: ## Run go vet
@@ -302,4 +302,4 @@ outdated: ## Check for outdated dependencies
 .PHONY: licenses
 licenses: ## Show dependency licenses
 	@echo "Showing dependency licenses..."
-	go-licenses report ./... || echo "Install go-licenses: go install github.com/google/go-licenses@latest" 
+	go-licenses report ./... || echo "Install go-licenses: go install github.com/google/go-licenses@latest"

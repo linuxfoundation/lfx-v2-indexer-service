@@ -11,7 +11,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/linuxfoundation/lfx-indexer-service/internal/container"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/container"
 )
 
 // createHTTPServer creates and configures the HTTP server with health check routes
