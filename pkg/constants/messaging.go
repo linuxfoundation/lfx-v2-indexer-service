@@ -42,6 +42,7 @@ const (
 // Object types (centralized)
 const (
 	ObjectTypeProject         = "project"
+	ObjectTypeProjectSettings = "project_settings"
 	ObjectTypeCommittee       = "committee"
 	ObjectTypeCommitteeMember = "committeemember"
 )

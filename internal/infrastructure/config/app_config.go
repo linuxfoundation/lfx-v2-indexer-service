@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -280,12 +281,12 @@ func (c *AppConfig) validateJWT() error {
 // validateLogging validates logging configuration (PREVIOUSLY MISSING!)
 func (c *AppConfig) validateLogging() error {
 	validLevels := []string{"debug", "info", "warn", "error", "fatal", "panic"}
-	if !contains(validLevels, c.Logging.Level) {
+	if !slices.Contains(validLevels, c.Logging.Level) {
 		return fmt.Errorf("invalid log level: %s, must be one of: %v", c.Logging.Level, validLevels)
 	}
 
 	validFormats := []string{"json", "text", "console"}
-	if !contains(validFormats, c.Logging.Format) {
+	if !slices.Contains(validFormats, c.Logging.Format) {
 		return fmt.Errorf("invalid log format: %s, must be one of: %v", c.Logging.Format, validFormats)
 	}
 
@@ -379,14 +380,4 @@ func (c *AppConfig) validateHealth() error {
 	}
 
 	return nil
-}
-
-// Helper function for slice contains check
-func contains(slice []string, item string) bool {
-	for _, s := range slice {
-		if s == item {
-			return true
-		}
-	}
-	return false
 }

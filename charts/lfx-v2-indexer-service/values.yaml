@@ -22,7 +22,7 @@ nats:
 # opensearch is the configuration for the OpenSearch server
 opensearch:
   # url is the URL of the OpenSearch server
-  url: http://opensearch.lfx.svc.cluster.local:9200
+  url: http://opensearch-cluster-master.lfx.svc.cluster.local:9200/
   # index is the index name for storing resources
   index: resources
 
