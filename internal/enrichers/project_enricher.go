@@ -83,17 +83,17 @@ func (e *ProjectEnricher) EnrichData(body *contracts.TransactionBody, transactio
 
 	// Handle parent project reference (enhanced requirement)
 	if parentUID, ok := data["parent_uid"].(string); ok && parentUID != "" {
-		// If we already have ParentRefs from parentID, append to it
-		if body.ParentRefs == nil {
-			body.ParentRefs = []string{"project:" + parentUID}
-		} else {
-			body.ParentRefs = append(body.ParentRefs, "project:"+parentUID)
-		}
+		body.ParentRefs = []string{"project:" + parentUID}
 	}
 
-	// Also handle legacy parent_uid field for backwards compatibility
+	// Also handle legacy parentID field for backwards compatibility
 	if parentID, ok := data["parentID"].(string); ok && parentID != "" {
-		body.ParentRefs = []string{parentID}
+		// If we already have ParentRefs from parent_uid, append to it
+		if body.ParentRefs == nil {
+			body.ParentRefs = []string{"project:" + parentID}
+		} else {
+			body.ParentRefs = append(body.ParentRefs, "project:"+parentID)
+		}
 	}
 
 	// Extract project name for sorting

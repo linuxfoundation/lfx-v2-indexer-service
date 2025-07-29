@@ -10,7 +10,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"log"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -206,7 +205,10 @@ func (s *IndexerService) ValidateTransactionData(transaction *contracts.LFXTrans
 			// we can just use the data as is.
 			var data map[string]any
 			if err := json.Unmarshal(decodedData, &data); err != nil {
-				log.Printf("Failed to unmarshal JSON: %v", err)
+				logging.LogError(logger, "Failed to unmarshal JSON", err,
+					"validation_step", "json_unmarshal",
+					"transaction_data", transaction.Data,
+					"transaction_id", transactionID)
 				return err
 			}
 			transaction.Data = data
