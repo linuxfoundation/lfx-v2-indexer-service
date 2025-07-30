@@ -60,7 +60,7 @@ func (e *ProjectSettingsEnricher) EnrichData(body *contracts.TransactionBody, tr
 	if accessCheckRelation, ok := data["accessCheckRelation"].(string); ok {
 		body.AccessCheckRelation = accessCheckRelation
 	} else if _, exists := data["accessCheckRelation"]; !exists {
-		body.AccessCheckRelation = "viewer"
+		body.AccessCheckRelation = "auditor"
 	}
 
 	if historyCheckObject, ok := data["historyCheckObject"].(string); ok {
