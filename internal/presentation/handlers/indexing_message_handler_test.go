@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/linuxfoundation/lfx-indexer-service/pkg/constants"
-	"github.com/linuxfoundation/lfx-indexer-service/pkg/logging"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"

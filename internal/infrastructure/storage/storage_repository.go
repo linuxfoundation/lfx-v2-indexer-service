@@ -13,9 +13,9 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/contracts"
-	"github.com/linuxfoundation/lfx-indexer-service/pkg/constants"
-	"github.com/linuxfoundation/lfx-indexer-service/pkg/logging"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
 	"github.com/opensearch-project/opensearch-go/v2"
 	"github.com/opensearch-project/opensearch-go/v2/opensearchapi"
 )

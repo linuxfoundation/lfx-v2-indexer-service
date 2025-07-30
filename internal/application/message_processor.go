@@ -15,10 +15,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/contracts"
-	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/services"
-	"github.com/linuxfoundation/lfx-indexer-service/pkg/constants"
-	"github.com/linuxfoundation/lfx-indexer-service/pkg/logging"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/services"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
 )
 
 // MessageProcessor orchestrates the complete message processing workflow

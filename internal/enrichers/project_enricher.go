@@ -9,8 +9,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/contracts"
-	"github.com/linuxfoundation/lfx-indexer-service/pkg/constants"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 )
 
 // ProjectEnricher handles project-specific enrichment logic

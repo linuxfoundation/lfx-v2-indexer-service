@@ -10,9 +10,9 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/linuxfoundation/lfx-indexer-service/internal/application"
-	"github.com/linuxfoundation/lfx-indexer-service/pkg/constants"
-	"github.com/linuxfoundation/lfx-indexer-service/pkg/logging"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/application"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
 )
 
 // IndexingMessageHandler handles both V2 and V1 indexing messages from NATS
