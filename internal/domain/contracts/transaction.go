@@ -65,6 +65,14 @@ type LFXTransaction struct {
 	// their own resources types.
 	ObjectType string `json:"-"`
 
+	// Tags are the list of tags that should be set on the indexed document.
+	// These tags are used by the query service to be able to search for
+	// documents by these tags.
+	//
+	// For example, if a transaction wants to specify that its UID field should
+	// be a searchable tag, then it should set the `tags` JSON field to ["uid"].
+	Tags []string `json:"tags"`
+
 	// V1Data contains the raw Platform DB record data from LFX v1.
 	V1Data map[string]any `json:"v1_data,omitempty"`
 
