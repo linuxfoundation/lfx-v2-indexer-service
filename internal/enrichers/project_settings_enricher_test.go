@@ -77,7 +77,7 @@ func TestProjectSettingsEnricher_EnrichData(t *testing.T) {
 				ObjectID:             "project-defaults",
 				Public:               false,
 				AccessCheckObject:    "project:project-defaults", // Computed default
-				AccessCheckRelation:  "viewer",                   // Computed default
+				AccessCheckRelation:  "auditor",                  // Computed default
 				HistoryCheckObject:   "project:project-defaults", // Computed default
 				HistoryCheckRelation: "writer",                   // Computed default
 			},
@@ -122,7 +122,7 @@ func TestProjectSettingsEnricher_EnrichData(t *testing.T) {
 				ObjectID:             "project-config",
 				Public:               false,
 				AccessCheckObject:    "project:project-config",
-				AccessCheckRelation:  "viewer",
+				AccessCheckRelation:  "auditor",
 				HistoryCheckObject:   "project:project-config",
 				HistoryCheckRelation: "writer",
 			},
@@ -209,7 +209,7 @@ func TestProjectSettingsEnricher_EnrichData_AccessControlComputedDefaults(t *tes
 	assert.Equal(t, "project-computed-defaults", body.ObjectID)
 	assert.False(t, body.Public) // Always false for project settings
 	assert.Equal(t, "project:project-computed-defaults", body.AccessCheckObject)
-	assert.Equal(t, "viewer", body.AccessCheckRelation)
+	assert.Equal(t, "auditor", body.AccessCheckRelation)
 	assert.Equal(t, "project:project-computed-defaults", body.HistoryCheckObject)
 	assert.Equal(t, "writer", body.HistoryCheckRelation)
 }
@@ -358,7 +358,7 @@ func TestProjectSettingsEnricher_EnrichData_EdgeCases(t *testing.T) {
 		assert.False(t, body.Public)
 		// Should have computed defaults since access control fields don't exist
 		assert.Equal(t, "project:project-minimal", body.AccessCheckObject)
-		assert.Equal(t, "viewer", body.AccessCheckRelation)
+		assert.Equal(t, "auditor", body.AccessCheckRelation)
 		assert.Equal(t, "project:project-minimal", body.HistoryCheckObject)
 		assert.Equal(t, "writer", body.HistoryCheckRelation)
 	})

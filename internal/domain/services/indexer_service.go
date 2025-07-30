@@ -154,11 +154,21 @@ func (s *IndexerService) CreateTransactionFromMessage(messageData map[string]any
 		}
 	}
 
+	if tags, ok := messageData["tags"].([]any); ok {
+		// Only add tags that are strings. Ignore other types instead of failing.
+		for _, tag := range tags {
+			if tagStr, ok := tag.(string); ok {
+				transaction.Tags = append(transaction.Tags, tagStr)
+			}
+		}
+	}
+
 	logger.Info("Transaction created successfully",
 		"transaction_id", s.generateTransactionID(transaction),
 		"action", action,
 		"object_type", objectType,
 		"is_v1", isV1,
+		"tags", transaction.Tags,
 		"header_count", headerCount)
 
 	return transaction, nil
@@ -587,6 +597,7 @@ func (s *IndexerService) GenerateTransactionBody(ctx context.Context, transactio
 	body := &contracts.TransactionBody{
 		ObjectType: transaction.ObjectType,
 		V1Data:     transaction.V1Data,
+		Tags:       transaction.Tags,
 	}
 
 	// Set latest flag
