@@ -20,7 +20,8 @@ spec:
       terminationGracePeriodSeconds: {{ .Values.app.terminationGracePeriodSeconds }}
       containers:
         - name: app
-          image: ghcr.io/linuxfoundation/lfx-v2-indexer-service/cmd/lfx-indexer:{{ .Chart.AppVersion }}
+          image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false
           env:

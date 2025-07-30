@@ -58,6 +58,15 @@ app:
   writeTimeout: "5s"
   shutdownTimeout: "10s"
 
+# image is the configuration for the container image
+image:
+  # repository is the container image repository
+  repository: ghcr.io/linuxfoundation/lfx-v2-indexer-service/cmd/lfx-indexer
+  # tag is the container image tag (defaults to appVersion if not specified)
+  tag: ""
+  # pullPolicy is the image pull policy
+  pullPolicy: "IfNotPresent"
+
 # janitor is the configuration for the janitor service
 janitor:
   # enabled controls whether the janitor service is enabled
