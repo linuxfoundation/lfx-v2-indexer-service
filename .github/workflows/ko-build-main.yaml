@@ -31,6 +31,6 @@ jobs:
           ko build github.com/linuxfoundation/lfx-v2-indexer-service/cmd/lfx-indexer \
             -B \
             --platform linux/amd64,linux/arm64 \
-            -t development
+            -t development \
             -t ${{ github.sha }} \
             --sbom spdx
