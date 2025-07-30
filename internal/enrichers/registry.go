@@ -5,7 +5,7 @@
 package enrichers
 
 import (
-	"github.com/linuxfoundation/lfx-indexer-service/internal/domain/contracts"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
 )
 
 // Enricher defines the interface for object-specific enrichment logic

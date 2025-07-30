@@ -18,7 +18,7 @@ The LFX V2 Indexer Service is responsible for:
 ### Prerequisites
 
 - **Go 1.24**
-- **NATS Server** (message streaming)  
+- **NATS Server** (message streaming)
 - **OpenSearch/Elasticsearch** (document indexing)
 - **Heimdall JWT Service** (authentication)
 
@@ -34,7 +34,7 @@ export JWKS_URL=http://localhost:4457/.well-known/jwks
 export NATS_QUEUE=lfx.indexer.queue
 export OPENSEARCH_INDEX=resources
 
-# Optional Configuration  
+# Optional Configuration
 export LOG_LEVEL=info
 export PORT=8080
 ```
@@ -84,7 +84,7 @@ go build -o bin/lfx-indexer ./cmd/lfx-indexer
 ```bash
 # Kubernetes probes
 curl http://localhost:8080/livez    # Liveness probe
-curl http://localhost:8080/readyz   # Readiness probe  
+curl http://localhost:8080/readyz   # Readiness probe
 curl http://localhost:8080/health   # General health
 ```
 
@@ -133,87 +133,87 @@ graph TB
     %% External message sources
     V2_APPS["V2 Applications<br/>(Projects API, Orgs API, etc.)"]
     V1_APPS["V1 Legacy Applications<br/>(Platform DB Events)"]
-    
+
     %% NATS Infrastructure
     NATS_SERVER["NATS Server<br/>nats://nats:4222"]
     V2_SUBJECT["V2 Subject: lfx.index.*<br/>(lfx.index.project, lfx.index.organization)"]
     V1_SUBJECT["V1 Subject: lfx.v1.index.*<br/>(lfx.v1.index.project)"]
     QUEUE_GROUP["Queue Group: lfx.indexer.queue<br/>(Load Balancing)"]
-    
+
     %% Service Instances
     INSTANCE1["LFX Indexer Instance 1"]
     INSTANCE2["LFX Indexer Instance 2"]
     INSTANCE3["LFX Indexer Instance N..."]
-    
+
     %% Clean Architecture Layers
     MAIN_GO["cmd/lfx-indexer/main.go<br/>(Entry Point & DI)"]
     CONTAINER["Container<br/>(Dependency Injection)"]
     MSG_REPO["MessagingRepository<br/>(NATS Wrapper)"]
-    
+
     %% Presentation Layer
     UNIFIED_HANDLER["IndexingMessageHandler<br/>(Unified V2 + V1 Messages)"]
     HEALTH_HANDLER["HealthHandler<br/>(Kubernetes Probes)"]
-    
+
     %% Application Layer
     MESSAGE_PROCESSOR["MessageProcessor<br/>(Workflow Coordination)"]
-    
+
     %% Domain Layer
     INDEXER_SVC["IndexerService<br/>(Business Logic + Health + Action Validation)"]
     CONTRACTS_PKG["Contracts Package<br/>(Pure Domain Interfaces & Entities)"]
     TRANSACTION_ENTITY["LFXTransaction Entity<br/>(Pure Data Structure)"]
-    
+
     %% Infrastructure Layer
     STORAGE_REPO["StorageRepository<br/>(OpenSearch Client)"]
     AUTH_REPO["AuthRepository<br/>(JWT Validation)"]
     OPENSEARCH["OpenSearch Cluster<br/>resources index"]
-    
+
     %% Cleanup System
     CLEANUP_REPO["CleanupRepository<br/>(Background Cleanup)"]
-    
+
     %% External Services
     JWT_SERVICE["Heimdall JWT Service<br/>(Token Validation)"]
-    
+
     %% Message Flow
     V2_APPS -->|"Publish V2 Messages"| V2_SUBJECT
     V1_APPS -->|"Publish V1 Messages"| V1_SUBJECT
-    
+
     V2_SUBJECT --> NATS_SERVER
     V1_SUBJECT --> NATS_SERVER
-    
+
     NATS_SERVER -->|"Queue Group Distribution"| QUEUE_GROUP
     QUEUE_GROUP --> INSTANCE1
-    QUEUE_GROUP --> INSTANCE2  
+    QUEUE_GROUP --> INSTANCE2
     QUEUE_GROUP --> INSTANCE3
-    
+
     %% Service Architecture Flow
     INSTANCE1 --> MAIN_GO
     MAIN_GO --> CONTAINER
     CONTAINER --> MSG_REPO
     CONTAINER --> HEALTH_HANDLER
-    
+
     MSG_REPO -->|"Both V2 + V1"| UNIFIED_HANDLER
-    
+
     %% Processing Flow
     UNIFIED_HANDLER --> MESSAGE_PROCESSOR
     MESSAGE_PROCESSOR --> INDEXER_SVC
     MESSAGE_PROCESSOR --> CLEANUP_REPO
-    
+
     INDEXER_SVC --> CONTRACTS_PKG
     INDEXER_SVC --> TRANSACTION_ENTITY
     INDEXER_SVC --> AUTH_REPO
     INDEXER_SVC --> STORAGE_REPO
-    
+
     CONTRACTS_PKG --> TRANSACTION_ENTITY
-    
+
     STORAGE_REPO --> OPENSEARCH
     AUTH_REPO --> JWT_SERVICE
-    
+
     %% Styling
     classDef application fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
     classDef domain fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
     classDef infrastructure fill:#e8f5e8,stroke:#388e3c,stroke-width:2px
     classDef external fill:#fff3e0,stroke:#f57c00,stroke-width:2px
-    
+
     class MESSAGE_PROCESSOR,UNIFIED_HANDLER application
     class INDEXER_SVC,CONTRACTS_PKG,TRANSACTION_ENTITY domain
     class CONTAINER,MSG_REPO,STORAGE_REPO,AUTH_REPO,CLEANUP_REPO infrastructure
@@ -225,7 +225,7 @@ graph TB
 ```mermaid
 sequenceDiagram
     participant NATS as NATS Server
-    participant MR as MessagingRepository  
+    participant MR as MessagingRepository
     participant UH as IndexingMessageHandler
     participant MP as MessageProcessor
     participant IS as IndexerService
@@ -240,55 +240,55 @@ sequenceDiagram
 
     %% Message Arrival & Presentation Layer
     NATS->>MR: NATS Message arrives<br/>Subject: lfx.index.project OR lfx.v1.index.project<br/>Queue: lfx.indexer.queue
-    
+
     MR->>UH: HandleWithReply(ctx, data, subject, reply)
     Note over UH: Route based on subject prefix<br/>(V2 vs V1 format)
-    
+
     %% Application Layer Coordination
     UH->>MP: ProcessIndexingMessage(ctx, data, subject)
     Note over MP: Generate messageID<br/>Log reception metrics
-    
+
     %% Transaction Creation & Validation
     MP->>TE: createTransaction(data, subject)
     TE->>TE: Parse message format<br/>Extract object type from subject<br/>Validate required fields (pure data)
     TE-->>MP: LFXTransaction entity (clean data structure)
-    
+
     %% Domain Layer Business Logic
     MP->>IS: ProcessTransaction(ctx, transaction, index)
-    
+
     Note over IS: Consolidated processing:<br/>• EnrichTransaction() with action validation<br/>• GenerateTransactionBody()<br/>• Index document<br/>(Action helpers moved to service layer)
-    
+
     %% Authentication & Authorization
     IS->>AR: ParsePrincipals(ctx, headers)
     AR->>JWT: ValidateToken(ctx, token)
     JWT-->>AR: Principal{Principal, Email}
     AR-->>IS: []Principal with delegation support
-    
+
     %% Data Enrichment & Validation
     IS->>IS: EnrichTransaction()<br/>ValidateObjectType()<br/>GenerateTransactionBody()
-    
+
     %% Document Indexing
     IS->>SR: Index(ctx, index, docID, body)
     SR->>OS: POST /resources/_doc/{docID}<br/>with optimistic concurrency
-    
+
     alt Successful Index
         OS-->>SR: 201 Created
         SR-->>IS: Success with DocumentID
-        
+
         %% Background Conflict Resolution
         IS-->>MP: ProcessingResult{Success: true, DocumentID}
         MP->>CR: CheckItem(documentID)
         Note over CR: Background cleanup<br/>Event-driven processing
-        
+
     else Index Conflict/Error
         OS-->>SR: 409 Conflict / 4xx Error
         SR-->>IS: Error with details
         IS-->>MP: ProcessingResult{Success: false, Error}
     end
-    
+
     %% Response Handling
     MP-->>UH: Processing result
-    
+
     alt Success
         UH->>UH: reply([]byte("OK"))
         Note over UH: Log success metrics
@@ -296,7 +296,7 @@ sequenceDiagram
         UH->>UH: reply([]byte("ERROR: details"))
         Note over UH: Log error with context
     end
-    
+
     UH-->>MR: Acknowledge message
     MR-->>NATS: Message processed
 ```
@@ -313,7 +313,7 @@ JWKS_URL=http://localhost:4457/.well-known/jwks  # JWT validation endpoint
 
 # Message Processing
 NATS_INDEXING_SUBJECT=lfx.index.>           # V2 subject pattern
-NATS_V1_INDEXING_SUBJECT=lfx.v1.index.>    # V1 subject pattern  
+NATS_V1_INDEXING_SUBJECT=lfx.v1.index.>    # V1 subject pattern
 NATS_QUEUE=lfx.indexer.queue                # Queue group name
 OPENSEARCH_INDEX=resources                   # OpenSearch index name
 
@@ -322,7 +322,7 @@ NATS_MAX_RECONNECTS=10                       # Max reconnection attempts
 NATS_RECONNECT_WAIT=2s                       # Wait time between reconnects
 NATS_CONNECTION_TIMEOUT=10s                  # Initial connection timeout
 
-# JWT Configuration  
+# JWT Configuration
 JWT_ISSUER=heimdall                          # JWT issuer validation
 JWT_AUDIENCES=["audience1","audience2"]      # Allowed audiences (JSON array)
 JWT_CLOCK_SKEW=6h                           # Clock skew tolerance
@@ -346,7 +346,7 @@ JANITOR_ENABLED=true                         # Enable cleanup service (default: 
 **Queue Group**: `lfx.indexer.queue`
 
 - **Load Balancing**: Automatic distribution across service instances
-- **Durability**: Messages processed exactly once per queue group  
+- **Durability**: Messages processed exactly once per queue group
 - **Fault Tolerance**: Failed instances don't lose messages
 
 ## 📁 Project Structure
@@ -451,7 +451,7 @@ make docker-push                   # Push to registry
 
 # Testing by layer
 make test-domain                   # Domain layer tests
-make test-application              # Application layer tests  
+make test-application              # Application layer tests
 make test-infrastructure          # Infrastructure layer tests
 make test-presentation             # Presentation layer tests
 make coverage                      # Generate coverage report
@@ -466,14 +466,14 @@ nats pub lfx.index.project '{
   "headers": {"Authorization": "Bearer token"},
   "data": {
     "id": "test-project-123",
-    "uid": "test-project-123", 
+    "uid": "test-project-123",
     "name": "Test Project",
     "slug": "test-project",
     "public": true
   }
 }' --server nats://your-nats-server:4222
 
-# Test V1 message format  
+# Test V1 message format
 nats pub lfx.v1.index.project '{
   "action": "create",
   "data": {
@@ -536,7 +536,7 @@ LOG_LEVEL=debug ./bin/lfx-indexer
 
 ```bash
 curl http://localhost:8080/livez    # Kubernetes liveness
-curl http://localhost:8080/readyz   # Kubernetes readiness  
+curl http://localhost:8080/readyz   # Kubernetes readiness
 curl http://localhost:8080/health   # General health status
 ```
 
@@ -577,6 +577,7 @@ LOG_LEVEL=debug make run
 ### Helm Chart
 
 ```bash
+
 # Install with Make
 make helm-install
 
@@ -588,6 +589,7 @@ helm install lfx-indexer ./charts/lfx-v2-indexer-service \
   --namespace lfx \
   --create-namespace \
   --values custom-values.yaml
+
 
 # Manual upgrade
 helm upgrade lfx-indexer ./charts/lfx-v2-indexer-service \
@@ -605,7 +607,7 @@ docker run -p 8080:8080 \
   -e NATS_URL=nats://nats:4222 \
   -e OPENSEARCH_URL=http://opensearch:9200 \
   -e JWKS_URL=http://heimdall:4457/.well-known/jwks \
-  lfx-indexer-service:latest
+  lfx-v2-indexer-service:latest
 ```
 
 ## 📄 License

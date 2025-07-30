@@ -42,7 +42,7 @@ deps: ## Download dependencies
 fmt: ## Format code
 	@echo "Formatting code..."
 	go fmt ./...
-	goimports -local github.com/linuxfoundation/lfx-indexer-service -w .
+	goimports -local github.com/linuxfoundation/lfx-v2-indexer-service -w .
 
 .PHONY: vet
 vet: ## Run go vet

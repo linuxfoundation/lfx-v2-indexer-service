@@ -8,7 +8,7 @@ import "time"
 
 // Service identity
 const (
-	ServiceName    = "lfx-indexer-service"
+	ServiceName    = "lfx-v2-indexer-service"
 	ServiceVersion = "2.0.0"
 	Component      = "indexer"
 )
