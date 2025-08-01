@@ -12,6 +12,10 @@ DOCKER_REGISTRY := linuxfoundation
 DOCKER_IMAGE := $(DOCKER_REGISTRY)/$(APP_NAME)
 DOCKER_TAG := $(VERSION)
 
+# Helm
+HELM_CHART_NAME := lfx-v2-indexer-service
+HELM_NAMESPACE := lfx
+
 # Go
 GO_VERSION := 1.21
 GOOS := linux
@@ -218,12 +222,12 @@ docker-stop: ## Stop Docker container
 .PHONY: helm-install
 helm-install: ## Install the application using Helm
 	@echo "Installing application using Helm..."
-	helm upgrade --install lfx-v2-indexer-service charts/lfx-v2-indexer-service
+	helm upgrade --install $(HELM_CHART_NAME) charts/$(HELM_CHART_NAME) -n $(HELM_NAMESPACE)
 
 .PHONY: helm-uninstall
 helm-uninstall: ## Uninstall the application using Helm
 	@echo "Uninstalling application using Helm..."
-	helm uninstall lfx-v2-indexer-service
+	helm uninstall $(HELM_CHART_NAME) -n $(HELM_NAMESPACE)
 
 
 ##@ Development Tools
