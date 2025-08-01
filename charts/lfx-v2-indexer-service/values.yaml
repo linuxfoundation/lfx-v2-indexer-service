@@ -29,7 +29,7 @@ opensearch:
 # heimdall is the configuration for the heimdall middleware
 heimdall:
   enabled: true
-  url: http://heimdall.lfx.svc.cluster.local:4456
+  url: http://lfx-platform-heimdall.lfx.svc.cluster.local:4456
 
 # jwt is the configuration for JWT authentication
 jwt:
@@ -61,7 +61,7 @@ app:
 # image is the configuration for the container image
 image:
   # repository is the container image repository
-  repository: ghcr.io/linuxfoundation/lfx-v2-indexer-service/cmd/lfx-indexer
+  repository: ghcr.io/linuxfoundation/lfx-v2-indexer-service/lfx-indexer
   # tag is the container image tag (defaults to appVersion if not specified)
   tag: ""
   # pullPolicy is the image pull policy
