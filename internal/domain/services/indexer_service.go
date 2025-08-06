@@ -370,15 +370,21 @@ func (s *IndexerService) ValidateObjectType(transaction *contracts.LFXTransactio
 		"transaction_id", transactionID,
 		"object_type", transaction.ObjectType)
 
+	if transaction.ObjectType == "" {
+		err := fmt.Errorf("object type is required")
+		logging.LogError(logger, "Object type validation failed: missing object type", err,
+			"transaction_id", transactionID,
+			"validation_step", "object_type_presence")
+		return err
+	}
+
 	// Check if we have an enricher registered for this object type
 	enricher, exists := s.enricherRegistry.GetEnricher(transaction.ObjectType)
 	if !exists {
-		err := fmt.Errorf("no enricher found for object type: %s", transaction.ObjectType)
-		logging.LogError(logger, "Object type validation failed: no enricher found", err,
+		logger.Warn("no enricher found for object type, default enrichment will be used",
 			"transaction_id", transactionID,
-			"validation_step", "enricher_lookup",
 			"object_type", transaction.ObjectType)
-		return err
+		return nil
 	}
 
 	logger.Debug("Object type validation passed",
@@ -1083,12 +1089,12 @@ func (s *IndexerService) enrichTransactionData(body *contracts.TransactionBody, 
 	// Use the registry to find the appropriate enricher for the object type
 	enricher, exists := s.enricherRegistry.GetEnricher(transaction.ObjectType)
 	if !exists {
-		err := fmt.Errorf("no enricher found for object type: %s", transaction.ObjectType)
-		logging.LogError(logger, "Enrichment failed: no enricher found", err,
+		// Log as warning for monitoring - this indicates potential data quality issues
+		logger.Warn("No specific enricher found for object type, using default enricher",
 			"transaction_id", transactionID,
 			"object_type", transaction.ObjectType,
 			"enrichment_step", "enricher_lookup")
-		return err
+		enricher = s.enricherRegistry.GetDefaultEnricher()
 	}
 
 	logger.Debug("Found enricher for object type",

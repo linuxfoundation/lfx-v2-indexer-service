@@ -20,13 +20,15 @@ type Enricher interface {
 // Registry is a simple registry for object enrichers
 // No complex dependency injection or configuration - just a map
 type Registry struct {
-	enrichers map[string]Enricher
+	enrichers       map[string]Enricher
+	defaultEnricher Enricher
 }
 
 // NewRegistry creates a new enricher registry
 func NewRegistry() *Registry {
 	return &Registry{
-		enrichers: make(map[string]Enricher),
+		enrichers:       make(map[string]Enricher),
+		defaultEnricher: NewDefaultEnricher(),
 	}
 }
 
@@ -39,6 +41,11 @@ func (r *Registry) Register(enricher Enricher) {
 func (r *Registry) GetEnricher(objectType string) (Enricher, bool) {
 	enricher, exists := r.enrichers[objectType]
 	return enricher, exists
+}
+
+// GetDefaultEnricher returns the default enricher if no specific enricher is found
+func (r *Registry) GetDefaultEnricher() Enricher {
+	return r.defaultEnricher
 }
 
 // GetSupportedTypes returns all supported object types

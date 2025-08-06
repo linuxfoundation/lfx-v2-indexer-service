@@ -41,6 +41,7 @@ const (
 
 // Object types (centralized)
 const (
+	ObjectTypeDefaultEnricher = "default_enricher"
 	ObjectTypeProject         = "project"
 	ObjectTypeProjectSettings = "project_settings"
 	ObjectTypeCommittee       = "committee"
