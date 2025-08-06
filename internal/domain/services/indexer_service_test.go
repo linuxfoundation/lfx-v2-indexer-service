@@ -124,32 +124,47 @@ func TestIndexerService_ProcessTransaction_InvalidAction(t *testing.T) {
 	assert.Len(t, mockStorageRepo.IndexCalls, 0) // Should not have indexed
 }
 
-func TestIndexerService_ProcessTransaction_InvalidObjectType(t *testing.T) {
+func TestIndexerService_ProcessTransaction_UnknownObjectType(t *testing.T) {
 	// Setup
 	mockStorageRepo := mocks.NewMockStorageRepository()
 	mockMessagingRepo := mocks.NewMockMessagingRepository()
 	logger, _ := logging.TestLogger(t)
 	service := NewIndexerService(mockStorageRepo, mockMessagingRepo, logger)
 
-	// Test data with invalid object type
+	// Test data with unknown object type (should use default enrichment)
 	transaction := &contracts.LFXTransaction{
 		Action:     constants.ActionCreated,
-		ObjectType: "invalid-type",
+		ObjectType: "unknown-type",
+		Headers: map[string]string{
+			"authorization": "Bearer valid-token",
+		},
 		Data: map[string]any{
-			"id": "test-object",
+			"id":     "test-object",
+			"public": true, // Required for access control
 		},
 		Timestamp: time.Now(),
+		ParsedPrincipals: []contracts.Principal{
+			{
+				Principal: "test_user",
+				Email:     "test@example.com",
+			},
+		},
 	}
 
 	// Execute
 	result, err := service.ProcessTransaction(context.Background(), transaction, "test-index")
 
-	// Verify
-	assert.Error(t, err)
+	// Verify - should succeed with default enrichment
+	assert.NoError(t, err)
 	assert.NotNil(t, result)
-	assert.False(t, result.Success)
-	assert.Contains(t, err.Error(), "unsupported object type")
-	assert.Len(t, mockStorageRepo.IndexCalls, 0) // Should not have indexed
+	assert.True(t, result.Success)
+	assert.Len(t, mockStorageRepo.IndexCalls, 1) // Should have indexed successfully
+
+	// Verify the indexed document
+	indexCall := mockStorageRepo.IndexCalls[0]
+	assert.Equal(t, "test-index", indexCall.Index)
+	assert.Equal(t, "unknown-type:test-object", indexCall.DocID)
+	assert.Contains(t, indexCall.Body, "test-object")
 }
 
 func TestIndexerService_ProcessTransaction_BasicValidation(t *testing.T) {
@@ -290,19 +305,18 @@ func TestIndexerService_ValidateObjectType_RegistryBased(t *testing.T) {
 	err := service.ValidateObjectType(validTransaction)
 	assert.NoError(t, err, "Project object type should be valid")
 
-	// Test invalid object type (committee is not registered in the enricher registry)
-	invalidTransaction := &contracts.LFXTransaction{
+	// Test unknown object type (committee is not registered in the enricher registry)
+	// Should now succeed with default enrichment
+	unknownTransaction := &contracts.LFXTransaction{
 		ObjectType: constants.ObjectTypeCommittee,
 	}
-	err = service.ValidateObjectType(invalidTransaction)
-	assert.Error(t, err, "Committee object type should be invalid (not registered)")
-	assert.Contains(t, err.Error(), "no enricher found for object type: committee")
+	err = service.ValidateObjectType(unknownTransaction)
+	assert.NoError(t, err, "Committee object type should use default enrichment")
 
-	// Test completely unknown object type
-	unknownTransaction := &contracts.LFXTransaction{
+	// Test completely unknown object type - should also succeed with default enrichment
+	unknownTransaction2 := &contracts.LFXTransaction{
 		ObjectType: "unknown-type",
 	}
-	err = service.ValidateObjectType(unknownTransaction)
-	assert.Error(t, err, "Unknown object type should be invalid")
-	assert.Contains(t, err.Error(), "no enricher found for object type: unknown-type")
+	err = service.ValidateObjectType(unknownTransaction2)
+	assert.NoError(t, err, "Unknown object type should use default enrichment")
 }
