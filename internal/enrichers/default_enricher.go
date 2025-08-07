@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
@@ -18,11 +19,8 @@ import (
 
 var (
 	// aliasRegex matches keys that typically contain names or aliases
-	// Improved pattern to be more specific and avoid false positives
-	aliasRegex = regexp.MustCompile(`(?i)^(name|title|label|alias|slug|display_name)$`)
-
-	// logger for structured logging
-	logger = logging.NewLogger()
+	aliasRegex     *regexp.Regexp
+	aliasRegexOnce sync.Once
 )
 
 // defaultEnricher handles default enrichment logic
@@ -157,6 +155,14 @@ func (e *defaultEnricher) extractSortName(data map[string]any) string {
 	return ""
 }
 
+// getAliasRegex returns the compiled alias regex, initializing it once.
+func (e *defaultEnricher) getAliasRegex() *regexp.Regexp {
+	aliasRegexOnce.Do(func() {
+		aliasRegex = regexp.MustCompile(`(?i)^(name|title|label|alias|slug|display_name)$`)
+	})
+	return aliasRegex
+}
+
 // extractNameAndAliases collects all name-like fields for comprehensive searching
 func (e *defaultEnricher) extractNameAndAliases(data map[string]any) []string {
 	var nameAndAliases []string
@@ -164,7 +170,7 @@ func (e *defaultEnricher) extractNameAndAliases(data map[string]any) []string {
 
 	// Collect all name-like fields using regex pattern
 	for key, value := range data {
-		if aliasRegex.MatchString(key) {
+		if e.getAliasRegex().MatchString(key) {
 			if strValue, ok := value.(string); ok && strValue != "" {
 				trimmed := strings.TrimSpace(strValue)
 				if trimmed != "" && !seen[trimmed] {
@@ -275,6 +281,6 @@ func (e *defaultEnricher) buildFulltextContent(body *contracts.TransactionBody, 
 // NewDefaultEnricher creates a new default enricher with structured logging
 func NewDefaultEnricher() Enricher {
 	return &defaultEnricher{
-		logger: logger.With(slog.String("component", "default_enricher")),
+		logger: logging.NewLogger().With(slog.String("component", "default_enricher")),
 	}
 }
