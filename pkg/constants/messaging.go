@@ -41,10 +41,11 @@ const (
 
 // Object types (centralized)
 const (
-	ObjectTypeProject         = "project"
-	ObjectTypeProjectSettings = "project_settings"
-	ObjectTypeCommittee       = "committee"
-	ObjectTypeCommitteeMember = "committeemember"
+	ObjectTypeProject           = "project"
+	ObjectTypeProjectSettings   = "project_settings"
+	ObjectTypeCommittee         = "committee"
+	ObjectTypeCommitteeSettings = "committee_settings"
+	ObjectTypeCommitteeMember   = "committeemember"
 )
 
 // Message processing constants
