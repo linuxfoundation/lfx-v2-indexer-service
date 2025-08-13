@@ -4,6 +4,7 @@
 package enrichers
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -551,4 +552,182 @@ func TestDefaultEnricher_EnrichData_EdgeCases(t *testing.T) {
 			tt.assertions(t, body)
 		})
 	}
+}
+
+func TestDefaultEnricher_WithAccessControl_Option(t *testing.T) {
+	// Custom access control function that uses "auditor" instead of "viewer" as default
+	customAccessControl := func(body *contracts.TransactionBody, data map[string]any, objectType, objectID string) {
+		// Access check object - same as default
+		if accessCheckObject, ok := data["accessCheckObject"].(string); ok {
+			body.AccessCheckObject = accessCheckObject
+		} else if _, exists := data["accessCheckObject"]; !exists {
+			body.AccessCheckObject = fmt.Sprintf("%s:%s", objectType, objectID)
+		}
+
+		// Access check relation - CUSTOM: use "auditor" instead of "viewer"
+		if accessCheckRelation, ok := data["accessCheckRelation"].(string); ok {
+			body.AccessCheckRelation = accessCheckRelation
+		} else if _, exists := data["accessCheckRelation"]; !exists {
+			body.AccessCheckRelation = "auditor" // Custom default!
+		}
+
+		// History check object - same as default
+		if historyCheckObject, ok := data["historyCheckObject"].(string); ok {
+			body.HistoryCheckObject = historyCheckObject
+		} else if _, exists := data["historyCheckObject"]; !exists {
+			body.HistoryCheckObject = fmt.Sprintf("%s:%s", objectType, objectID)
+		}
+
+		// History check relation - same as default
+		if historyCheckRelation, ok := data["historyCheckRelation"].(string); ok {
+			body.HistoryCheckRelation = historyCheckRelation
+		} else if _, exists := data["historyCheckRelation"]; !exists {
+			body.HistoryCheckRelation = "writer"
+		}
+	}
+
+	tests := []struct {
+		name     string
+		data     map[string]any
+		expected struct {
+			accessCheckObject    string
+			accessCheckRelation  string
+			historyCheckObject   string
+			historyCheckRelation string
+		}
+	}{
+		{
+			name: "uses custom default for accessCheckRelation",
+			data: map[string]any{
+				"uid": "test-123",
+			},
+			expected: struct {
+				accessCheckObject    string
+				accessCheckRelation  string
+				historyCheckObject   string
+				historyCheckRelation string
+			}{
+				accessCheckObject:    "committee:test-123",
+				accessCheckRelation:  "auditor", // Custom default instead of "viewer"
+				historyCheckObject:   "committee:test-123",
+				historyCheckRelation: "writer",
+			},
+		},
+		{
+			name: "respects explicit accessCheckRelation value",
+			data: map[string]any{
+				"uid":                 "test-456",
+				"accessCheckRelation": "admin",
+			},
+			expected: struct {
+				accessCheckObject    string
+				accessCheckRelation  string
+				historyCheckObject   string
+				historyCheckRelation string
+			}{
+				accessCheckObject:    "committee:test-456",
+				accessCheckRelation:  "admin", // Explicit value is preserved
+				historyCheckObject:   "committee:test-456",
+				historyCheckRelation: "writer",
+			},
+		},
+		{
+			name: "preserves other custom access control values",
+			data: map[string]any{
+				"uid":                  "test-789",
+				"accessCheckObject":    "custom:object",
+				"historyCheckObject":   "custom:history",
+				"historyCheckRelation": "custom-writer",
+			},
+			expected: struct {
+				accessCheckObject    string
+				accessCheckRelation  string
+				historyCheckObject   string
+				historyCheckRelation string
+			}{
+				accessCheckObject:    "custom:object",
+				accessCheckRelation:  "auditor", // Still uses custom default
+				historyCheckObject:   "custom:history",
+				historyCheckRelation: "custom-writer",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create enricher with custom access control
+			enricher := newDefaultEnricher(constants.ObjectTypeCommittee, WithAccessControl(customAccessControl))
+
+			body := &contracts.TransactionBody{}
+			transaction := &contracts.LFXTransaction{
+				ObjectType: constants.ObjectTypeCommittee,
+				ParsedData: tt.data,
+			}
+
+			err := enricher.EnrichData(body, transaction)
+			require.NoError(t, err)
+
+			// Verify custom access control behavior
+			assert.Equal(t, tt.expected.accessCheckObject, body.AccessCheckObject, "AccessCheckObject should match expected")
+			assert.Equal(t, tt.expected.accessCheckRelation, body.AccessCheckRelation, "AccessCheckRelation should use custom default")
+			assert.Equal(t, tt.expected.historyCheckObject, body.HistoryCheckObject, "HistoryCheckObject should match expected")
+			assert.Equal(t, tt.expected.historyCheckRelation, body.HistoryCheckRelation, "HistoryCheckRelation should match expected")
+		})
+	}
+}
+
+func TestDefaultEnricher_WithAccessControl_vs_Default(t *testing.T) {
+	data := map[string]any{
+		"uid": "test-comparison",
+	}
+
+	// Test default enricher
+	defaultEnricher := newDefaultEnricher(constants.ObjectTypeCommittee)
+	defaultBody := &contracts.TransactionBody{}
+	defaultTransaction := &contracts.LFXTransaction{
+		ObjectType: constants.ObjectTypeCommittee,
+		ParsedData: data,
+	}
+
+	err := defaultEnricher.EnrichData(defaultBody, defaultTransaction)
+	require.NoError(t, err)
+
+	// Test custom enricher with WithAccessControl option
+	customAccessControl := func(body *contracts.TransactionBody, data map[string]any, objectType, objectID string) {
+		if accessCheckRelation, ok := data["accessCheckRelation"].(string); ok {
+			body.AccessCheckRelation = accessCheckRelation
+		} else if _, exists := data["accessCheckRelation"]; !exists {
+			body.AccessCheckRelation = "auditor" // Different from default "viewer"
+		}
+
+		// Set other fields same as default for this test
+		if _, exists := data["accessCheckObject"]; !exists {
+			body.AccessCheckObject = fmt.Sprintf("%s:%s", objectType, objectID)
+		}
+		if _, exists := data["historyCheckObject"]; !exists {
+			body.HistoryCheckObject = fmt.Sprintf("%s:%s", objectType, objectID)
+		}
+		if _, exists := data["historyCheckRelation"]; !exists {
+			body.HistoryCheckRelation = "writer"
+		}
+	}
+
+	customEnricher := newDefaultEnricher(constants.ObjectTypeCommittee, WithAccessControl(customAccessControl))
+	customBody := &contracts.TransactionBody{}
+	customTransaction := &contracts.LFXTransaction{
+		ObjectType: constants.ObjectTypeCommittee,
+		ParsedData: data,
+	}
+
+	err = customEnricher.EnrichData(customBody, customTransaction)
+	require.NoError(t, err)
+
+	// Verify the difference
+	assert.Equal(t, "viewer", defaultBody.AccessCheckRelation, "Default enricher should use 'viewer'")
+	assert.Equal(t, "auditor", customBody.AccessCheckRelation, "Custom enricher should use 'auditor'")
+
+	// Verify other fields are the same
+	assert.Equal(t, defaultBody.AccessCheckObject, customBody.AccessCheckObject, "AccessCheckObject should be the same")
+	assert.Equal(t, defaultBody.HistoryCheckObject, customBody.HistoryCheckObject, "HistoryCheckObject should be the same")
+	assert.Equal(t, defaultBody.HistoryCheckRelation, customBody.HistoryCheckRelation, "HistoryCheckRelation should be the same")
 }

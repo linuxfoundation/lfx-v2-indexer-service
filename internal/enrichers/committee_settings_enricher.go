@@ -5,6 +5,8 @@
 package enrichers
 
 import (
+	"fmt"
+
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 )
@@ -24,9 +26,45 @@ func (e *CommitteeSettingsEnricher) EnrichData(body *contracts.TransactionBody, 
 	return e.defaultEnricher.EnrichData(body, transaction)
 }
 
+// setAccessControl provides committee-settings-specific access control logic
+// Similar to project settings but uses "committee" object type and "auditor" as default relation
+func (e *CommitteeSettingsEnricher) setAccessControl(body *contracts.TransactionBody, data map[string]any, objectType, objectID string) {
+	// Set access control with committee-specific logic (similar to project settings)
+	// Only apply defaults when fields are completely missing from data
+	if accessCheckObject, ok := data["accessCheckObject"].(string); ok {
+		// Field exists in data (even if empty) - use data value
+		body.AccessCheckObject = accessCheckObject
+	} else if _, exists := data["accessCheckObject"]; !exists {
+		// Field doesn't exist in data - use computed default with committee prefix
+		body.AccessCheckObject = fmt.Sprintf("%s:%s", objectType, objectID)
+	}
+	// If field exists but is not a string, leave empty (no override)
+
+	if accessCheckRelation, ok := data["accessCheckRelation"].(string); ok {
+		body.AccessCheckRelation = accessCheckRelation
+	} else if _, exists := data["accessCheckRelation"]; !exists {
+		body.AccessCheckRelation = "auditor" // Committee-specific default (same as project settings)
+	}
+
+	if historyCheckObject, ok := data["historyCheckObject"].(string); ok {
+		body.HistoryCheckObject = historyCheckObject
+	} else if _, exists := data["historyCheckObject"]; !exists {
+		body.HistoryCheckObject = fmt.Sprintf("%s:%s", objectType, objectID)
+	}
+
+	if historyCheckRelation, ok := data["historyCheckRelation"].(string); ok {
+		body.HistoryCheckRelation = historyCheckRelation
+	} else if _, exists := data["historyCheckRelation"]; !exists {
+		body.HistoryCheckRelation = "writer"
+	}
+}
+
 // NewCommitteeSettingsEnricher creates a new committee settings enricher
 func NewCommitteeSettingsEnricher() Enricher {
-	return &CommitteeSettingsEnricher{
-		defaultEnricher: newDefaultEnricher(constants.ObjectTypeCommitteeSettings),
-	}
+	enricher := &CommitteeSettingsEnricher{}
+	enricher.defaultEnricher = newDefaultEnricher(
+		constants.ObjectTypeCommitteeSettings,
+		WithAccessControl(enricher.setAccessControl),
+	)
+	return enricher
 }

@@ -10,18 +10,44 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-	"sync"
 
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
 )
 
-var (
-	// aliasRegex matches keys that typically contain names or aliases
-	aliasRegex     *regexp.Regexp
-	aliasRegexOnce sync.Once
-)
+// EnricherOption defines a function that can configure a defaultEnricher
+type EnricherOption func(*defaultEnricher)
+
+// Option functions for configuring defaultEnricher
+
+// WithAccessControl allows overriding the access control logic
+func WithAccessControl(fn func(body *contracts.TransactionBody, data map[string]any, objectType, objectID string)) EnricherOption {
+	return func(e *defaultEnricher) {
+		e.setAccessControlFn = fn
+	}
+}
+
+// WithParentReferences allows overriding the parent references logic
+func WithParentReferences(fn func(body *contracts.TransactionBody, data map[string]any, objectType string)) EnricherOption {
+	return func(e *defaultEnricher) {
+		e.setParentReferencesFn = fn
+	}
+}
+
+// WithPublicFlag allows overriding the public flag extraction logic
+func WithPublicFlag(fn func(data map[string]any) bool) EnricherOption {
+	return func(e *defaultEnricher) {
+		e.extractPublicFlagFn = fn
+	}
+}
+
+// WithNameAndAliases allows overriding the name and aliases extraction logic
+func WithNameAndAliases(fn func(data map[string]any) []string) EnricherOption {
+	return func(e *defaultEnricher) {
+		e.extractNameAndAliasesFn = fn
+	}
+}
 
 // defaultEnricher handles default enrichment logic
 // This enricher is used when no specific enricher is registered for an object type.
@@ -30,6 +56,12 @@ var (
 type defaultEnricher struct {
 	objectType string
 	logger     *slog.Logger
+
+	// Configurable functions - can be overridden via options
+	setAccessControlFn      func(body *contracts.TransactionBody, data map[string]any, objectType, objectID string)
+	setParentReferencesFn   func(body *contracts.TransactionBody, data map[string]any, objectType string)
+	extractPublicFlagFn     func(data map[string]any) bool
+	extractNameAndAliasesFn func(data map[string]any) []string
 }
 
 // ObjectType returns the object type this enricher handles.
@@ -79,17 +111,17 @@ func (e *defaultEnricher) EnrichData(body *contracts.TransactionBody, transactio
 	body.ObjectID = objectID
 
 	// Set public flag with safe type assertion and default
-	body.Public = e.extractPublicFlag(data)
+	body.Public = e.extractPublicFlagFn(data)
 
 	// Extract names and aliases
 	body.SortName = e.extractSortName(data)
-	body.NameAndAliases = e.extractNameAndAliases(data)
+	body.NameAndAliases = e.extractNameAndAliasesFn(data)
 
 	// Set access control with computed defaults
-	e.setAccessControl(body, data, objectType, objectID)
+	e.setAccessControlFn(body, data, objectType, objectID)
 
 	// Handle parent references
-	e.setParentReferences(body, data, objectType)
+	e.setParentReferencesFn(body, data, objectType)
 
 	// Build comprehensive fulltext search content
 	e.buildFulltextContent(body, data)
@@ -126,20 +158,6 @@ func (e *defaultEnricher) extractObjectID(data map[string]any) (string, error) {
 	return "", fmt.Errorf("%v: missing required 'uid' or 'id' field", constants.ErrMappingUID)
 }
 
-// extractPublicFlag safely extracts the public flag with proper defaults
-func (e *defaultEnricher) extractPublicFlag(data map[string]any) bool {
-	if publicVal, ok := data["public"]; ok {
-		if publicBool, isBool := publicVal.(bool); isBool {
-			return publicBool
-		}
-		// Log warning for invalid type but continue with default
-		e.logger.Warn("Public field exists but is not a boolean, defaulting to false",
-			slog.Any("public_value", publicVal))
-	}
-	// Default to false if not present or invalid
-	return false
-}
-
 // extractSortName extracts the primary name for sorting purposes
 func (e *defaultEnricher) extractSortName(data map[string]any) string {
 	// Try common name fields in order of preference
@@ -156,94 +174,9 @@ func (e *defaultEnricher) extractSortName(data map[string]any) string {
 	return ""
 }
 
-// getAliasRegex returns the compiled alias regex, initializing it once.
-func (e *defaultEnricher) getAliasRegex() *regexp.Regexp {
-	aliasRegexOnce.Do(func() {
-		aliasRegex = regexp.MustCompile(`(?i)^(name|title|label|alias|slug|display_name)$`)
-	})
-	return aliasRegex
-}
-
-// extractNameAndAliases collects all name-like fields for comprehensive searching
-func (e *defaultEnricher) extractNameAndAliases(data map[string]any) []string {
-	var nameAndAliases []string
-	seen := make(map[string]bool) // Deduplicate names
-
-	// Collect all name-like fields using regex pattern
-	for key, value := range data {
-		if e.getAliasRegex().MatchString(key) {
-			if strValue, ok := value.(string); ok && strValue != "" {
-				trimmed := strings.TrimSpace(strValue)
-				if trimmed != "" && !seen[trimmed] {
-					nameAndAliases = append(nameAndAliases, trimmed)
-					seen[trimmed] = true
-				}
-			}
-		}
-	}
-
-	return nameAndAliases
-}
-
 // getObjectType determines the object type from transaction or returns empty string
 func (e *defaultEnricher) getObjectType(transaction *contracts.LFXTransaction) string {
 	return transaction.ObjectType
-}
-
-// setAccessControl configures access control fields with computed defaults
-func (e *defaultEnricher) setAccessControl(body *contracts.TransactionBody, data map[string]any, objectType, objectID string) {
-	// Access check object
-	if accessCheckObject, ok := data["accessCheckObject"].(string); ok {
-		body.AccessCheckObject = accessCheckObject
-	} else if _, exists := data["accessCheckObject"]; !exists {
-		// Field doesn't exist - use computed default
-		body.AccessCheckObject = fmt.Sprintf("%s:%s", objectType, objectID)
-	}
-	// If field exists but is not a string, leave empty (no override)
-
-	// Access check relation
-	if accessCheckRelation, ok := data["accessCheckRelation"].(string); ok {
-		body.AccessCheckRelation = accessCheckRelation
-	} else if _, exists := data["accessCheckRelation"]; !exists {
-		body.AccessCheckRelation = "viewer"
-	}
-
-	// History check object
-	if historyCheckObject, ok := data["historyCheckObject"].(string); ok {
-		body.HistoryCheckObject = historyCheckObject
-	} else if _, exists := data["historyCheckObject"]; !exists {
-		body.HistoryCheckObject = fmt.Sprintf("%s:%s", objectType, objectID)
-	}
-
-	// History check relation
-	if historyCheckRelation, ok := data["historyCheckRelation"].(string); ok {
-		body.HistoryCheckRelation = historyCheckRelation
-	} else if _, exists := data["historyCheckRelation"]; !exists {
-		body.HistoryCheckRelation = "writer"
-	}
-}
-
-// setParentReferences handles parent references with backward compatibility
-func (e *defaultEnricher) setParentReferences(body *contracts.TransactionBody, data map[string]any, objectType string) {
-	var parentRefs []string
-
-	// Handle parent_uid field (preferred)
-	if parentUID, ok := data["parent_uid"].(string); ok && parentUID != "" {
-		parentRefs = append(parentRefs, fmt.Sprintf("%s:%s", objectType, parentUID))
-	}
-
-	// Handle legacy parentID field for backwards compatibility
-	if parentID, ok := data["parentID"].(string); ok && parentID != "" {
-		ref := fmt.Sprintf("%s:%s", objectType, parentID)
-		// Avoid duplicates
-		if !slices.Contains(parentRefs, ref) {
-			parentRefs = append(parentRefs, ref)
-		}
-	}
-
-	if len(parentRefs) > 0 {
-		body.ParentRefs = parentRefs
-	}
 }
 
 // buildFulltextContent creates comprehensive fulltext search content
@@ -279,10 +212,118 @@ func (e *defaultEnricher) buildFulltextContent(body *contracts.TransactionBody, 
 	}
 }
 
-// newDefaultEnricher creates a new default enricher with structured logging
-func newDefaultEnricher(component string) Enricher {
-	return &defaultEnricher{
+// Default implementation functions
+
+// defaultSetAccessControl provides the default access control logic
+func defaultSetAccessControl(body *contracts.TransactionBody, data map[string]any, objectType, objectID string) {
+	// Access check object
+	if accessCheckObject, ok := data["accessCheckObject"].(string); ok {
+		body.AccessCheckObject = accessCheckObject
+	} else if _, exists := data["accessCheckObject"]; !exists {
+		// Field doesn't exist - use computed default
+		body.AccessCheckObject = fmt.Sprintf("%s:%s", objectType, objectID)
+	}
+	// If field exists but is not a string, leave empty (no override)
+
+	// Access check relation
+	if accessCheckRelation, ok := data["accessCheckRelation"].(string); ok {
+		body.AccessCheckRelation = accessCheckRelation
+	} else if _, exists := data["accessCheckRelation"]; !exists {
+		body.AccessCheckRelation = "viewer"
+	}
+
+	// History check object
+	if historyCheckObject, ok := data["historyCheckObject"].(string); ok {
+		body.HistoryCheckObject = historyCheckObject
+	} else if _, exists := data["historyCheckObject"]; !exists {
+		body.HistoryCheckObject = fmt.Sprintf("%s:%s", objectType, objectID)
+	}
+
+	// History check relation
+	if historyCheckRelation, ok := data["historyCheckRelation"].(string); ok {
+		body.HistoryCheckRelation = historyCheckRelation
+	} else if _, exists := data["historyCheckRelation"]; !exists {
+		body.HistoryCheckRelation = "writer"
+	}
+}
+
+// defaultSetParentReferences provides the default parent references logic
+func defaultSetParentReferences(body *contracts.TransactionBody, data map[string]any, objectType string) {
+	var parentRefs []string
+
+	// Handle parent_uid field (preferred)
+	if parentUID, ok := data["parent_uid"].(string); ok && parentUID != "" {
+		parentRefs = append(parentRefs, fmt.Sprintf("%s:%s", objectType, parentUID))
+	}
+
+	// Handle legacy parentID field for backwards compatibility
+	if parentID, ok := data["parentID"].(string); ok && parentID != "" {
+		ref := fmt.Sprintf("%s:%s", objectType, parentID)
+		// Avoid duplicates
+		if !slices.Contains(parentRefs, ref) {
+			parentRefs = append(parentRefs, ref)
+		}
+	}
+
+	if len(parentRefs) > 0 {
+		body.ParentRefs = parentRefs
+	}
+}
+
+// defaultExtractPublicFlag provides the default public flag extraction logic
+func defaultExtractPublicFlag(data map[string]any) bool {
+	if publicVal, ok := data["public"]; ok {
+		if publicBool, isBool := publicVal.(bool); isBool {
+			return publicBool
+		}
+		// Note: We can't log here since we don't have access to logger
+		// The calling enricher can handle logging if needed
+	}
+	// Default to false if not present or invalid
+	return false
+}
+
+// defaultExtractNameAndAliases provides the default name and aliases extraction logic
+func defaultExtractNameAndAliases(data map[string]any) []string {
+	var nameAndAliases []string
+	seen := make(map[string]bool) // Deduplicate names
+
+	// Compile regex pattern for name-like fields
+	aliasRegex := regexp.MustCompile(`(?i)^(name|title|label|alias|slug|display_name)$`)
+
+	// Collect all name-like fields using regex pattern
+	for key, value := range data {
+		if aliasRegex.MatchString(key) {
+			if strValue, ok := value.(string); ok && strValue != "" {
+				trimmed := strings.TrimSpace(strValue)
+				if trimmed != "" && !seen[trimmed] {
+					nameAndAliases = append(nameAndAliases, trimmed)
+					seen[trimmed] = true
+				}
+			}
+		}
+	}
+
+	return nameAndAliases
+}
+
+// newDefaultEnricher creates a new default enricher with structured logging and optional customizations
+func newDefaultEnricher(component string, options ...EnricherOption) Enricher {
+	e := &defaultEnricher{
 		objectType: component,
 		logger:     logging.NewLogger().With(slog.String("component", component)),
+
+		// Set default implementations
+		setAccessControlFn:      defaultSetAccessControl,
+		setParentReferencesFn:   defaultSetParentReferences,
+		extractPublicFlagFn:     defaultExtractPublicFlag,
+		extractNameAndAliasesFn: defaultExtractNameAndAliases,
 	}
+
+	// Apply options to override defaults
+	for _, option := range options {
+		option(e)
+	}
+
+	return e
 }
