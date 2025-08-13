@@ -292,11 +292,11 @@ func TestIndexerService_ValidateObjectType_RegistryBased(t *testing.T) {
 
 	// Test invalid object type (committee is not registered in the enricher registry)
 	invalidTransaction := &contracts.LFXTransaction{
-		ObjectType: constants.ObjectTypeCommittee,
+		ObjectType: "invalid_type",
 	}
 	err = service.ValidateObjectType(invalidTransaction)
 	assert.Error(t, err, "Committee object type should be invalid (not registered)")
-	assert.Contains(t, err.Error(), "no enricher found for object type: committee")
+	assert.Contains(t, err.Error(), "no enricher found for object type: invalid_type")
 
 	// Test completely unknown object type
 	unknownTransaction := &contracts.LFXTransaction{

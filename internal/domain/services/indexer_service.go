@@ -74,11 +74,17 @@ func NewIndexerService(
 ) *IndexerService {
 	// Initialize enricher registry with project enricher
 	registry := enrichers.NewRegistry()
-	registry.Register(enrichers.NewProjectEnricher())
-	registry.Register(enrichers.NewProjectSettingsEnricher())
-	registry.Register(enrichers.NewMeetingEnricher())
-	registry.Register(enrichers.NewMeetingSettingsEnricher())
-	registry.Register(enrichers.NewMeetingRegistrantEnricher())
+	for _, enricher := range []enrichers.Enricher{
+		enrichers.NewProjectEnricher(),
+		enrichers.NewProjectSettingsEnricher(),
+		enrichers.NewCommitteeEnricher(),
+		enrichers.NewCommitteeSettingsEnricher(),
+		enrichers.NewMeetingEnricher(),
+		enrichers.NewMeetingSettingsEnricher(),
+		enrichers.NewMeetingRegistrantEnricher(),
+	} {
+		registry.Register(enricher)
+	}
 
 	return &IndexerService{
 		storageRepo:      storageRepo,
