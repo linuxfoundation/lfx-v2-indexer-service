@@ -27,15 +27,14 @@ func (e *CommitteeSettingsEnricher) EnrichData(body *contracts.TransactionBody, 
 }
 
 // setAccessControl provides committee-settings-specific access control logic
-// Similar to project settings but uses "committee" object type and "auditor" as default relation
 func (e *CommitteeSettingsEnricher) setAccessControl(body *contracts.TransactionBody, data map[string]any, objectType, objectID string) {
-	// Set access control with committee-specific logic (similar to project settings)
+	// Set access control with committee-settings-specific logic
 	// Only apply defaults when fields are completely missing from data
 	if accessCheckObject, ok := data["accessCheckObject"].(string); ok {
 		// Field exists in data (even if empty) - use data value
 		body.AccessCheckObject = accessCheckObject
 	} else if _, exists := data["accessCheckObject"]; !exists {
-		// Field doesn't exist in data - use computed default with committee prefix
+		// Field doesn't exist in data - use computed default with objectType prefix
 		body.AccessCheckObject = fmt.Sprintf("%s:%s", objectType, objectID)
 	}
 	// If field exists but is not a string, leave empty (no override)
@@ -43,7 +42,7 @@ func (e *CommitteeSettingsEnricher) setAccessControl(body *contracts.Transaction
 	if accessCheckRelation, ok := data["accessCheckRelation"].(string); ok {
 		body.AccessCheckRelation = accessCheckRelation
 	} else if _, exists := data["accessCheckRelation"]; !exists {
-		body.AccessCheckRelation = "auditor" // Committee-specific default (same as project settings)
+		body.AccessCheckRelation = "auditor" // Committee-settings-specific default
 	}
 
 	if historyCheckObject, ok := data["historyCheckObject"].(string); ok {
