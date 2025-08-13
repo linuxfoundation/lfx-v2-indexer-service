@@ -466,15 +466,15 @@ enricher := newDefaultEnricher(
 
 // Enriched output
 {
-    "objectId": "committee-123",
-    "objectType": "committee-settings",
+    "object_id": "committee-123",
+    "object_type": "committee_settings",
     "public": false,
-    "accessCheckObject": "committee-settings:committee-123",
-    "accessCheckRelation": "auditor",        // Committee-specific default
-    "historyCheckObject": "committee-settings:committee-123", 
-    "historyCheckRelation": "writer",
-    "sortName": "Technical Steering Committee",
-    "nameAndAliases": ["Technical Steering Committee"],
+    "access_check_object": "committee:committee-123",
+    "access_check_relation": "auditor",        // Committee-settings default
+    "history_check_object": "committee:committee-123",
+    "history_check_relation": "writer",
+    "sort_name": "Technical Steering Committee",
+    "name_and_aliases": ["Technical Steering Committee"],
     "fulltext": "Technical Steering Committee"
 }
 ```
