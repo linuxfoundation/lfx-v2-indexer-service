@@ -467,7 +467,7 @@ enricher := newDefaultEnricher(
 // Enriched output
 {
     "object_id": "committee-123",
-    "object_type": "committee_settings",
+    "object_type": "committee",
     "public": false,
     "access_check_object": "committee:committee-123",
     "access_check_relation": "auditor",        // Committee-settings default
@@ -577,7 +577,7 @@ func NewMyCustomEnricher() Enricher {
 5. **Register in the enricher registry**:
 ```go
 // In registry.go
-registry[constants.ObjectTypeCustom] = NewMyCustomEnricher()
+registry.Register(NewMyCustomEnricher())
 ```
 
 This pattern allows you to:
