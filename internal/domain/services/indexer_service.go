@@ -76,6 +76,9 @@ func NewIndexerService(
 	registry := enrichers.NewRegistry()
 	registry.Register(enrichers.NewProjectEnricher())
 	registry.Register(enrichers.NewProjectSettingsEnricher())
+	registry.Register(enrichers.NewMeetingEnricher())
+	registry.Register(enrichers.NewMeetingSettingsEnricher())
+	registry.Register(enrichers.NewMeetingRegistrantEnricher())
 
 	return &IndexerService{
 		storageRepo:      storageRepo,

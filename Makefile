@@ -3,7 +3,7 @@
 
 # Variables
 APP_NAME := lfx-v2-indexer-service
-VERSION := 0.1.0
+VERSION := latest
 BUILD_TIME := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 GIT_COMMIT := $(shell git rev-parse HEAD)
 
