@@ -75,6 +75,9 @@ config/secrets.yml
 # Docker files
 .dockerignore
 
+# Kubernetes files
+values.local.yaml
+
 # Air live reload tool
 .air.toml
 tmp/

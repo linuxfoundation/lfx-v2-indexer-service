@@ -49,6 +49,13 @@ func WithNameAndAliases(fn func(data map[string]any) []string) EnricherOption {
 	}
 }
 
+// WithSortName allows overriding the sort name extraction logic
+func WithSortName(fn func(data map[string]any) string) EnricherOption {
+	return func(e *defaultEnricher) {
+		e.extractSortNameFn = fn
+	}
+}
+
 // defaultEnricher handles default enrichment logic
 // This enricher is used when no specific enricher is registered for an object type.
 // It provides a fallback enrichment strategy that works for most object types
@@ -62,6 +69,7 @@ type defaultEnricher struct {
 	setParentReferencesFn   func(body *contracts.TransactionBody, data map[string]any, objectType string)
 	extractPublicFlagFn     func(data map[string]any) bool
 	extractNameAndAliasesFn func(data map[string]any) []string
+	extractSortNameFn       func(data map[string]any) string
 }
 
 // ObjectType returns the object type this enricher handles.
@@ -114,7 +122,7 @@ func (e *defaultEnricher) EnrichData(body *contracts.TransactionBody, transactio
 	body.Public = e.extractPublicFlagFn(data)
 
 	// Extract names and aliases
-	body.SortName = e.extractSortName(data)
+	body.SortName = e.extractSortNameFn(data)
 	body.NameAndAliases = e.extractNameAndAliasesFn(data)
 
 	// Set access control with computed defaults
@@ -159,7 +167,7 @@ func (e *defaultEnricher) extractObjectID(data map[string]any) (string, error) {
 }
 
 // extractSortName extracts the primary name for sorting purposes
-func (e *defaultEnricher) extractSortName(data map[string]any) string {
+func defaultExtractSortName(data map[string]any) string {
 	// Try common name fields in order of preference
 	nameFields := []string{"name", "title", "display_name", "label"}
 
@@ -318,6 +326,7 @@ func newDefaultEnricher(component string, options ...EnricherOption) Enricher {
 		setParentReferencesFn:   defaultSetParentReferences,
 		extractPublicFlagFn:     defaultExtractPublicFlag,
 		extractNameAndAliasesFn: defaultExtractNameAndAliases,
+		extractSortNameFn:       defaultExtractSortName,
 	}
 
 	// Apply options to override defaults

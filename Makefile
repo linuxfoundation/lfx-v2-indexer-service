@@ -15,6 +15,7 @@ DOCKER_TAG := $(VERSION)
 # Helm
 HELM_CHART_NAME := lfx-v2-indexer-service
 HELM_NAMESPACE := lfx
+HELM_VALUES_FILE := ./charts/lfx-v2-indexer-service/values.local.yaml
 
 # Go
 GO_VERSION := 1.21
@@ -223,6 +224,18 @@ docker-stop: ## Stop Docker container
 helm-install: ## Install the application using Helm
 	@echo "Installing application using Helm..."
 	helm upgrade --install $(HELM_CHART_NAME) charts/$(HELM_CHART_NAME) -n $(HELM_NAMESPACE)
+
+.PHONY: helm-install-local
+helm-install-local: ## Install the application using Helm with local values file
+	@echo "Installing application using Helm with local values file..."
+	helm upgrade --install $(HELM_CHART_NAME) charts/$(HELM_CHART_NAME) -n $(HELM_NAMESPACE) -f $(HELM_VALUES_FILE)
+
+# Restart the deployment pod
+.PHONY: helm-restart-pods
+helm-restart-pods:
+	@echo "==> Restarting deployment pod..."
+	kubectl rollout restart deployment/$(HELM_CHART_NAME) --namespace $(HELM_NAMESPACE)
+	@echo "==> Deployment restarted: $(HELM_CHART_NAME)"
 
 .PHONY: helm-uninstall
 helm-uninstall: ## Uninstall the application using Helm

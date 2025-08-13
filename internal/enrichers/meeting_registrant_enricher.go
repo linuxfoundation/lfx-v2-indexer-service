@@ -6,6 +6,7 @@ package enrichers
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
@@ -13,68 +14,44 @@ import (
 )
 
 // MeetingRegistrantEnricher handles meeting-registrant-specific enrichment logic
-type MeetingRegistrantEnricher struct{}
-
-// NewMeetingRegistrantEnricher creates a new meeting-registrant enricher
-func NewMeetingRegistrantEnricher() *MeetingRegistrantEnricher {
-	return &MeetingRegistrantEnricher{}
+type MeetingRegistrantEnricher struct {
+	defaultEnricher Enricher
 }
 
-// ObjectType returns the object type this enricher handles
+// ObjectType returns the object type this enricher handles.
 func (e *MeetingRegistrantEnricher) ObjectType() string {
-	return constants.ObjectTypeMeetingRegistrant
+	return e.defaultEnricher.ObjectType()
 }
 
-// EnrichData enriches meeting-registrant-specific data
+// EnrichData enriches meeting-specific data
 func (e *MeetingRegistrantEnricher) EnrichData(body *contracts.TransactionBody, transaction *contracts.LFXTransaction) error {
-	data := transaction.ParsedData
+	return e.defaultEnricher.EnrichData(body, transaction)
+}
 
-	// Set the processed data on the body (enricher owns data assignment)
-	body.Data = data
-
-	// Extract meeting-registrant ID using 'uid' field (matches reference implementation)
-	// Also support 'id' for backwards compatibility
-	var objectID string
-	if uid, ok := data["uid"].(string); ok {
-		objectID = uid
-	} else if id, ok := data["id"].(string); ok {
-		objectID = id
-	} else {
-		return fmt.Errorf("%s: missing or invalid meeting-registrant ID", constants.ErrMappingUID)
-	}
-	body.ObjectID = objectID
-
-	// Registrant data is not public
-	body.Public = false
-
-	var meetingUID string
-	if meetingUIDStr, ok := data["meeting_uid"].(string); ok {
-		meetingUID = meetingUIDStr
-	} else {
-		return fmt.Errorf("%s: missing or invalid meeting UID", constants.ErrMappingUID)
-	}
-
-	// Set access control with reference implementation logic (computed defaults)
+// setAccessControl provides meeting-registrant-specific access control logic
+func (e *MeetingRegistrantEnricher) setAccessControl(body *contracts.TransactionBody, data map[string]any, objectType, objectID string) {
+	// Set access control with meeting-registrant-specific logic
 	// Only apply defaults when fields are completely missing from data
 	if accessCheckObject, ok := data["accessCheckObject"].(string); ok {
 		// Field exists in data (even if empty) - use data value
 		body.AccessCheckObject = accessCheckObject
 	} else if _, exists := data["accessCheckObject"]; !exists {
-		// Field doesn't exist in data - use computed default
-		body.AccessCheckObject = fmt.Sprintf("meeting:%s", meetingUID)
+		// Field doesn't exist in data - use computed default with objectType prefix
+		body.AccessCheckObject = fmt.Sprintf("%s:%s", constants.ObjectTypeMeeting, objectID)
 	}
 	// If field exists but is not a string, leave empty (no override)
 
 	if accessCheckRelation, ok := data["accessCheckRelation"].(string); ok {
 		body.AccessCheckRelation = accessCheckRelation
 	} else if _, exists := data["accessCheckRelation"]; !exists {
+		// TODO: should this be auditor from the project? How would we determine that from the meeting fga object?
 		body.AccessCheckRelation = "organizer"
 	}
 
 	if historyCheckObject, ok := data["historyCheckObject"].(string); ok {
 		body.HistoryCheckObject = historyCheckObject
 	} else if _, exists := data["historyCheckObject"]; !exists {
-		body.HistoryCheckObject = fmt.Sprintf("meeting:%s", meetingUID)
+		body.HistoryCheckObject = fmt.Sprintf("%s:%s", constants.ObjectTypeMeeting, objectID)
 	}
 
 	if historyCheckRelation, ok := data["historyCheckRelation"].(string); ok {
@@ -82,38 +59,50 @@ func (e *MeetingRegistrantEnricher) EnrichData(body *contracts.TransactionBody, 
 	} else if _, exists := data["historyCheckRelation"]; !exists {
 		body.HistoryCheckRelation = "writer"
 	}
+}
 
-	// Extract email for sorting
-	if email, ok := data["email"].(string); ok {
-		body.SortName = email
-		body.NameAndAliases = []string{email}
+// extractSortName extracts the sort name from the meeting message data
+func (e *MeetingRegistrantEnricher) extractSortName(data map[string]any) string {
+	if value, ok := data["email"]; ok {
+		if strValue, isString := value.(string); isString && strValue != "" {
+			return strings.TrimSpace(strValue)
+		}
 	}
+	return ""
+}
 
-	var fulltext []string
+// extractNameAndAliases extracts the name and aliases from the meeting message data
+func (e *MeetingRegistrantEnricher) extractNameAndAliases(data map[string]any) []string {
+	var nameAndAliases []string
+	seen := make(map[string]bool) // Deduplicate names
 
-	// Extract first name and last name for fulltext search
-	if firstName, ok := data["first_name"].(string); ok && firstName != "" {
-		fulltext = append(fulltext, firstName)
-	}
+	// Compile regex pattern for name-like fields
+	aliasRegex := regexp.MustCompile(`(?i)^(email|first_name|last_name)$`)
 
-	if lastName, ok := data["last_name"].(string); ok && lastName != "" {
-		fulltext = append(fulltext, lastName)
-	}
-
-	// Build comprehensive fulltext search content
-	if body.SortName != "" {
-		fulltext = append(fulltext, body.SortName)
-	}
-	for _, alias := range body.NameAndAliases {
-		if alias != body.SortName {
-			fulltext = append(fulltext, alias)
+	// Collect all name-like fields using regex pattern
+	for key, value := range data {
+		if aliasRegex.MatchString(key) {
+			if strValue, ok := value.(string); ok && strValue != "" {
+				trimmed := strings.TrimSpace(strValue)
+				if trimmed != "" && !seen[trimmed] {
+					nameAndAliases = append(nameAndAliases, trimmed)
+					seen[trimmed] = true
+				}
+			}
 		}
 	}
 
-	// Set final fulltext content
-	if len(fulltext) > 0 {
-		body.Fulltext = strings.Join(fulltext, " ")
-	}
+	return nameAndAliases
+}
 
-	return nil
+// NewMeetingRegistrantEnricher creates a new meeting registrant enricher
+func NewMeetingRegistrantEnricher() Enricher {
+	enricher := &MeetingRegistrantEnricher{}
+	enricher.defaultEnricher = newDefaultEnricher(
+		constants.ObjectTypeMeetingRegistrant,
+		WithAccessControl(enricher.setAccessControl),
+		WithNameAndAliases(enricher.extractNameAndAliases),
+		WithSortName(enricher.extractSortName),
+	)
+	return enricher
 }
