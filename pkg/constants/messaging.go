@@ -17,6 +17,7 @@ const (
 const (
 	ProjectSubject    = IndexPrefix + "project"  // V2 project messages
 	V1ProjectSubject  = FromV1Prefix + "project" // V1 project messages
+	MeetingSubject    = IndexPrefix + "meeting"  // V2 meeting messages
 	SubjectIndexing   = IndexPrefix + "index"    // V2 indexing messages
 	SubjectV1Indexing = FromV1Prefix + "index"   // V1 indexing messages
 	AllSubjects       = IndexPrefix + ">"        // All V2 subjects
@@ -46,6 +47,9 @@ const (
 	ObjectTypeCommittee         = "committee"
 	ObjectTypeCommitteeSettings = "committee_settings"
 	ObjectTypeCommitteeMember   = "committeemember"
+	ObjectTypeMeeting           = "meeting"
+	ObjectTypeMeetingSettings   = "meeting_settings"
+	ObjectTypeMeetingRegistrant = "meeting_registrant"
 )
 
 // Message processing constants

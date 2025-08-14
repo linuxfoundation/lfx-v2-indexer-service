@@ -79,6 +79,9 @@ func NewIndexerService(
 		enrichers.NewProjectSettingsEnricher(),
 		enrichers.NewCommitteeEnricher(),
 		enrichers.NewCommitteeSettingsEnricher(),
+		enrichers.NewMeetingEnricher(),
+		enrichers.NewMeetingSettingsEnricher(),
+		enrichers.NewMeetingRegistrantEnricher(),
 	} {
 		registry.Register(enricher)
 	}

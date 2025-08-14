@@ -284,6 +284,112 @@ func TestDefaultEnricher_EnrichData_NameAndAliases(t *testing.T) {
 	}
 }
 
+func TestDefaultEnricher_EnrichData_SortName(t *testing.T) {
+	enricher := newDefaultEnricher(constants.ObjectTypeCommittee)
+
+	tests := []struct {
+		name             string
+		parsedData       map[string]any
+		expectedSortName string
+	}{
+		{
+			name: "prefers name field over others",
+			parsedData: map[string]any{
+				"uid":          "test-123",
+				"name":         "Primary Name",
+				"title":        "Title Value",
+				"display_name": "Display Name",
+				"label":        "Label Value",
+			},
+			expectedSortName: "Primary Name",
+		},
+		{
+			name: "falls back to title when name missing",
+			parsedData: map[string]any{
+				"uid":          "test-123",
+				"title":        "Title Value",
+				"display_name": "Display Name",
+				"label":        "Label Value",
+			},
+			expectedSortName: "Title Value",
+		},
+		{
+			name: "falls back to display_name",
+			parsedData: map[string]any{
+				"uid":   "test-123",
+				"display_name": "Display Name",
+				"label":        "Label Value",
+			},
+			expectedSortName: "Display Name",
+		},
+		{
+			name: "falls back to label",
+			parsedData: map[string]any{
+				"uid":   "test-123",
+				"label": "Label Value",
+			},
+			expectedSortName: "Label Value",
+		},
+		{
+			name: "returns empty when no name fields",
+			parsedData: map[string]any{
+				"uid": "test-123",
+				"description": "Some description",
+			},
+			expectedSortName: "",
+		},
+		{
+			name: "trims whitespace",
+			parsedData: map[string]any{
+				"uid":  "test-123",
+				"name": "  Trimmed Name  ",
+			},
+			expectedSortName: "Trimmed Name",
+		},
+		{
+			name: "ignores empty strings",
+			parsedData: map[string]any{
+				"uid":   "test-123",
+				"name":  "",
+				"title": "Fallback Title",
+			},
+			expectedSortName: "Fallback Title",
+		},
+		{
+			name: "ignores non-string values",
+			parsedData: map[string]any{
+				"uid":   "test-123",
+				"name":  123,
+				"title": "String Title",
+			},
+			expectedSortName: "String Title",
+		},
+		{
+			name: "handles only whitespace returns empty",
+			parsedData: map[string]any{
+				"uid":   "test-123",
+				"name":  "   ",
+				"title": "Valid Title",
+			},
+			expectedSortName: "", // Whitespace-only name is trimmed to empty, doesn't fall back
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := &contracts.TransactionBody{}
+			transaction := &contracts.LFXTransaction{
+				ParsedData: tt.parsedData,
+			}
+
+			err := enricher.EnrichData(body, transaction)
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.expectedSortName, body.SortName)
+		})
+	}
+}
+
 func TestDefaultEnricher_EnrichData_AccessControl(t *testing.T) {
 	enricher := newDefaultEnricher(constants.ObjectTypeCommittee)
 

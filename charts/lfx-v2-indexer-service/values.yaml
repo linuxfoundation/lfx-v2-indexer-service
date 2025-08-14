@@ -30,6 +30,7 @@ opensearch:
 heimdall:
   enabled: true
   url: http://lfx-platform-heimdall.lfx.svc.cluster.local:4456
+  jwksUrl: http://lfx-platform-heimdall.lfx.svc.cluster.local:4457/.well-known/jwks
 
 # jwt is the configuration for JWT authentication
 jwt:
