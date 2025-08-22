@@ -42,7 +42,7 @@ func (e *GroupsIOServiceEnricher) setAccessControl(body *contracts.TransactionBo
 	if accessCheckRelation, ok := data["accessCheckRelation"].(string); ok {
 		body.AccessCheckRelation = accessCheckRelation
 	} else if _, exists := data["accessCheckRelation"]; !exists {
-		body.AccessCheckRelation = "auditor" // GroupsIO service-specific default
+		body.AccessCheckRelation = "viewer" // GroupsIO service-specific default
 	}
 
 	if historyCheckObject, ok := data["historyCheckObject"].(string); ok {
