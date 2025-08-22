@@ -11,7 +11,7 @@ import (
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 )
 
-// GroupsIOServiceEnricher handles groupsio-service-specific enrichment logic
+// GroupsIOServiceEnricher handles GroupsIO service-specific enrichment logic
 type GroupsIOServiceEnricher struct {
 	defaultEnricher Enricher
 }
@@ -21,14 +21,14 @@ func (e *GroupsIOServiceEnricher) ObjectType() string {
 	return e.defaultEnricher.ObjectType()
 }
 
-// EnrichData enriches groupsio-service-specific data
+// EnrichData enriches GroupsIO service-specific data
 func (e *GroupsIOServiceEnricher) EnrichData(body *contracts.TransactionBody, transaction *contracts.LFXTransaction) error {
 	return e.defaultEnricher.EnrichData(body, transaction)
 }
 
-// setAccessControl provides groupsio-service-specific access control logic
+// setAccessControl provides GroupsIO service-specific access control logic
 func (e *GroupsIOServiceEnricher) setAccessControl(body *contracts.TransactionBody, data map[string]any, objectType, objectID string) {
-	// Set access control with groupsio-service-specific logic
+	// Set access control with GroupsIO service-specific logic
 	// Only apply defaults when fields are completely missing from data
 	if accessCheckObject, ok := data["accessCheckObject"].(string); ok {
 		// Field exists in data (even if empty) - use data value
@@ -42,7 +42,7 @@ func (e *GroupsIOServiceEnricher) setAccessControl(body *contracts.TransactionBo
 	if accessCheckRelation, ok := data["accessCheckRelation"].(string); ok {
 		body.AccessCheckRelation = accessCheckRelation
 	} else if _, exists := data["accessCheckRelation"]; !exists {
-		body.AccessCheckRelation = "auditor" // Groupsio-service-specific default
+		body.AccessCheckRelation = "auditor" // GroupsIO service-specific default
 	}
 
 	if historyCheckObject, ok := data["historyCheckObject"].(string); ok {
@@ -58,7 +58,7 @@ func (e *GroupsIOServiceEnricher) setAccessControl(body *contracts.TransactionBo
 	}
 }
 
-// NewGroupsIOServiceEnricher creates a new groupsio-service enricher
+// NewGroupsIOServiceEnricher creates a new GroupsIO service enricher
 func NewGroupsIOServiceEnricher() Enricher {
 	enricher := &GroupsIOServiceEnricher{}
 	enricher.defaultEnricher = newDefaultEnricher(
