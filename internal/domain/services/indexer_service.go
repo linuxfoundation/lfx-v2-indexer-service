@@ -79,6 +79,7 @@ func NewIndexerService(
 		enrichers.NewProjectSettingsEnricher(),
 		enrichers.NewCommitteeEnricher(),
 		enrichers.NewCommitteeSettingsEnricher(),
+		enrichers.NewCommitteeMemberEnricher(),
 		enrichers.NewMeetingEnricher(),
 		enrichers.NewMeetingSettingsEnricher(),
 		enrichers.NewMeetingRegistrantEnricher(),
