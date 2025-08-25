@@ -28,7 +28,10 @@ func (e *CommitteeMemberEnricher) EnrichData(body *contracts.TransactionBody, tr
 	return e.defaultEnricher.EnrichData(body, transaction)
 }
 
-// setAccessControl provides meeting-registrant-specific access control logic
+// setAccessControl provides committee-member-specific access control logic
+// overrides the default access control logic
+// the access control logic is based on the committee member's committee UID
+// not the committee member's UID
 func (e *CommitteeMemberEnricher) setAccessControl(body *contracts.TransactionBody, data map[string]any, objectType, objectID string) {
 
 	committeeLevelPermission := func(data map[string]any) string {
@@ -72,6 +75,8 @@ func (e *CommitteeMemberEnricher) setAccessControl(body *contracts.TransactionBo
 	}
 }
 
+// settExtractNameAndAliases extracts the name and aliases from the committee member data
+// overrides the default name and aliases extraction logic
 func (e *CommitteeMemberEnricher) settExtractNameAndAliases(data map[string]any) []string {
 	var nameAndAliases []string
 	seen := make(map[string]bool) // Deduplicate names
@@ -93,7 +98,8 @@ func (e *CommitteeMemberEnricher) settExtractNameAndAliases(data map[string]any)
 	return nameAndAliases
 }
 
-// extractSortName extracts the sort name from the meeting message data
+// extractSortName extracts the sort name from the committee member data
+// overrides the default sort name extraction logic
 func (e *CommitteeMemberEnricher) extractSortName(data map[string]any) string {
 	if value, ok := data["first_name"]; ok {
 		if strValue, isString := value.(string); isString && strValue != "" {

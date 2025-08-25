@@ -333,6 +333,76 @@ func TestCommitteeMemberEnricher_extractSortName(t *testing.T) {
 			},
 			expectedSortName: "",
 		},
+		{
+			name: "first_name with accented characters",
+			data: map[string]any{
+				"first_name": "José",
+			},
+			expectedSortName: "José",
+		},
+		{
+			name: "first_name with umlauts",
+			data: map[string]any{
+				"first_name": "Björn",
+			},
+			expectedSortName: "Björn",
+		},
+		{
+			name: "first_name with cedilla",
+			data: map[string]any{
+				"first_name": "François",
+			},
+			expectedSortName: "François",
+		},
+		{
+			name: "first_name with Chinese characters",
+			data: map[string]any{
+				"first_name": "李明",
+			},
+			expectedSortName: "李明",
+		},
+		{
+			name: "first_name with Japanese characters",
+			data: map[string]any{
+				"first_name": "田中太郎",
+			},
+			expectedSortName: "田中太郎",
+		},
+		{
+			name: "first_name with Arabic characters",
+			data: map[string]any{
+				"first_name": "محمد",
+			},
+			expectedSortName: "محمد",
+		},
+		{
+			name: "first_name with Cyrillic characters",
+			data: map[string]any{
+				"first_name": "Александр",
+			},
+			expectedSortName: "Александр",
+		},
+		{
+			name: "first_name with emoji",
+			data: map[string]any{
+				"first_name": "John 😊",
+			},
+			expectedSortName: "John 😊",
+		},
+		{
+			name: "first_name with mixed unicode and whitespace",
+			data: map[string]any{
+				"first_name": "  María José  ",
+			},
+			expectedSortName: "María José",
+		},
+		{
+			name: "first_name with combining characters",
+			data: map[string]any{
+				"first_name": "André",
+			},
+			expectedSortName: "André",
+		},
 	}
 
 	for _, tt := range tests {
