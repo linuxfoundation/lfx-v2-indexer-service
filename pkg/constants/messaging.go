@@ -50,6 +50,7 @@ const (
 	ObjectTypeMeeting           = "meeting"
 	ObjectTypeMeetingSettings   = "meeting_settings"
 	ObjectTypeMeetingRegistrant = "meeting_registrant"
+	ObjectTypeGroupsIOService   = "groupsio_service"
 )
 
 // Message processing constants
