@@ -30,6 +30,15 @@ func (e *PastMeetingParticipantEnricher) EnrichData(body *contracts.TransactionB
 
 // setAccessControl provides past meeting participant-specific access control logic
 func (e *PastMeetingParticipantEnricher) setAccessControl(body *contracts.TransactionBody, data map[string]any, objectType, objectID string) {
+	pastMeetingLevelPermission := func(data map[string]any) string {
+		if value, ok := data["past_meeting_uid"]; ok {
+			if pastMeetingUID, ok := value.(string); ok {
+				return fmt.Sprintf("%s:%s", constants.ObjectTypePastMeeting, pastMeetingUID)
+			}
+		}
+		return fmt.Sprintf("%s:%s", objectType, objectID)
+	}
+
 	// Set access control with past meeting participant-specific logic
 	// Only apply defaults when fields are completely missing from data
 	if accessCheckObject, ok := data["accessCheckObject"].(string); ok {
@@ -37,7 +46,7 @@ func (e *PastMeetingParticipantEnricher) setAccessControl(body *contracts.Transa
 		body.AccessCheckObject = accessCheckObject
 	} else if _, exists := data["accessCheckObject"]; !exists {
 		// Field doesn't exist in data - use computed default with objectType prefix
-		body.AccessCheckObject = fmt.Sprintf("%s:%s", constants.ObjectTypePastMeeting, objectID)
+		body.AccessCheckObject = pastMeetingLevelPermission(data)
 	}
 	// If field exists but is not a string, leave empty (no override)
 
@@ -51,7 +60,7 @@ func (e *PastMeetingParticipantEnricher) setAccessControl(body *contracts.Transa
 	if historyCheckObject, ok := data["historyCheckObject"].(string); ok {
 		body.HistoryCheckObject = historyCheckObject
 	} else if _, exists := data["historyCheckObject"]; !exists {
-		body.HistoryCheckObject = fmt.Sprintf("%s:%s", constants.ObjectTypePastMeeting, objectID)
+		body.HistoryCheckObject = pastMeetingLevelPermission(data)
 	}
 
 	if historyCheckRelation, ok := data["historyCheckRelation"].(string); ok {
