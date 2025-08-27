@@ -316,7 +316,7 @@ func TestDefaultEnricher_EnrichData_SortName(t *testing.T) {
 		{
 			name: "falls back to display_name",
 			parsedData: map[string]any{
-				"uid":   "test-123",
+				"uid":          "test-123",
 				"display_name": "Display Name",
 				"label":        "Label Value",
 			},
@@ -333,7 +333,7 @@ func TestDefaultEnricher_EnrichData_SortName(t *testing.T) {
 		{
 			name: "returns empty when no name fields",
 			parsedData: map[string]any{
-				"uid": "test-123",
+				"uid":         "test-123",
 				"description": "Some description",
 			},
 			expectedSortName: "",

@@ -42,15 +42,17 @@ const (
 
 // Object types (centralized)
 const (
-	ObjectTypeProject           = "project"
-	ObjectTypeProjectSettings   = "project_settings"
-	ObjectTypeCommittee         = "committee"
-	ObjectTypeCommitteeSettings = "committee_settings"
-	ObjectTypeCommitteeMember   = "committee_member"
-	ObjectTypeMeeting           = "meeting"
-	ObjectTypeMeetingSettings   = "meeting_settings"
-	ObjectTypeMeetingRegistrant = "meeting_registrant"
-	ObjectTypeGroupsIOService   = "groupsio_service"
+	ObjectTypeProject                = "project"
+	ObjectTypeProjectSettings        = "project_settings"
+	ObjectTypeCommittee              = "committee"
+	ObjectTypeCommitteeSettings      = "committee_settings"
+	ObjectTypeCommitteeMember        = "committee_member"
+	ObjectTypeMeeting                = "meeting"
+	ObjectTypeMeetingSettings        = "meeting_settings"
+	ObjectTypeMeetingRegistrant      = "meeting_registrant"
+	ObjectTypePastMeeting            = "past_meeting"
+	ObjectTypePastMeetingParticipant = "past_meeting_participant"
+	ObjectTypeGroupsIOService        = "groupsio_service"
 )
 
 // Message processing constants
