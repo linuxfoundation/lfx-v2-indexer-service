@@ -46,12 +46,12 @@ const (
 	ObjectTypeProjectSettings        = "project_settings"
 	ObjectTypeCommittee              = "committee"
 	ObjectTypeCommitteeSettings      = "committee_settings"
-	ObjectTypeCommitteeMember        = "committeemember"
+	ObjectTypeCommitteeMember        = "committee_member"
 	ObjectTypeMeeting                = "meeting"
-	ObjectTypePastMeeting            = "past_meeting"
-	ObjectTypePastMeetingParticipant = "past_meeting_participant"
 	ObjectTypeMeetingSettings        = "meeting_settings"
 	ObjectTypeMeetingRegistrant      = "meeting_registrant"
+	ObjectTypePastMeeting            = "past_meeting"
+	ObjectTypePastMeetingParticipant = "past_meeting_participant"
 	ObjectTypeGroupsIOService        = "groupsio_service"
 )
 
