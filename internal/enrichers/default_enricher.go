@@ -17,6 +17,10 @@ import (
 )
 
 var (
+	// parentRefRegex matches field names that end with '_uid' or 'ID'.
+	// It captures any prefix before these suffixes. This is used to identify parent reference fields.
+	// It intentionally excludes fields that do not end with these suffixes,
+	// such as those ending with other patterns.
 	parentRefRegex = regexp.MustCompile(`^(.*)(_uid$|ID$)`)
 )
 
