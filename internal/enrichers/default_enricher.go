@@ -16,6 +16,14 @@ import (
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
 )
 
+var (
+	// parentRefRegex matches field names that end with '_uid' or 'ID'.
+	// It captures any prefix before these suffixes. This is used to identify parent reference fields.
+	// It intentionally excludes fields that do not end with these suffixes,
+	// such as those ending with other patterns.
+	parentRefRegex = regexp.MustCompile(`^(.*)(_uid$|ID$)`)
+)
+
 // EnricherOption defines a function that can configure a defaultEnricher
 type EnricherOption func(*defaultEnricher)
 
@@ -256,6 +264,9 @@ func defaultSetAccessControl(body *contracts.TransactionBody, data map[string]an
 }
 
 // defaultSetParentReferences provides the default parent references logic
+// it matches the pattern <anything>_uid or <anything>ID (case sensitive)
+// except parent_uid and parentID
+// and adds the parent references to the body.ParentRefs field
 func defaultSetParentReferences(body *contracts.TransactionBody, data map[string]any, objectType string) {
 	var parentRefs []string
 
@@ -272,6 +283,26 @@ func defaultSetParentReferences(body *contracts.TransactionBody, data map[string
 			parentRefs = append(parentRefs, ref)
 		}
 	}
+
+	parentRefFunc := func(pattern *regexp.Regexp) {
+		for key, value := range data {
+			if pattern.MatchString(key) && key != "parent_uid" && key != "parentID" {
+				// remove the suffix from the key
+				match := pattern.FindStringSubmatch(key)
+				if len(match) > 1 {
+					keyType := strings.ToLower(match[1])
+					ref := fmt.Sprintf("%s:%v", keyType, value)
+					if !slices.Contains(parentRefs, ref) {
+						parentRefs = append(parentRefs, ref)
+					}
+				}
+			}
+		}
+	}
+
+	// handle pattern <anything>_uid or <anything>ID (case sensitive)
+	// except parent_uid
+	parentRefFunc(parentRefRegex)
 
 	if len(parentRefs) > 0 {
 		body.ParentRefs = parentRefs

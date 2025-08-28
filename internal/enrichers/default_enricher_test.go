@@ -499,8 +499,8 @@ func TestDefaultEnricher_EnrichData_ParentReferences(t *testing.T) {
 				"parent_uid": "parent-456",
 				"parentID":   "parent-456", // same parent
 			},
-			objectType:      "project",
-			expectedParents: []string{"project:parent-456"},
+			objectType:      "committee",
+			expectedParents: []string{"committee:parent-456"},
 		},
 		{
 			name: "both parent fields (different parents)",
@@ -543,6 +543,142 @@ func TestDefaultEnricher_EnrichData_ParentReferences(t *testing.T) {
 			err := enricher.EnrichData(body, transaction)
 			require.NoError(t, err)
 			assert.Equal(t, tt.expectedParents, body.ParentRefs)
+		})
+	}
+}
+
+func TestDefaultSetParentReferences(t *testing.T) {
+	tests := []struct {
+		name            string
+		data            map[string]any
+		objectType      string
+		expectedParents []string
+	}{
+		{
+			name: "committee_uid field pattern",
+			data: map[string]any{
+				"uid":           "test-123",
+				"committee_uid": "committee-456",
+			},
+			objectType:      "meeting",
+			expectedParents: []string{"committee:committee-456"},
+		},
+		{
+			name: "project_uid field pattern",
+			data: map[string]any{
+				"uid":         "test-123",
+				"project_uid": "project-789",
+			},
+			objectType:      "meeting",
+			expectedParents: []string{"project:project-789"},
+		},
+		{
+			name: "meeting_uid field pattern",
+			data: map[string]any{
+				"uid":         "test-123",
+				"meeting_uid": "meeting-abc",
+			},
+			objectType:      "participant",
+			expectedParents: []string{"meeting:meeting-abc"},
+		},
+		{
+			name: "ProjectID field pattern",
+			data: map[string]any{
+				"uid":       "test-123",
+				"ProjectID": "project-def",
+			},
+			objectType:      "meeting",
+			expectedParents: []string{"project:project-def"},
+		},
+		{
+			name: "CommitteeID field pattern",
+			data: map[string]any{
+				"uid":         "test-123",
+				"CommitteeID": "committee-ghi",
+			},
+			objectType:      "meeting",
+			expectedParents: []string{"committee:committee-ghi"},
+		},
+		{
+			name: "multiple parent references",
+			data: map[string]any{
+				"uid":           "test-123",
+				"committee_uid": "committee-456",
+				"project_uid":   "project-789",
+				"meeting_uid":   "meeting-abc",
+			},
+			objectType: "event",
+			expectedParents: []string{
+				"committee:committee-456",
+				"project:project-789",
+				"meeting:meeting-abc",
+			},
+		},
+		{
+			name: "mixed *_uid and *ID patterns",
+			data: map[string]any{
+				"uid":           "test-123",
+				"committee_uid": "committee-456",
+				"ProjectID":     "project-789",
+				"MeetingID":     "meeting-abc",
+			},
+			objectType: "event",
+			expectedParents: []string{
+				"committee:committee-456",
+				"project:project-789",
+				"meeting:meeting-abc",
+			},
+		},
+		{
+			name: "case insensitive pattern matching",
+			data: map[string]any{
+				"uid":           "test-123",
+				"COMMITTEE_uid": "committee-456", // uppercase
+				"project_uid":   "project-789",   // mixed case
+			},
+			objectType: "meeting",
+			expectedParents: []string{
+				"committee:committee-456",
+				"project:project-789",
+			},
+		},
+		{
+			name: "non-string values are included",
+			data: map[string]any{
+				"uid":           "test-123",
+				"committee_uid": 12345, // number instead of string
+				"ProjectID":     false, // boolean instead of string
+			},
+			objectType: "meeting",
+			expectedParents: []string{
+				"committee:12345",
+				"project:false",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := &contracts.TransactionBody{}
+
+			// Directly call the function being tested
+			defaultSetParentReferences(body, tt.data, tt.objectType)
+
+			// If there are expected parents, check that they're all present
+			if len(tt.expectedParents) > 0 {
+				require.NotNil(t, body.ParentRefs, "ParentRefs should not be nil")
+				assert.Len(t, body.ParentRefs, len(tt.expectedParents), "Should have expected number of parent references")
+
+				// Check that each expected parent is in the result
+				for _, expectedParent := range tt.expectedParents {
+					assert.Contains(t, body.ParentRefs, expectedParent, "Should contain parent reference %s", expectedParent)
+				}
+			} else {
+				// If no parents are expected, ParentRefs should be nil or empty
+				if body.ParentRefs != nil {
+					assert.Empty(t, body.ParentRefs, "ParentRefs should be empty when no parent fields")
+				}
+			}
 		})
 	}
 }
