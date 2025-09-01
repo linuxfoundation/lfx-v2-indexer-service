@@ -86,6 +86,7 @@ func NewIndexerService(
 		enrichers.NewPastMeetingEnricher(),
 		enrichers.NewPastMeetingParticipantEnricher(),
 		enrichers.NewGroupsIOServiceEnricher(),
+		enrichers.NewGroupsIOMailingListEnricher(),
 	} {
 		registry.Register(enricher)
 	}
