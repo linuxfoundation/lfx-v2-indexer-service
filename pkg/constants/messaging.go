@@ -52,6 +52,7 @@ const (
 	ObjectTypeMeetingRegistrant      = "meeting_registrant"
 	ObjectTypePastMeeting            = "past_meeting"
 	ObjectTypePastMeetingParticipant = "past_meeting_participant"
+	ObjectTypePastMeetingRecording   = "past_meeting_recording"
 	ObjectTypeGroupsIOService        = "groupsio_service"
 	ObjectTypeGroupsIOMailingList    = "groupsio_mailing_list"
 )
