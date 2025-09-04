@@ -21,19 +21,28 @@ func (e *PastMeetingRecordingEnricher) ObjectType() string {
 	return e.defaultEnricher.ObjectType()
 }
 
-// EnrichData enriches meeting-specific data
+// EnrichData enriches past meeting recording-specific data
 func (e *PastMeetingRecordingEnricher) EnrichData(body *contracts.TransactionBody, transaction *contracts.LFXTransaction) error {
 	return e.defaultEnricher.EnrichData(body, transaction)
 }
 
-// setAccessControl provides meeting-settings-specific access control logic
+// setAccessControl provides past meeting recording-specific access control logic
 func (e *PastMeetingRecordingEnricher) setAccessControl(body *contracts.TransactionBody, data map[string]any, objectType, objectID string) {
+	pastMeetingLevelPermission := func(data map[string]any) string {
+		if value, ok := data["past_meeting_uid"]; ok {
+			if pastMeetingUID, ok := value.(string); ok {
+				return fmt.Sprintf("%s:%s", constants.ObjectTypePastMeeting, pastMeetingUID)
+			}
+		}
+		return fmt.Sprintf("%s:%s", objectType, objectID)
+	}
+
 	// Set access control with past meeting recording-specific logic
 	// Only apply defaults when fields are completely missing from data
 	if accessCheckObject, ok := data["accessCheckObject"].(string); ok {
 		body.AccessCheckObject = accessCheckObject
 	} else if _, exists := data["accessCheckObject"]; !exists {
-		body.AccessCheckObject = fmt.Sprintf("%s:%s", constants.ObjectTypePastMeeting, objectID)
+		body.AccessCheckObject = pastMeetingLevelPermission(data)
 	}
 
 	if accessCheckRelation, ok := data["accessCheckRelation"].(string); ok {
@@ -45,7 +54,7 @@ func (e *PastMeetingRecordingEnricher) setAccessControl(body *contracts.Transact
 	if historyCheckObject, ok := data["historyCheckObject"].(string); ok {
 		body.HistoryCheckObject = historyCheckObject
 	} else if _, exists := data["historyCheckObject"]; !exists {
-		body.HistoryCheckObject = fmt.Sprintf("%s:%s", constants.ObjectTypePastMeeting, objectID)
+		body.HistoryCheckObject = pastMeetingLevelPermission(data)
 	}
 
 	if historyCheckRelation, ok := data["historyCheckRelation"].(string); ok {
