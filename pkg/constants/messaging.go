@@ -55,6 +55,7 @@ const (
 	ObjectTypePastMeetingRecording   = "past_meeting_recording"
 	ObjectTypeGroupsIOService        = "groupsio_service"
 	ObjectTypeGroupsIOMailingList    = "groupsio_mailing_list"
+	ObjectTypeGroupsIOMember         = "groupsio_member"
 )
 
 // Message processing constants
