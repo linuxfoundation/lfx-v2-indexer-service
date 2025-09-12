@@ -53,8 +53,7 @@ func (e *MeetingRegistrantEnricher) setAccessControl(body *contracts.Transaction
 	if accessCheckRelation, ok := data["accessCheckRelation"].(string); ok {
 		body.AccessCheckRelation = accessCheckRelation
 	} else if _, exists := data["accessCheckRelation"]; !exists {
-		// TODO: should this be auditor from the project? How would we determine that from the meeting fga object?
-		body.AccessCheckRelation = "organizer"
+		body.AccessCheckRelation = "auditor"
 	}
 
 	if historyCheckObject, ok := data["historyCheckObject"].(string); ok {
