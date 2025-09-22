@@ -19,10 +19,12 @@ type TransactionBody struct {
 	NameAndAliases       []string       `json:"name_and_aliases,omitempty"`
 	Tags                 []string       `json:"tags,omitempty"`
 	Public               bool           `json:"public,omitempty"`
-	AccessCheckObject    string         `json:"access_check_object,omitempty"`
-	AccessCheckRelation  string         `json:"access_check_relation,omitempty"`
-	HistoryCheckObject   string         `json:"history_check_object,omitempty"`
-	HistoryCheckRelation string         `json:"history_check_relation,omitempty"`
+	AccessCheckObject    string         `json:"access_check_object,omitempty"`    // deprecated - use AccessCheckQuery instead
+	AccessCheckRelation  string         `json:"access_check_relation,omitempty"`  // deprecated - use AccessCheckQuery instead
+	HistoryCheckObject   string         `json:"history_check_object,omitempty"`   // deprecated - use HistoryCheckQuery instead
+	HistoryCheckRelation string         `json:"history_check_relation,omitempty"` // deprecated - use HistoryCheckQuery instead
+	AccessCheckQuery     string         `json:"access_check_query,omitempty"`
+	HistoryCheckQuery    string         `json:"history_check_query,omitempty"`
 	Latest               *bool          `json:"latest,omitempty"`
 	CreatedAt            *time.Time     `json:"created_at,omitempty"`
 	CreatedBy            []string       `json:"created_by,omitempty"`

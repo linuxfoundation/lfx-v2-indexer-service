@@ -28,33 +28,51 @@ func (e *MeetingSettingsEnricher) EnrichData(body *contracts.TransactionBody, tr
 
 // setAccessControl provides meeting-settings-specific access control logic
 func (e *MeetingSettingsEnricher) setAccessControl(body *contracts.TransactionBody, data map[string]any, objectType, objectID string) {
+	// Build access control values
+	var accessObject, accessRelation string
+	var historyObject, historyRelation string
+
 	// Set access control with meeting-settings-specific logic
 	// Only apply defaults when fields are completely missing from data
 	if accessCheckObject, ok := data["accessCheckObject"].(string); ok {
 		// Field exists in data (even if empty) - use data value
-		body.AccessCheckObject = accessCheckObject
+		accessObject = accessCheckObject
 	} else if _, exists := data["accessCheckObject"]; !exists {
 		// Field doesn't exist in data - use computed default with objectType prefix
-		body.AccessCheckObject = fmt.Sprintf("%s:%s", constants.ObjectTypeMeeting, objectID)
+		accessObject = fmt.Sprintf("%s:%s", constants.ObjectTypeMeeting, objectID)
 	}
 	// If field exists but is not a string, leave empty (no override)
 
 	if accessCheckRelation, ok := data["accessCheckRelation"].(string); ok {
-		body.AccessCheckRelation = accessCheckRelation
+		accessRelation = accessCheckRelation
 	} else if _, exists := data["accessCheckRelation"]; !exists {
-		body.AccessCheckRelation = "auditor"
+		accessRelation = "auditor"
 	}
 
 	if historyCheckObject, ok := data["historyCheckObject"].(string); ok {
-		body.HistoryCheckObject = historyCheckObject
+		historyObject = historyCheckObject
 	} else if _, exists := data["historyCheckObject"]; !exists {
-		body.HistoryCheckObject = fmt.Sprintf("%s:%s", constants.ObjectTypeMeeting, objectID)
+		historyObject = fmt.Sprintf("%s:%s", constants.ObjectTypeMeeting, objectID)
 	}
 
 	if historyCheckRelation, ok := data["historyCheckRelation"].(string); ok {
-		body.HistoryCheckRelation = historyCheckRelation
+		historyRelation = historyCheckRelation
 	} else if _, exists := data["historyCheckRelation"]; !exists {
-		body.HistoryCheckRelation = "writer"
+		historyRelation = "writer"
+	}
+
+	// Assign to body fields (deprecated fields)
+	body.AccessCheckObject = accessObject
+	body.AccessCheckRelation = accessRelation
+	body.HistoryCheckObject = historyObject
+	body.HistoryCheckRelation = historyRelation
+
+	// Build and assign the query strings
+	if accessObject != "" && accessRelation != "" {
+		body.AccessCheckQuery = fmt.Sprintf("%s#%s", accessObject, accessRelation)
+	}
+	if historyObject != "" && historyRelation != "" {
+		body.HistoryCheckQuery = fmt.Sprintf("%s#%s", historyObject, historyRelation)
 	}
 }
 
