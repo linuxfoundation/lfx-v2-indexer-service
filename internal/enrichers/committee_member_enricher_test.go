@@ -34,6 +34,8 @@ func TestCommitteeMemberEnricher_setAccessControl(t *testing.T) {
 				"AccessCheckRelation":  "viewer",
 				"HistoryCheckObject":   "committee:committee-123",
 				"HistoryCheckRelation": "writer",
+				"AccessCheckQuery":     "committee:committee-123#viewer",
+				"HistoryCheckQuery":    "committee:committee-123#writer",
 			},
 		},
 		{
@@ -48,6 +50,8 @@ func TestCommitteeMemberEnricher_setAccessControl(t *testing.T) {
 				"AccessCheckRelation":  "viewer",
 				"HistoryCheckObject":   "committee_member:member-456",
 				"HistoryCheckRelation": "writer",
+				"AccessCheckQuery":     "committee_member:member-456#viewer",
+				"HistoryCheckQuery":    "committee_member:member-456#writer",
 			},
 		},
 		{
@@ -63,6 +67,8 @@ func TestCommitteeMemberEnricher_setAccessControl(t *testing.T) {
 				"AccessCheckRelation":  "viewer",
 				"HistoryCheckObject":   "committee:",
 				"HistoryCheckRelation": "writer",
+				"AccessCheckQuery":     "committee:#viewer",
+				"HistoryCheckQuery":    "committee:#writer",
 			},
 		},
 		{
@@ -78,6 +84,8 @@ func TestCommitteeMemberEnricher_setAccessControl(t *testing.T) {
 				"AccessCheckRelation":  "viewer",
 				"HistoryCheckObject":   "committee_member:member-456",
 				"HistoryCheckRelation": "writer",
+				"AccessCheckQuery":     "committee_member:member-456#viewer",
+				"HistoryCheckQuery":    "committee_member:member-456#writer",
 			},
 		},
 		{
@@ -96,6 +104,8 @@ func TestCommitteeMemberEnricher_setAccessControl(t *testing.T) {
 				"AccessCheckRelation":  "admin",
 				"HistoryCheckObject":   "custom:history",
 				"HistoryCheckRelation": "reader",
+				"AccessCheckQuery":     "custom:object#admin",
+				"HistoryCheckQuery":    "custom:history#reader",
 			},
 		},
 		{
@@ -112,6 +122,8 @@ func TestCommitteeMemberEnricher_setAccessControl(t *testing.T) {
 				"AccessCheckRelation":  "",                        // empty preserved
 				"HistoryCheckObject":   "committee:committee-123", // computed default
 				"HistoryCheckRelation": "writer",                  // computed default
+				"AccessCheckQuery":     "",                        // empty when both object and relation are empty
+				"HistoryCheckQuery":    "committee:committee-123#writer",
 			},
 		},
 		{
@@ -129,6 +141,8 @@ func TestCommitteeMemberEnricher_setAccessControl(t *testing.T) {
 				"AccessCheckRelation":  "viewer",           // default
 				"HistoryCheckObject":   "explicit:history", // explicit
 				"HistoryCheckRelation": "writer",           // default
+				"AccessCheckQuery":     "explicit:access#viewer",
+				"HistoryCheckQuery":    "explicit:history#writer",
 			},
 		},
 	}
@@ -143,6 +157,14 @@ func TestCommitteeMemberEnricher_setAccessControl(t *testing.T) {
 			assert.Equal(t, tt.expectedAccess["AccessCheckRelation"], body.AccessCheckRelation)
 			assert.Equal(t, tt.expectedAccess["HistoryCheckObject"], body.HistoryCheckObject)
 			assert.Equal(t, tt.expectedAccess["HistoryCheckRelation"], body.HistoryCheckRelation)
+			
+			// Check new query fields if expected
+			if expectedQuery, exists := tt.expectedAccess["AccessCheckQuery"]; exists {
+				assert.Equal(t, expectedQuery, body.AccessCheckQuery)
+			}
+			if expectedQuery, exists := tt.expectedAccess["HistoryCheckQuery"]; exists {
+				assert.Equal(t, expectedQuery, body.HistoryCheckQuery)
+			}
 		})
 	}
 }
@@ -448,6 +470,8 @@ func TestCommitteeMemberEnricher_Integration_AccessControlWithCommitteeUID(t *te
 				"AccessCheckRelation":  "viewer",
 				"HistoryCheckObject":   "committee:committee-456",
 				"HistoryCheckRelation": "writer",
+				"AccessCheckQuery":     "committee:committee-456#viewer",
+				"HistoryCheckQuery":    "committee:committee-456#writer",
 			},
 		},
 		{
@@ -462,6 +486,8 @@ func TestCommitteeMemberEnricher_Integration_AccessControlWithCommitteeUID(t *te
 				"AccessCheckRelation":  "viewer",
 				"HistoryCheckObject":   "committee_member:member-789",
 				"HistoryCheckRelation": "writer",
+				"AccessCheckQuery":     "committee_member:member-789#viewer",
+				"HistoryCheckQuery":    "committee_member:member-789#writer",
 			},
 		},
 	}
@@ -481,6 +507,8 @@ func TestCommitteeMemberEnricher_Integration_AccessControlWithCommitteeUID(t *te
 			assert.Equal(t, tt.expectedAccess["AccessCheckRelation"], body.AccessCheckRelation)
 			assert.Equal(t, tt.expectedAccess["HistoryCheckObject"], body.HistoryCheckObject)
 			assert.Equal(t, tt.expectedAccess["HistoryCheckRelation"], body.HistoryCheckRelation)
+			assert.Equal(t, tt.expectedAccess["AccessCheckQuery"], body.AccessCheckQuery)
+			assert.Equal(t, tt.expectedAccess["HistoryCheckQuery"], body.HistoryCheckQuery)
 		})
 	}
 }

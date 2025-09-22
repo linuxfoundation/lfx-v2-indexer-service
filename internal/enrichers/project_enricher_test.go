@@ -63,8 +63,10 @@ func TestProjectEnricher_EnrichData(t *testing.T) {
 				AccessCheckRelation:  "member",  // Override from data
 				HistoryCheckObject:   "project", // Override from data
 				HistoryCheckRelation: "viewer",  // Override from data
+				AccessCheckQuery:     "project#member",
+				HistoryCheckQuery:    "project#viewer",
 			},
-			expectedFields: []string{"ObjectID", "Public", "AccessCheckObject", "AccessCheckRelation", "HistoryCheckObject", "HistoryCheckRelation"},
+			expectedFields: []string{"ObjectID", "Public", "AccessCheckObject", "AccessCheckRelation", "HistoryCheckObject", "HistoryCheckRelation", "AccessCheckQuery", "HistoryCheckQuery"},
 		},
 		{
 			name: "access control with computed defaults",
@@ -79,8 +81,10 @@ func TestProjectEnricher_EnrichData(t *testing.T) {
 				AccessCheckRelation:  "viewer",                   // Computed default
 				HistoryCheckObject:   "project:project-defaults", // Computed default
 				HistoryCheckRelation: "writer",                   // Computed default
+				AccessCheckQuery:     "project:project-defaults#viewer",
+				HistoryCheckQuery:    "project:project-defaults#writer",
 			},
-			expectedFields: []string{"ObjectID", "Public", "AccessCheckObject", "AccessCheckRelation", "HistoryCheckObject", "HistoryCheckRelation"},
+			expectedFields: []string{"ObjectID", "Public", "AccessCheckObject", "AccessCheckRelation", "HistoryCheckObject", "HistoryCheckRelation", "AccessCheckQuery", "HistoryCheckQuery"},
 		},
 		{
 			name: "successful enrichment with parent reference",
@@ -128,9 +132,11 @@ func TestProjectEnricher_EnrichData(t *testing.T) {
 				AccessCheckRelation:  "admin",
 				HistoryCheckObject:   "organization",
 				HistoryCheckRelation: "member",
+				AccessCheckQuery:     "organization#admin",
+				HistoryCheckQuery:    "organization#member",
 				ParentRefs:           []string{"project:org-parent"},
 			},
-			expectedFields: []string{"ObjectID", "Public", "AccessCheckObject", "AccessCheckRelation", "HistoryCheckObject", "HistoryCheckRelation", "ParentRefs"},
+			expectedFields: []string{"ObjectID", "Public", "AccessCheckObject", "AccessCheckRelation", "HistoryCheckObject", "HistoryCheckRelation", "AccessCheckQuery", "HistoryCheckQuery", "ParentRefs"},
 		},
 		{
 			name: "complete enrichment with search fields",
@@ -228,6 +234,10 @@ func TestProjectEnricher_EnrichData(t *testing.T) {
 					assert.Equal(t, tt.expectedBody.HistoryCheckObject, body.HistoryCheckObject, "HistoryCheckObject mismatch")
 				case "HistoryCheckRelation":
 					assert.Equal(t, tt.expectedBody.HistoryCheckRelation, body.HistoryCheckRelation, "HistoryCheckRelation mismatch")
+				case "AccessCheckQuery":
+					assert.Equal(t, tt.expectedBody.AccessCheckQuery, body.AccessCheckQuery, "AccessCheckQuery mismatch")
+				case "HistoryCheckQuery":
+					assert.Equal(t, tt.expectedBody.HistoryCheckQuery, body.HistoryCheckQuery, "HistoryCheckQuery mismatch")
 				case "ParentRefs":
 					assert.Equal(t, tt.expectedBody.ParentRefs, body.ParentRefs, "ParentRefs mismatch")
 				case "SortName":
@@ -263,6 +273,8 @@ func TestProjectEnricher_EnrichData_AccessControlComputedDefaults(t *testing.T) 
 	assert.Equal(t, "viewer", body.AccessCheckRelation)
 	assert.Equal(t, "project:project-computed-defaults", body.HistoryCheckObject)
 	assert.Equal(t, "writer", body.HistoryCheckRelation)
+	assert.Equal(t, "project:project-computed-defaults#viewer", body.AccessCheckQuery)
+	assert.Equal(t, "project:project-computed-defaults#writer", body.HistoryCheckQuery)
 }
 
 func TestProjectEnricher_EnrichData_ParentReferenceOptional(t *testing.T) {

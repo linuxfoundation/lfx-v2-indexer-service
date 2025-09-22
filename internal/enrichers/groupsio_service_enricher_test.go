@@ -42,9 +42,11 @@ func TestGroupsIOServiceEnricher_EnrichData_Success(t *testing.T) {
 				AccessCheckRelation:  "viewer",
 				HistoryCheckObject:   "groupsio_service:groupsio-123",
 				HistoryCheckRelation: "writer",
+				AccessCheckQuery:     "groupsio_service:groupsio-123#viewer",
+				HistoryCheckQuery:    "groupsio_service:groupsio-123#writer",
 				ObjectType:           constants.ObjectTypeGroupsIOService,
 			},
-			expectedFields: []string{"ObjectID", "Public", "SortName", "NameAndAliases", "AccessCheckObject", "AccessCheckRelation", "HistoryCheckObject", "HistoryCheckRelation", "ObjectType"},
+			expectedFields: []string{"ObjectID", "Public", "SortName", "NameAndAliases", "AccessCheckObject", "AccessCheckRelation", "HistoryCheckObject", "HistoryCheckRelation", "AccessCheckQuery", "HistoryCheckQuery", "ObjectType"},
 		},
 		{
 			name: "enrichment with legacy id field",
@@ -59,9 +61,11 @@ func TestGroupsIOServiceEnricher_EnrichData_Success(t *testing.T) {
 				AccessCheckRelation:  "viewer",
 				HistoryCheckObject:   "groupsio_service:groupsio-456",
 				HistoryCheckRelation: "writer",
+				AccessCheckQuery:     "groupsio_service:groupsio-456#viewer",
+				HistoryCheckQuery:    "groupsio_service:groupsio-456#writer",
 				ObjectType:           constants.ObjectTypeGroupsIOService,
 			},
-			expectedFields: []string{"ObjectID", "Public", "AccessCheckObject", "AccessCheckRelation", "HistoryCheckObject", "HistoryCheckRelation", "ObjectType"},
+			expectedFields: []string{"ObjectID", "Public", "AccessCheckObject", "AccessCheckRelation", "HistoryCheckObject", "HistoryCheckRelation", "AccessCheckQuery", "HistoryCheckQuery", "ObjectType"},
 		},
 		{
 			name: "enrichment with custom access control",
@@ -80,9 +84,11 @@ func TestGroupsIOServiceEnricher_EnrichData_Success(t *testing.T) {
 				AccessCheckRelation:  "member",
 				HistoryCheckObject:   "organization:test-org",
 				HistoryCheckRelation: "admin",
+				AccessCheckQuery:     "organization:test-org#member",
+				HistoryCheckQuery:    "organization:test-org#admin",
 				ObjectType:           constants.ObjectTypeGroupsIOService,
 			},
-			expectedFields: []string{"ObjectID", "Public", "AccessCheckObject", "AccessCheckRelation", "HistoryCheckObject", "HistoryCheckRelation", "ObjectType"},
+			expectedFields: []string{"ObjectID", "Public", "AccessCheckObject", "AccessCheckRelation", "HistoryCheckObject", "HistoryCheckRelation", "AccessCheckQuery", "HistoryCheckQuery", "ObjectType"},
 		},
 		{
 			name: "enrichment with parent references",
@@ -99,9 +105,11 @@ func TestGroupsIOServiceEnricher_EnrichData_Success(t *testing.T) {
 				AccessCheckRelation:  "viewer",
 				HistoryCheckObject:   "groupsio_service:groupsio-child",
 				HistoryCheckRelation: "writer",
+				AccessCheckQuery:     "groupsio_service:groupsio-child#viewer",
+				HistoryCheckQuery:    "groupsio_service:groupsio-child#writer",
 				ObjectType:           constants.ObjectTypeGroupsIOService,
 			},
-			expectedFields: []string{"ObjectID", "Public", "ParentRefs", "AccessCheckObject", "AccessCheckRelation", "HistoryCheckObject", "HistoryCheckRelation", "ObjectType"},
+			expectedFields: []string{"ObjectID", "Public", "ParentRefs", "AccessCheckObject", "AccessCheckRelation", "HistoryCheckObject", "HistoryCheckRelation", "AccessCheckQuery", "HistoryCheckQuery", "ObjectType"},
 		},
 		{
 			name: "enrichment with fulltext content",
@@ -157,6 +165,10 @@ func TestGroupsIOServiceEnricher_EnrichData_Success(t *testing.T) {
 					assert.Equal(t, tt.expectedBody.HistoryCheckObject, body.HistoryCheckObject, "HistoryCheckObject mismatch")
 				case "HistoryCheckRelation":
 					assert.Equal(t, tt.expectedBody.HistoryCheckRelation, body.HistoryCheckRelation, "HistoryCheckRelation mismatch")
+				case "AccessCheckQuery":
+					assert.Equal(t, tt.expectedBody.AccessCheckQuery, body.AccessCheckQuery, "AccessCheckQuery mismatch")
+				case "HistoryCheckQuery":
+					assert.Equal(t, tt.expectedBody.HistoryCheckQuery, body.HistoryCheckQuery, "HistoryCheckQuery mismatch")
 				case "ParentRefs":
 					assert.ElementsMatch(t, tt.expectedBody.ParentRefs, body.ParentRefs, "ParentRefs mismatch")
 				case "ObjectType":
