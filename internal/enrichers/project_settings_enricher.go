@@ -87,10 +87,10 @@ func (e *ProjectSettingsEnricher) EnrichData(body *contracts.TransactionBody, tr
 
 	// Build and assign the query strings
 	if accessObject != "" && accessRelation != "" {
-		body.AccessCheckQuery = fmt.Sprintf("%s#%s", accessObject, accessRelation)
+		body.AccessCheckQuery = contracts.JoinFgaQuery(accessObject, accessRelation)
 	}
 	if historyObject != "" && historyRelation != "" {
-		body.HistoryCheckQuery = fmt.Sprintf("%s#%s", historyObject, historyRelation)
+		body.HistoryCheckQuery = contracts.JoinFgaQuery(historyObject, historyRelation)
 	}
 
 	return nil

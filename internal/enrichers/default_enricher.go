@@ -139,8 +139,6 @@ func (e *defaultEnricher) EnrichData(body *contracts.TransactionBody, transactio
 	// Handle parent references
 	e.setParentReferencesFn(body, data, objectType)
 
-	slog.Info("Access query", "access_query", body.AccessCheckQuery, "history_query", body.HistoryCheckQuery)
-
 	// Build comprehensive fulltext search content
 	e.buildFulltextContent(body, data)
 
@@ -276,10 +274,10 @@ func defaultSetAccessControl(body *contracts.TransactionBody, data map[string]an
 
 	// Build and assign the query strings
 	if accessObject != "" && accessRelation != "" {
-		body.AccessCheckQuery = fmt.Sprintf("%s#%s", accessObject, accessRelation)
+		body.AccessCheckQuery = contracts.JoinFgaQuery(accessObject, accessRelation)
 	}
 	if historyObject != "" && historyRelation != "" {
-		body.HistoryCheckQuery = fmt.Sprintf("%s#%s", historyObject, historyRelation)
+		body.HistoryCheckQuery = contracts.JoinFgaQuery(historyObject, historyRelation)
 	}
 }
 
