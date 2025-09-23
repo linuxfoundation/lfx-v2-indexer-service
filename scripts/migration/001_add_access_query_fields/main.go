@@ -10,7 +10,7 @@
 //
 // Usage:
 //
-//	go run scripts/data-migration/add-access-query-fields/main.go
+//	go run scripts/migration/001_add_access_query_fields/main.go
 //
 // Environment variables:
 //   - OPENSEARCH_URL: OpenSearch cluster URL (default: http://localhost:9200)
@@ -115,7 +115,6 @@ func loadConfig() *Config {
 
 	return config
 }
-
 
 // createOpenSearchClient creates and configures OpenSearch client
 func createOpenSearchClient(config *Config) (*opensearch.Client, error) {
@@ -247,7 +246,7 @@ func searchDocuments(ctx context.Context, client *opensearch.Client, config *Con
 func scrollDocuments(ctx context.Context, client *opensearch.Client, scrollID string, scrollTimeout time.Duration) (*SearchResponse, error) {
 	scrollBody := map[string]interface{}{
 		"scroll_id": scrollID,
-		"scroll":    fmt.Sprintf("%dm", int(scrollTimeout.Minutes())),
+		"scroll":    scrollTimeout.String(),
 	}
 
 	scrollBodyJSON, err := json.Marshal(scrollBody)
@@ -328,7 +327,11 @@ func processBatch(ctx context.Context, client *opensearch.Client, config *Config
 		bulkBody.WriteString(fmt.Sprintf(`{"update":{"_index":"%s","_id":"%s"}}`, config.IndexName, doc.ID))
 		bulkBody.WriteString("\n")
 
-		updateJSON, _ := json.Marshal(map[string]interface{}{"doc": updateDoc})
+		updateJSON, err := json.Marshal(map[string]interface{}{"doc": updateDoc})
+		if err != nil {
+			stats.ErroredDocuments++
+			return fmt.Errorf("failed to marshal update document for %s: %w", doc.ID, err)
+		}
 		bulkBody.Write(updateJSON)
 		bulkBody.WriteString("\n")
 

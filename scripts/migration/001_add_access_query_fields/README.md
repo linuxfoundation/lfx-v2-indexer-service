@@ -1,39 +1,26 @@
 # Access Query Fields Migration Script
 
-This script migrates existing OpenSearch documents to add the new `access_check_query` and `history_check_query` fields that were recently added to the enricher system.
+This script migrates existing OpenSearch documents to add the new `access_check_query` and `history_check_query` fields that were recently added as part of [PR #20](https://github.com/linuxfoundation/lfx-v2-indexer-service/pull/20).
 
 ## Background
 
-The LFX indexer service was recently updated to include new query fields for Fine-Grained Authorization (FGA):
+The LFX indexer service was recently updated to include new document fields for Fine-Grained Authorization (FGA) of documents via the [query service](https://github.com/linuxfoundation/lfx-v2-query-service):
 
 - `access_check_query`: Combination of `access_check_object` + "#" + `access_check_relation`
 - `history_check_query`: Combination of `history_check_object` + "#" + `history_check_relation`
 
-These fields are automatically populated for newly indexed documents, but existing documents need to be migrated.
+These fields are automatically populated for newly indexed documents (implemented in [PR #20](https://github.com/linuxfoundation/lfx-v2-indexer-service/pull/20)), but existing documents need to be migrated.
 
 ## Usage
 
 ### Basic Usage
 
 ```bash
-# Build the migration script
-go build -o migrate main.go
-
 # Run in dry-run mode to see what would be changed
-DRY_RUN=true ./migrate
+DRY_RUN=true go run scripts/migration/001_add_access_query_fields/main.go
 
 # Run the actual migration
-./migrate
-```
-
-### With Custom Configuration
-
-```bash
-# Custom OpenSearch settings
-OPENSEARCH_URL=http://opensearch:9200 \
-OPENSEARCH_INDEX=resources \
-BATCH_SIZE=500 \
-./migrate
+go run scripts/migration/001_add_access_query_fields/main.go
 ```
 
 ## Environment Variables
@@ -71,7 +58,7 @@ The script:
 
 ## Example Output
 
-```
+```text
 Starting access query fields migration...
 === Migration Configuration ===
   OpenSearch URL: http://opensearch:9200
