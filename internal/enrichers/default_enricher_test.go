@@ -410,6 +410,8 @@ func TestDefaultEnricher_EnrichData_AccessControl(t *testing.T) {
 				"AccessCheckRelation":  "viewer",
 				"HistoryCheckObject":   "project:test-123",
 				"HistoryCheckRelation": "writer",
+				"AccessCheckQuery":     "project:test-123#viewer",
+				"HistoryCheckQuery":    "project:test-123#writer",
 			},
 		},
 		{
@@ -427,6 +429,8 @@ func TestDefaultEnricher_EnrichData_AccessControl(t *testing.T) {
 				"AccessCheckRelation":  "admin",
 				"HistoryCheckObject":   "history:object",
 				"HistoryCheckRelation": "reader",
+				"AccessCheckQuery":     "custom:object#admin",
+				"HistoryCheckQuery":    "history:object#reader",
 			},
 		},
 		{
@@ -442,6 +446,8 @@ func TestDefaultEnricher_EnrichData_AccessControl(t *testing.T) {
 				"AccessCheckRelation":  "",                 // empty preserved
 				"HistoryCheckObject":   "project:test-123", // computed default
 				"HistoryCheckRelation": "writer",           // computed default
+				"AccessCheckQuery":     "",                 // empty when both object and relation are empty
+				"HistoryCheckQuery":    "project:test-123#writer",
 			},
 		},
 	}
@@ -461,6 +467,8 @@ func TestDefaultEnricher_EnrichData_AccessControl(t *testing.T) {
 			assert.Equal(t, tt.expectedAccess["AccessCheckRelation"], body.AccessCheckRelation)
 			assert.Equal(t, tt.expectedAccess["HistoryCheckObject"], body.HistoryCheckObject)
 			assert.Equal(t, tt.expectedAccess["HistoryCheckRelation"], body.HistoryCheckRelation)
+			assert.Equal(t, tt.expectedAccess["AccessCheckQuery"], body.AccessCheckQuery)
+			assert.Equal(t, tt.expectedAccess["HistoryCheckQuery"], body.HistoryCheckQuery)
 		})
 	}
 }
@@ -722,6 +730,8 @@ func TestDefaultEnricher_EnrichData_CompleteEnrichment(t *testing.T) {
 	assert.Equal(t, "member", body.AccessCheckRelation)
 	assert.Equal(t, "organization:test-org", body.HistoryCheckObject)
 	assert.Equal(t, "admin", body.HistoryCheckRelation)
+	assert.Equal(t, "organization:test-org#member", body.AccessCheckQuery)
+	assert.Equal(t, "organization:test-org#admin", body.HistoryCheckQuery)
 
 	// Verify fulltext includes all searchable content
 	// Note: Order may vary due to map iteration, so check components individually
@@ -751,6 +761,8 @@ func TestDefaultEnricher_EnrichData_EdgeCases(t *testing.T) {
 				assert.Empty(t, body.NameAndAliases)
 				assert.Equal(t, "project:minimal-123", body.AccessCheckObject)
 				assert.Equal(t, "viewer", body.AccessCheckRelation)
+				assert.Equal(t, "project:minimal-123#viewer", body.AccessCheckQuery)
+				assert.Equal(t, "project:minimal-123#writer", body.HistoryCheckQuery)
 			},
 		},
 		{

@@ -37,30 +37,48 @@ func (e *PastMeetingSummaryEnricher) setAccessControl(body *contracts.Transactio
 		return fmt.Sprintf("%s:%s", objectType, objectID)
 	}
 
+	// Build access control values
+	var accessObject, accessRelation string
+	var historyObject, historyRelation string
+
 	// Set access control with past meeting summary-specific logic
 	// Only apply defaults when fields are completely missing from data
 	if accessCheckObject, ok := data["accessCheckObject"].(string); ok {
-		body.AccessCheckObject = accessCheckObject
+		accessObject = accessCheckObject
 	} else if _, exists := data["accessCheckObject"]; !exists {
-		body.AccessCheckObject = pastMeetingLevelPermission(data)
+		accessObject = pastMeetingLevelPermission(data)
 	}
 
 	if accessCheckRelation, ok := data["accessCheckRelation"].(string); ok {
-		body.AccessCheckRelation = accessCheckRelation
+		accessRelation = accessCheckRelation
 	} else if _, exists := data["accessCheckRelation"]; !exists {
-		body.AccessCheckRelation = "viewer"
+		accessRelation = "viewer"
 	}
 
 	if historyCheckObject, ok := data["historyCheckObject"].(string); ok {
-		body.HistoryCheckObject = historyCheckObject
+		historyObject = historyCheckObject
 	} else if _, exists := data["historyCheckObject"]; !exists {
-		body.HistoryCheckObject = pastMeetingLevelPermission(data)
+		historyObject = pastMeetingLevelPermission(data)
 	}
 
 	if historyCheckRelation, ok := data["historyCheckRelation"].(string); ok {
-		body.HistoryCheckRelation = historyCheckRelation
+		historyRelation = historyCheckRelation
 	} else if _, exists := data["historyCheckRelation"]; !exists {
-		body.HistoryCheckRelation = "writer"
+		historyRelation = "writer"
+	}
+
+	// Assign to body fields (deprecated fields)
+	body.AccessCheckObject = accessObject
+	body.AccessCheckRelation = accessRelation
+	body.HistoryCheckObject = historyObject
+	body.HistoryCheckRelation = historyRelation
+
+	// Build and assign the query strings
+	if accessObject != "" && accessRelation != "" {
+		body.AccessCheckQuery = contracts.JoinFgaQuery(accessObject, accessRelation)
+	}
+	if historyObject != "" && historyRelation != "" {
+		body.HistoryCheckQuery = contracts.JoinFgaQuery(historyObject, historyRelation)
 	}
 }
 

@@ -65,8 +65,10 @@ func TestProjectSettingsEnricher_EnrichData(t *testing.T) {
 				AccessCheckRelation:  "admin",          // Override from data
 				HistoryCheckObject:   "custom-history", // Override from data
 				HistoryCheckRelation: "member",         // Override from data
+				AccessCheckQuery:     "custom-object#admin",
+				HistoryCheckQuery:    "custom-history#member",
 			},
-			expectedFields: []string{"ObjectID", "Public", "AccessCheckObject", "AccessCheckRelation", "HistoryCheckObject", "HistoryCheckRelation"},
+			expectedFields: []string{"ObjectID", "Public", "AccessCheckObject", "AccessCheckRelation", "HistoryCheckObject", "HistoryCheckRelation", "AccessCheckQuery", "HistoryCheckQuery"},
 		},
 		{
 			name: "access control with computed defaults",
@@ -80,8 +82,10 @@ func TestProjectSettingsEnricher_EnrichData(t *testing.T) {
 				AccessCheckRelation:  "auditor",                  // Computed default
 				HistoryCheckObject:   "project:project-defaults", // Computed default
 				HistoryCheckRelation: "writer",                   // Computed default
+				AccessCheckQuery:     "project:project-defaults#auditor",
+				HistoryCheckQuery:    "project:project-defaults#writer",
 			},
-			expectedFields: []string{"ObjectID", "Public", "AccessCheckObject", "AccessCheckRelation", "HistoryCheckObject", "HistoryCheckRelation"},
+			expectedFields: []string{"ObjectID", "Public", "AccessCheckObject", "AccessCheckRelation", "HistoryCheckObject", "HistoryCheckRelation", "AccessCheckQuery", "HistoryCheckQuery"},
 		},
 		{
 			name: "complete enrichment with all fields and settings data",
@@ -103,8 +107,10 @@ func TestProjectSettingsEnricher_EnrichData(t *testing.T) {
 				AccessCheckRelation:  "admin",
 				HistoryCheckObject:   "organization",
 				HistoryCheckRelation: "admin",
+				AccessCheckQuery:     "organization#admin",
+				HistoryCheckQuery:    "organization#admin",
 			},
-			expectedFields: []string{"ObjectID", "Public", "AccessCheckObject", "AccessCheckRelation", "HistoryCheckObject", "HistoryCheckRelation"},
+			expectedFields: []string{"ObjectID", "Public", "AccessCheckObject", "AccessCheckRelation", "HistoryCheckObject", "HistoryCheckRelation", "AccessCheckQuery", "HistoryCheckQuery"},
 		},
 		{
 			name: "project settings with configuration data",
@@ -125,8 +131,10 @@ func TestProjectSettingsEnricher_EnrichData(t *testing.T) {
 				AccessCheckRelation:  "auditor",
 				HistoryCheckObject:   "project:project-config",
 				HistoryCheckRelation: "writer",
+				AccessCheckQuery:     "project:project-config#auditor",
+				HistoryCheckQuery:    "project:project-config#writer",
 			},
-			expectedFields: []string{"ObjectID", "Public", "AccessCheckObject", "AccessCheckRelation", "HistoryCheckObject", "HistoryCheckRelation"},
+			expectedFields: []string{"ObjectID", "Public", "AccessCheckObject", "AccessCheckRelation", "HistoryCheckObject", "HistoryCheckRelation", "AccessCheckQuery", "HistoryCheckQuery"},
 		},
 		{
 			name: "error: missing uid and id",
@@ -186,6 +194,10 @@ func TestProjectSettingsEnricher_EnrichData(t *testing.T) {
 					assert.Equal(t, tt.expectedBody.HistoryCheckObject, body.HistoryCheckObject, "HistoryCheckObject mismatch")
 				case "HistoryCheckRelation":
 					assert.Equal(t, tt.expectedBody.HistoryCheckRelation, body.HistoryCheckRelation, "HistoryCheckRelation mismatch")
+				case "AccessCheckQuery":
+					assert.Equal(t, tt.expectedBody.AccessCheckQuery, body.AccessCheckQuery, "AccessCheckQuery mismatch")
+				case "HistoryCheckQuery":
+					assert.Equal(t, tt.expectedBody.HistoryCheckQuery, body.HistoryCheckQuery, "HistoryCheckQuery mismatch")
 				}
 			}
 		})
@@ -212,6 +224,8 @@ func TestProjectSettingsEnricher_EnrichData_AccessControlComputedDefaults(t *tes
 	assert.Equal(t, "auditor", body.AccessCheckRelation)
 	assert.Equal(t, "project:project-computed-defaults", body.HistoryCheckObject)
 	assert.Equal(t, "writer", body.HistoryCheckRelation)
+	assert.Equal(t, "project:project-computed-defaults#auditor", body.AccessCheckQuery)
+	assert.Equal(t, "project:project-computed-defaults#writer", body.HistoryCheckQuery)
 }
 
 func TestProjectSettingsEnricher_EnrichData_AlwaysPrivate(t *testing.T) {
