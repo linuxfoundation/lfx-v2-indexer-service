@@ -27,11 +27,11 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/env"
 	"github.com/opensearch-project/opensearch-go/v2"
 	"github.com/opensearch-project/opensearch-go/v2/opensearchapi"
 )
@@ -98,11 +98,11 @@ func JoinFgaQuery(object, relation string) string {
 // loadConfig loads configuration from environment variables with defaults
 func loadConfig() *Config {
 	config := &Config{
-		OpenSearchURL: getEnv("OPENSEARCH_URL", "http://localhost:9200"),
-		IndexName:     getEnv("OPENSEARCH_INDEX", "resources"),
-		BatchSize:     getEnvInt("BATCH_SIZE", 100),
-		DryRun:        getEnvBool("DRY_RUN", false),
-		ScrollTimeout: getEnvDuration("SCROLL_TIMEOUT", 5*time.Minute),
+		OpenSearchURL: env.GetString("OPENSEARCH_URL", "http://localhost:9200"),
+		IndexName:     env.GetString("OPENSEARCH_INDEX", "resources"),
+		BatchSize:     env.GetInt("BATCH_SIZE", 100),
+		DryRun:        env.GetBool("DRY_RUN", false),
+		ScrollTimeout: env.GetDuration("SCROLL_TIMEOUT", 5*time.Minute),
 	}
 
 	log.Println("=== Migration Configuration ===")
@@ -116,43 +116,6 @@ func loadConfig() *Config {
 	return config
 }
 
-// getEnv gets environment variable with default value
-func getEnv(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
-}
-
-// getEnvInt gets environment variable as integer with default value
-func getEnvInt(key string, defaultValue int) int {
-	if value := os.Getenv(key); value != "" {
-		if intValue, err := strconv.Atoi(value); err == nil {
-			return intValue
-		}
-	}
-	return defaultValue
-}
-
-// getEnvBool gets environment variable as boolean with default value
-func getEnvBool(key string, defaultValue bool) bool {
-	if value := os.Getenv(key); value != "" {
-		if boolValue, err := strconv.ParseBool(value); err == nil {
-			return boolValue
-		}
-	}
-	return defaultValue
-}
-
-// getEnvDuration gets environment variable as duration with default value
-func getEnvDuration(key string, defaultValue time.Duration) time.Duration {
-	if value := os.Getenv(key); value != "" {
-		if duration, err := time.ParseDuration(value); err == nil {
-			return duration
-		}
-	}
-	return defaultValue
-}
 
 // createOpenSearchClient creates and configures OpenSearch client
 func createOpenSearchClient(config *Config) (*opensearch.Client, error) {
