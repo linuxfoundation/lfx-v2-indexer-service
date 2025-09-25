@@ -246,7 +246,7 @@ func searchDocuments(ctx context.Context, client *opensearch.Client, config *Con
 func scrollDocuments(ctx context.Context, client *opensearch.Client, scrollID string, scrollTimeout time.Duration) (*SearchResponse, error) {
 	scrollBody := map[string]interface{}{
 		"scroll_id": scrollID,
-		"scroll":    scrollTimeout.String(),
+		"scroll":    fmt.Sprintf("%dm", int(scrollTimeout.Minutes())),
 	}
 
 	scrollBodyJSON, err := json.Marshal(scrollBody)
