@@ -53,6 +53,7 @@ const (
 	ObjectTypePastMeeting            = "past_meeting"
 	ObjectTypePastMeetingParticipant = "past_meeting_participant"
 	ObjectTypePastMeetingRecording   = "past_meeting_recording"
+	ObjectTypePastMeetingTranscript  = "past_meeting_transcript"
 	ObjectTypePastMeetingSummary     = "past_meeting_summary"
 	ObjectTypeGroupsIOService        = "groupsio_service"
 	ObjectTypeGroupsIOMailingList    = "groupsio_mailing_list"
