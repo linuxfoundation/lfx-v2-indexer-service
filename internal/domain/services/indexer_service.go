@@ -86,6 +86,7 @@ func NewIndexerService(
 		enrichers.NewPastMeetingEnricher(),
 		enrichers.NewPastMeetingParticipantEnricher(),
 		enrichers.NewPastMeetingRecordingEnricher(),
+		enrichers.NewPastMeetingTranscriptEnricher(),
 		enrichers.NewPastMeetingSummaryEnricher(),
 		enrichers.NewGroupsIOServiceEnricher(),
 		enrichers.NewGroupsIOMailingListEnricher(),

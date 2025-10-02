@@ -11,27 +11,27 @@ import (
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 )
 
-// PastMeetingRecordingEnricher handles past meeting recording-specific enrichment logic
-type PastMeetingRecordingEnricher struct {
+// PastMeetingTranscriptEnricher handles past meeting transcript-specific enrichment logic
+type PastMeetingTranscriptEnricher struct {
 	defaultEnricher Enricher
 }
 
 // ObjectType returns the object type this enricher handles.
-func (e *PastMeetingRecordingEnricher) ObjectType() string {
+func (e *PastMeetingTranscriptEnricher) ObjectType() string {
 	return e.defaultEnricher.ObjectType()
 }
 
-// EnrichData enriches past meeting recording-specific data
-func (e *PastMeetingRecordingEnricher) EnrichData(body *contracts.TransactionBody, transaction *contracts.LFXTransaction) error {
+// EnrichData enriches past meeting transcript-specific data
+func (e *PastMeetingTranscriptEnricher) EnrichData(body *contracts.TransactionBody, transaction *contracts.LFXTransaction) error {
 	return e.defaultEnricher.EnrichData(body, transaction)
 }
 
-// setAccessControl provides past meeting recording-specific access control logic
-func (e *PastMeetingRecordingEnricher) setAccessControl(body *contracts.TransactionBody, data map[string]any, objectType, objectID string) {
-	pastMeetingRecordingLevelPermission := func(data map[string]any) string {
-		if value, ok := data["past_meeting_recording_uid"]; ok {
-			if pastMeetingRecordingUID, ok := value.(string); ok {
-				return fmt.Sprintf("%s:%s", constants.ObjectTypePastMeetingRecording, pastMeetingRecordingUID)
+// setAccessControl provides past meeting transcript-specific access control logic
+func (e *PastMeetingTranscriptEnricher) setAccessControl(body *contracts.TransactionBody, data map[string]any, objectType, objectID string) {
+	pastMeetingTranscriptLevelPermission := func(data map[string]any) string {
+		if value, ok := data["past_meeting_transcript_uid"]; ok {
+			if pastMeetingTranscriptUID, ok := value.(string); ok {
+				return fmt.Sprintf("%s:%s", constants.ObjectTypePastMeetingTranscript, pastMeetingTranscriptUID)
 			}
 		}
 		return fmt.Sprintf("%s:%s", objectType, objectID)
@@ -41,12 +41,12 @@ func (e *PastMeetingRecordingEnricher) setAccessControl(body *contracts.Transact
 	var accessObject, accessRelation string
 	var historyObject, historyRelation string
 
-	// Set access control with past meeting recording-specific logic
+	// Set access control with past meeting transcript-specific logic
 	// Only apply defaults when fields are completely missing from data
 	if accessCheckObject, ok := data["accessCheckObject"].(string); ok {
 		accessObject = accessCheckObject
 	} else if _, exists := data["accessCheckObject"]; !exists {
-		accessObject = pastMeetingRecordingLevelPermission(data)
+		accessObject = pastMeetingTranscriptLevelPermission(data)
 	}
 
 	if accessCheckRelation, ok := data["accessCheckRelation"].(string); ok {
@@ -58,7 +58,7 @@ func (e *PastMeetingRecordingEnricher) setAccessControl(body *contracts.Transact
 	if historyCheckObject, ok := data["historyCheckObject"].(string); ok {
 		historyObject = historyCheckObject
 	} else if _, exists := data["historyCheckObject"]; !exists {
-		historyObject = pastMeetingRecordingLevelPermission(data)
+		historyObject = pastMeetingTranscriptLevelPermission(data)
 	}
 
 	if historyCheckRelation, ok := data["historyCheckRelation"].(string); ok {
@@ -82,11 +82,11 @@ func (e *PastMeetingRecordingEnricher) setAccessControl(body *contracts.Transact
 	}
 }
 
-// NewPastMeetingRecordingEnricher creates a new past meeting recording enricher
-func NewPastMeetingRecordingEnricher() Enricher {
-	enricher := &PastMeetingRecordingEnricher{}
+// NewPastMeetingTranscriptEnricher creates a new past meeting transcript enricher
+func NewPastMeetingTranscriptEnricher() Enricher {
+	enricher := &PastMeetingTranscriptEnricher{}
 	enricher.defaultEnricher = newDefaultEnricher(
-		constants.ObjectTypePastMeetingRecording,
+		constants.ObjectTypePastMeetingTranscript,
 		WithAccessControl(enricher.setAccessControl),
 	)
 	return enricher
