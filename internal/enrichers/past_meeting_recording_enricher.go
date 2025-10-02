@@ -28,10 +28,10 @@ func (e *PastMeetingRecordingEnricher) EnrichData(body *contracts.TransactionBod
 
 // setAccessControl provides past meeting recording-specific access control logic
 func (e *PastMeetingRecordingEnricher) setAccessControl(body *contracts.TransactionBody, data map[string]any, objectType, objectID string) {
-	pastMeetingLevelPermission := func(data map[string]any) string {
-		if value, ok := data["past_meeting_uid"]; ok {
-			if pastMeetingUID, ok := value.(string); ok {
-				return fmt.Sprintf("%s:%s", constants.ObjectTypePastMeeting, pastMeetingUID)
+	pastMeetingRecordingLevelPermission := func(data map[string]any) string {
+		if value, ok := data["past_meeting_recording_uid"]; ok {
+			if pastMeetingRecordingUID, ok := value.(string); ok {
+				return fmt.Sprintf("%s:%s", constants.ObjectTypePastMeetingRecording, pastMeetingRecordingUID)
 			}
 		}
 		return fmt.Sprintf("%s:%s", objectType, objectID)
@@ -46,7 +46,7 @@ func (e *PastMeetingRecordingEnricher) setAccessControl(body *contracts.Transact
 	if accessCheckObject, ok := data["accessCheckObject"].(string); ok {
 		accessObject = accessCheckObject
 	} else if _, exists := data["accessCheckObject"]; !exists {
-		accessObject = pastMeetingLevelPermission(data)
+		accessObject = pastMeetingRecordingLevelPermission(data)
 	}
 
 	if accessCheckRelation, ok := data["accessCheckRelation"].(string); ok {
@@ -58,7 +58,7 @@ func (e *PastMeetingRecordingEnricher) setAccessControl(body *contracts.Transact
 	if historyCheckObject, ok := data["historyCheckObject"].(string); ok {
 		historyObject = historyCheckObject
 	} else if _, exists := data["historyCheckObject"]; !exists {
-		historyObject = pastMeetingLevelPermission(data)
+		historyObject = pastMeetingRecordingLevelPermission(data)
 	}
 
 	if historyCheckRelation, ok := data["historyCheckRelation"].(string); ok {
