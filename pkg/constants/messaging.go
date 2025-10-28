@@ -50,6 +50,7 @@ const (
 	ObjectTypeMeeting                = "meeting"
 	ObjectTypeMeetingSettings        = "meeting_settings"
 	ObjectTypeMeetingRegistrant      = "meeting_registrant"
+	ObjectTypeMeetingRSVP            = "meeting_rsvp"
 	ObjectTypePastMeeting            = "past_meeting"
 	ObjectTypePastMeetingParticipant = "past_meeting_participant"
 	ObjectTypePastMeetingRecording   = "past_meeting_recording"
