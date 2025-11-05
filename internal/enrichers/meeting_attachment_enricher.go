@@ -88,9 +88,8 @@ func (e *MeetingAttachmentEnricher) setAccessControl(body *contracts.Transaction
 }
 
 // extractSortName extracts the sort name from the meeting attachment data
-// Uses the uid since attachments can be either files or links
 func (e *MeetingAttachmentEnricher) extractSortName(data map[string]any) string {
-	if value, ok := data["uid"]; ok {
+	if value, ok := data["name"]; ok {
 		if strValue, isString := value.(string); isString && strValue != "" {
 			return strings.TrimSpace(strValue)
 		}
@@ -103,8 +102,7 @@ func (e *MeetingAttachmentEnricher) extractNameAndAliases(data map[string]any) [
 	var nameAndAliases []string
 	seen := make(map[string]bool) // Deduplicate names
 
-	// Collect file_name and link fields
-	fields := []string{"file_name", "link"}
+	fields := []string{"file_name", "link", "name"}
 	for _, field := range fields {
 		if value, ok := data[field]; ok {
 			if strValue, ok := value.(string); ok && strValue != "" {
