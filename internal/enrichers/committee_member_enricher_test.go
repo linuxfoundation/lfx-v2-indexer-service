@@ -157,7 +157,7 @@ func TestCommitteeMemberEnricher_setAccessControl(t *testing.T) {
 			assert.Equal(t, tt.expectedAccess["AccessCheckRelation"], body.AccessCheckRelation)
 			assert.Equal(t, tt.expectedAccess["HistoryCheckObject"], body.HistoryCheckObject)
 			assert.Equal(t, tt.expectedAccess["HistoryCheckRelation"], body.HistoryCheckRelation)
-			
+
 			// Check new query fields if expected
 			if expectedQuery, exists := tt.expectedAccess["AccessCheckQuery"]; exists {
 				assert.Equal(t, expectedQuery, body.AccessCheckQuery)
