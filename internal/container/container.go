@@ -381,15 +381,15 @@ func (c *Container) SetupNATSSubscriptions(ctx context.Context) error {
 		return fmt.Errorf("indexing message handler is not initialized")
 	}
 
-	// Subscribe to indexing messages with queue group for load balancing
+	// Subscribe to indexing messages with queue group for load balancing and reply support
 	indexingSubject := c.Config.NATS.IndexingSubject
-	if err := c.MessagingRepository.QueueSubscribe(ctx, indexingSubject, c.Config.NATS.Queue, c.IndexingMessageHandler); err != nil {
+	if err := c.MessagingRepository.QueueSubscribeWithReply(ctx, indexingSubject, c.Config.NATS.Queue, c.IndexingMessageHandler); err != nil {
 		return fmt.Errorf("failed to subscribe to %s: %w", indexingSubject, err)
 	}
 
-	// Subscribe to v1 indexing messages with the same unified handler
+	// Subscribe to v1 indexing messages with the same unified handler and reply support
 	v1IndexingSubject := c.Config.NATS.V1IndexingSubject
-	if err := c.MessagingRepository.QueueSubscribe(ctx, v1IndexingSubject, c.Config.NATS.Queue, c.IndexingMessageHandler); err != nil {
+	if err := c.MessagingRepository.QueueSubscribeWithReply(ctx, v1IndexingSubject, c.Config.NATS.Queue, c.IndexingMessageHandler); err != nil {
 		return fmt.Errorf("failed to subscribe to %s: %w", v1IndexingSubject, err)
 	}
 
