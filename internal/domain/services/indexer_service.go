@@ -94,6 +94,14 @@ func NewIndexerService(
 		enrichers.NewGroupsIOServiceEnricher(),
 		enrichers.NewGroupsIOMailingListEnricher(),
 		enrichers.NewGroupsIOMemberEnricher(),
+		// V1 Meeting enrichers
+		enrichers.NewV1MeetingEnricher(),
+		enrichers.NewV1PastMeetingEnricher(),
+		enrichers.NewV1MeetingRegistrantEnricher(),
+		enrichers.NewV1PastMeetingParticipantEnricher(),
+		enrichers.NewV1PastMeetingRecordingEnricher(),
+		enrichers.NewV1PastMeetingTranscriptEnricher(),
+		enrichers.NewV1PastMeetingSummaryEnricher(),
 	} {
 		registry.Register(enricher)
 	}
