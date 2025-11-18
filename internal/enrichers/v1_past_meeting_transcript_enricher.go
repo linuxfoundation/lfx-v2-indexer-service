@@ -29,9 +29,9 @@ func (e *V1PastMeetingTranscriptEnricher) EnrichData(body *contracts.Transaction
 // setAccessControl provides V1 past meeting transcript-specific access control logic
 func (e *V1PastMeetingTranscriptEnricher) setAccessControl(body *contracts.TransactionBody, data map[string]any, objectType, objectID string) {
 	pastMeetingTranscriptLevelPermission := func(data map[string]any) string {
-		if value, ok := data["past_meeting_transcript_uid"]; ok {
+		if value, ok := data["id"]; ok {
 			if pastMeetingTranscriptUID, ok := value.(string); ok {
-				return fmt.Sprintf("%s:%s", constants.ObjectTypePastMeetingTranscript, pastMeetingTranscriptUID)
+				return fmt.Sprintf("%s:%s", constants.ObjectTypeV1PastMeetingTranscript, pastMeetingTranscriptUID)
 			}
 		}
 		return fmt.Sprintf("%s:%s", objectType, objectID)

@@ -23,7 +23,7 @@ func (e *V1MeetingRegistrantEnricher) ObjectType() string {
 	return e.defaultEnricher.ObjectType()
 }
 
-// EnrichData enriches V1 meeting-specific data
+// EnrichData enriches V1 meeting-registrant-specific data
 func (e *V1MeetingRegistrantEnricher) EnrichData(body *contracts.TransactionBody, transaction *contracts.LFXTransaction) error {
 	return e.defaultEnricher.EnrichData(body, transaction)
 }
@@ -31,9 +31,9 @@ func (e *V1MeetingRegistrantEnricher) EnrichData(body *contracts.TransactionBody
 // setAccessControl provides V1 meeting-registrant-specific access control logic
 func (e *V1MeetingRegistrantEnricher) setAccessControl(body *contracts.TransactionBody, data map[string]any, objectType, objectID string) {
 	meetingLevelPermission := func(data map[string]any) string {
-		if value, ok := data["meeting_uid"]; ok {
+		if value, ok := data["meeting_id"]; ok {
 			if meetingUID, ok := value.(string); ok {
-				return fmt.Sprintf("%s:%s", constants.ObjectTypeMeeting, meetingUID)
+				return fmt.Sprintf("%s:%s", constants.ObjectTypeV1Meeting, meetingUID)
 			}
 		}
 		return fmt.Sprintf("%s:%s", objectType, objectID)
