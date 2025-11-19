@@ -61,6 +61,15 @@ const (
 	ObjectTypeGroupsIOService        = "groupsio_service"
 	ObjectTypeGroupsIOMailingList    = "groupsio_mailing_list"
 	ObjectTypeGroupsIOMember         = "groupsio_member"
+
+	// V1 Meeting object types
+	ObjectTypeV1Meeting                = "v1_meeting"
+	ObjectTypeV1PastMeeting            = "v1_past_meeting"
+	ObjectTypeV1MeetingRegistrant      = "v1_meeting_registrant"
+	ObjectTypeV1PastMeetingParticipant = "v1_past_meeting_participant"
+	ObjectTypeV1PastMeetingRecording   = "v1_past_meeting_recording"
+	ObjectTypeV1PastMeetingTranscript  = "v1_past_meeting_transcript"
+	ObjectTypeV1PastMeetingSummary     = "v1_past_meeting_summary"
 )
 
 // Message processing constants
