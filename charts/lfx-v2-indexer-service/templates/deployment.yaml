@@ -76,6 +76,8 @@ spec:
           ports:
             - containerPort: {{ .Values.app.port }}
               name: web
+          resources:
+            {{- toYaml .Values.app.resources | nindent 12 }}
           livenessProbe:
             httpGet:
               path: /livez

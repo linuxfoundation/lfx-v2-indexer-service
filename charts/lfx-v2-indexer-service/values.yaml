@@ -45,9 +45,17 @@ jwt:
 # app is the configuration for the application
 app:
   # replicas is the number of replicas for the deployment
-  replicas: 2
+  replicas: 3
   # terminationGracePeriodSeconds is the grace period for pod termination
   terminationGracePeriodSeconds: 60
+  # resources defines CPU and memory limits/requests for the container
+  resources:
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
   # port is the port the application listens on
   port: "8080"
   # logLevel is the log level for the application
