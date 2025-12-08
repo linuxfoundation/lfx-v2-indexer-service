@@ -1,0 +1,8 @@
+# Copyright The Linux Foundation and each contributor to LFX.
+---
+site_name: 'LFX One Indexer Service'
+site_description: 'Documentation for LFX One Indexer Service'
+nav:
+  - Home: index.md
+plugins:
+  - techdocs-core
