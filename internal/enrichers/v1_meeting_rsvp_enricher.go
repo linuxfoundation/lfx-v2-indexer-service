@@ -87,7 +87,7 @@ func (e *V1MeetingRSVPEnricher) setAccessControl(body *contracts.TransactionBody
 	}
 }
 
-// extractSortName extracts the sort name from the V1 meeting message data
+// extractSortName extracts the sort name from the V1 meeting RSVP data
 func (e *V1MeetingRSVPEnricher) extractSortName(data map[string]any) string {
 	if value, ok := data["email"]; ok {
 		if strValue, isString := value.(string); isString && strValue != "" {
@@ -97,13 +97,13 @@ func (e *V1MeetingRSVPEnricher) extractSortName(data map[string]any) string {
 	return ""
 }
 
-// extractNameAndAliases extracts the name and aliases from the V1 meeting message data
+// extractNameAndAliases extracts the name and aliases from the V1 meeting RSVP data
 func (e *V1MeetingRSVPEnricher) extractNameAndAliases(data map[string]any) []string {
 	var nameAndAliases []string
 	seen := make(map[string]bool) // Deduplicate names
 
 	// Compile regex pattern for name-like fields
-	aliasRegex := regexp.MustCompile(`(?i)^(email)$`)
+	aliasRegex := regexp.MustCompile(`(?i)^(username|email)$`)
 
 	// Collect all name-like fields using regex pattern
 	for key, value := range data {
