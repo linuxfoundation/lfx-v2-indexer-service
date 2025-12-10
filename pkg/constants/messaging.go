@@ -66,6 +66,7 @@ const (
 	ObjectTypeV1Meeting                = "v1_meeting"
 	ObjectTypeV1PastMeeting            = "v1_past_meeting"
 	ObjectTypeV1MeetingRegistrant      = "v1_meeting_registrant"
+	ObjectTypeV1MeetingRSVP            = "v1_meeting_rsvp"
 	ObjectTypeV1PastMeetingParticipant = "v1_past_meeting_participant"
 	ObjectTypeV1PastMeetingRecording   = "v1_past_meeting_recording"
 	ObjectTypeV1PastMeetingTranscript  = "v1_past_meeting_transcript"
