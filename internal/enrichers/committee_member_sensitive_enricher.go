@@ -13,26 +13,25 @@ import (
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 )
 
-// CommitteeMemberEnricher handles committee-specific enrichment logic
-type CommitteeMemberEnricher struct {
+// CommitteeMemberSensitiveEnricher enriches committee member sensitive data
+type CommitteeMemberSensitiveEnricher struct {
 	defaultEnricher Enricher
 }
 
 // ObjectType returns the object type this enricher handles.
-func (e *CommitteeMemberEnricher) ObjectType() string {
+func (e *CommitteeMemberSensitiveEnricher) ObjectType() string {
 	return e.defaultEnricher.ObjectType()
 }
 
 // EnrichData enriches committee-specific data
-func (e *CommitteeMemberEnricher) EnrichData(body *contracts.TransactionBody, transaction *contracts.LFXTransaction) error {
+func (e *CommitteeMemberSensitiveEnricher) EnrichData(body *contracts.TransactionBody, transaction *contracts.LFXTransaction) error {
 	return e.defaultEnricher.EnrichData(body, transaction)
 }
 
-// setAccessControl provides committee-member-specific access control logic
+// setAccessControl provides committee-member-sensitive-specific access control logic
 // overrides the default access control logic
-// the access control logic is based on the committee member's committee UID
-// not the committee member's UID
-func (e *CommitteeMemberEnricher) setAccessControl(body *contracts.TransactionBody, data map[string]any, objectType, objectID string) {
+// Since it's a sensitive object, the access control logic is set to auditor/writer on the committee level
+func (e *CommitteeMemberSensitiveEnricher) setAccessControl(body *contracts.TransactionBody, data map[string]any, objectType, objectID string) {
 
 	committeeLevelPermission := func(data map[string]any) string {
 		if value, ok := data["committee_uid"]; ok {
@@ -61,7 +60,7 @@ func (e *CommitteeMemberEnricher) setAccessControl(body *contracts.TransactionBo
 	if accessCheckRelation, ok := data["accessCheckRelation"].(string); ok {
 		accessRelation = accessCheckRelation
 	} else if _, exists := data["accessCheckRelation"]; !exists {
-		accessRelation = "viewer"
+		accessRelation = "auditor"
 	}
 
 	// History check object
@@ -93,13 +92,13 @@ func (e *CommitteeMemberEnricher) setAccessControl(body *contracts.TransactionBo
 	}
 }
 
-// settExtractNameAndAliases extracts the name and aliases from the committee member data
+// setExtractNameAndAliases extracts the name and aliases from the committee member data
 // overrides the default name and aliases extraction logic
-func (e *CommitteeMemberEnricher) settExtractNameAndAliases(data map[string]any) []string {
+func (e *CommitteeMemberSensitiveEnricher) setExtractNameAndAliases(data map[string]any) []string {
 	var nameAndAliases []string
 	seen := make(map[string]bool) // Deduplicate names
 	// Compile regex pattern for name-like fields
-	aliasRegex := regexp.MustCompile(`(?i)^(committee_name|first_name|last_name|username)$`)
+	aliasRegex := regexp.MustCompile(`(?i)^(email)$`)
 
 	for key, value := range data {
 		if aliasRegex.MatchString(key) {
@@ -118,8 +117,8 @@ func (e *CommitteeMemberEnricher) settExtractNameAndAliases(data map[string]any)
 
 // extractSortName extracts the sort name from the committee member data
 // overrides the default sort name extraction logic
-func (e *CommitteeMemberEnricher) extractSortName(data map[string]any) string {
-	if value, ok := data["first_name"]; ok {
+func (e *CommitteeMemberSensitiveEnricher) extractSortName(data map[string]any) string {
+	if value, ok := data["email"]; ok {
 		if strValue, isString := value.(string); isString && strValue != "" {
 			return strings.TrimSpace(strValue)
 		}
@@ -127,13 +126,13 @@ func (e *CommitteeMemberEnricher) extractSortName(data map[string]any) string {
 	return ""
 }
 
-// NewCommitteeMemberEnricher creates a new CommitteeMemberEnricher instance
-func NewCommitteeMemberEnricher() Enricher {
-	cme := &CommitteeMemberEnricher{}
+// NewCommitteeMemberSensitiveEnricher creates a new committee member sensitive enricher instance
+func NewCommitteeMemberSensitiveEnricher() Enricher {
+	cme := &CommitteeMemberSensitiveEnricher{}
 	cme.defaultEnricher = newDefaultEnricher(
-		constants.ObjectTypeCommitteeMember,
+		constants.ObjectTypeCommitteeMemberSensitive,
 		WithAccessControl(cme.setAccessControl),
-		WithNameAndAliases(cme.settExtractNameAndAliases),
+		WithNameAndAliases(cme.setExtractNameAndAliases),
 		WithSortName(cme.extractSortName),
 	)
 	return cme

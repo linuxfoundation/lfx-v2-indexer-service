@@ -80,6 +80,7 @@ func NewIndexerService(
 		enrichers.NewCommitteeEnricher(),
 		enrichers.NewCommitteeSettingsEnricher(),
 		enrichers.NewCommitteeMemberEnricher(),
+		enrichers.NewCommitteeMemberSensitiveEnricher(),
 		enrichers.NewMeetingEnricher(),
 		enrichers.NewMeetingSettingsEnricher(),
 		enrichers.NewMeetingRegistrantEnricher(),
