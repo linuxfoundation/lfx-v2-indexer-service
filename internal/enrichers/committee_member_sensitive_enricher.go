@@ -13,7 +13,7 @@ import (
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 )
 
-// CommitteeMemberEnricher handles committee-specific enrichment logic
+// CommitteeMemberSensitiveEnricher enriches committee member sensitive data
 type CommitteeMemberSensitiveEnricher struct {
 	defaultEnricher Enricher
 }
@@ -126,7 +126,7 @@ func (e *CommitteeMemberSensitiveEnricher) extractSortName(data map[string]any) 
 	return ""
 }
 
-// NewCommitteeEnricher creates a new committee enricher
+// NewCommitteeMemberSensitiveEnricher creates a new committee member sensitive enricher instance
 func NewCommitteeMemberSensitiveEnricher() Enricher {
 	cme := &CommitteeMemberSensitiveEnricher{}
 	cme.defaultEnricher = newDefaultEnricher(

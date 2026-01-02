@@ -127,7 +127,7 @@ func (e *CommitteeMemberEnricher) extractSortName(data map[string]any) string {
 	return ""
 }
 
-// NewCommitteeEnricher creates a new committee enricher
+// NewCommitteeMemberEnricher creates a new CommitteeMemberEnricher instance
 func NewCommitteeMemberEnricher() Enricher {
 	cme := &CommitteeMemberEnricher{}
 	cme.defaultEnricher = newDefaultEnricher(
