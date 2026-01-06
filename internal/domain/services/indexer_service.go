@@ -92,7 +92,9 @@ func NewIndexerService(
 		enrichers.NewPastMeetingTranscriptEnricher(),
 		enrichers.NewPastMeetingSummaryEnricher(),
 		enrichers.NewGroupsIOServiceEnricher(),
+		enrichers.NewGroupsIOServiceSettingsEnricher(),
 		enrichers.NewGroupsIOMailingListEnricher(),
+		enrichers.NewGroupsIOMailingListSettingsEnricher(),
 		enrichers.NewGroupsIOMemberEnricher(),
 		// V1 Meeting enrichers
 		enrichers.NewV1MeetingEnricher(),

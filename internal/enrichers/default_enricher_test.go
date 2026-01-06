@@ -691,9 +691,9 @@ func TestDefaultSetParentReferences(t *testing.T) {
 			name: "nil values are skipped",
 			data: map[string]any{
 				"uid":           "test-123",
-				"project_uid":   nil,         // nil value should be skipped
-				"committee_uid": "comm-789",  // valid value
-				"meeting_uid":   nil,         // nil value should be skipped
+				"project_uid":   nil,        // nil value should be skipped
+				"committee_uid": "comm-789", // valid value
+				"meeting_uid":   nil,        // nil value should be skipped
 			},
 			objectType: "event",
 			expectedParents: []string{
@@ -704,10 +704,10 @@ func TestDefaultSetParentReferences(t *testing.T) {
 			name: "mixed nil, empty string, and valid values",
 			data: map[string]any{
 				"uid":           "test-123",
-				"project_uid":   nil,         // nil - should be skipped
-				"committee_uid": "",          // empty string - should be skipped
-				"meeting_uid":   "meet-456",  // valid value
-				"ProjectID":     nil,         // nil - should be skipped
+				"project_uid":   nil,        // nil - should be skipped
+				"committee_uid": "",         // empty string - should be skipped
+				"meeting_uid":   "meet-456", // valid value
+				"ProjectID":     nil,        // nil - should be skipped
 			},
 			objectType: "event",
 			expectedParents: []string{
