@@ -25,10 +25,36 @@ opensearch:
   url: http://opensearch-cluster-master.lfx.svc.cluster.local:9200/
   # index is the index name for storing resources
   index: resources
+  # auth configures authentication for OpenSearch
+  auth:
+    # enabled controls whether authentication is used
+    enabled: false
+    # existingSecret is the name of an existing secret containing credentials
+    # The secret should have 'username' and 'password' keys
+    existingSecret: ""
+    # username is the OpenSearch username (ignored if existingSecret is set)
+    username: ""
+    # password is the OpenSearch password (ignored if existingSecret is set)
+    password: ""
   # indexingJob is the configuration for the OpenSearch index creation job
   indexingJob:
     # enabled is a boolean to determine if the indexing job should be created
     enabled: true
+    # backoffLimit is the number of retries before marking the job as failed
+    backoffLimit: 3
+    # ttlSecondsAfterFinished is how long to keep the job after completion
+    ttlSecondsAfterFinished: 300
+    # activeDeadlineSeconds is the maximum time for the job to run (optional)
+    activeDeadlineSeconds: null
+    # restartPolicy is the pod restart policy (OnFailure or Never)
+    restartPolicy: OnFailure
+    # image is the container image for the job
+    image:
+      repository: curlimages/curl
+      tag: "8.11.1"
+      pullPolicy: IfNotPresent
+    # resources defines CPU and memory limits/requests for the job container
+    resources: {}
 
 # heimdall is the configuration for the heimdall middleware
 heimdall:

@@ -1,6 +1,7 @@
 # Copyright The Linux Foundation and each contributor to LFX.
 # SPDX-License-Identifier: MIT
 {{- if .Values.opensearch.indexingJob.enabled }}
+{{- $job := .Values.opensearch.indexingJob }}
 ---
 apiVersion: batch/v1
 kind: Job
@@ -8,18 +9,47 @@ metadata:
   name: {{ .Release.Name }}-opensearch-index-setup
   namespace: {{ .Release.Namespace }}
 spec:
-  ttlSecondsAfterFinished: 300
-  backoffLimit: 3
+  ttlSecondsAfterFinished: {{ $job.ttlSecondsAfterFinished }}
+  backoffLimit: {{ $job.backoffLimit }}
+  {{- if $job.activeDeadlineSeconds }}
+  activeDeadlineSeconds: {{ $job.activeDeadlineSeconds }}
+  {{- end }}
   template:
     spec:
-      restartPolicy: OnFailure
+      restartPolicy: {{ $job.restartPolicy }}
       volumes:
         - name: index-config
           configMap:
             name: {{ .Release.Name }}-opensearch-index-config
       containers:
         - name: curl
-          image: curlimages/curl:8.11.1
+          image: {{ $job.image.repository }}:{{ $job.image.tag }}
+          imagePullPolicy: {{ $job.image.pullPolicy }}
+          {{- with $job.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.opensearch.auth.enabled }}
+          env:
+            - name: OPENSEARCH_USERNAME
+              {{- if .Values.opensearch.auth.existingSecret }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.opensearch.auth.existingSecret }}
+                  key: username
+              {{- else }}
+              value: {{ .Values.opensearch.auth.username | quote }}
+              {{- end }}
+            - name: OPENSEARCH_PASSWORD
+              {{- if .Values.opensearch.auth.existingSecret }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.opensearch.auth.existingSecret }}
+                  key: password
+              {{- else }}
+              value: {{ .Values.opensearch.auth.password | quote }}
+              {{- end }}
+          {{- end }}
           volumeMounts:
             - name: index-config
               mountPath: /config
@@ -31,16 +61,19 @@ spec:
               set -e
               OPENSEARCH_URL="{{ .Values.opensearch.url | trimSuffix "/" }}"
               INDEX_NAME="{{ .Values.opensearch.index }}"
+              {{- if .Values.opensearch.auth.enabled }}
+              AUTH_OPTS="-u ${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}"
+              {{- end }}
 
               # Check if index already exists
-              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X HEAD "${OPENSEARCH_URL}/${INDEX_NAME}")
+              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" {{ if .Values.opensearch.auth.enabled }}${AUTH_OPTS} {{ end }}-X HEAD "${OPENSEARCH_URL}/${INDEX_NAME}")
 
               if [ "$HTTP_CODE" = "200" ]; then
                 echo "Index '${INDEX_NAME}' already exists, skipping creation"
                 exit 0
               elif [ "$HTTP_CODE" = "404" ]; then
                 echo "Index '${INDEX_NAME}' does not exist, creating..."
-                curl -f -X PUT "${OPENSEARCH_URL}/${INDEX_NAME}" \
+                curl -f {{ if .Values.opensearch.auth.enabled }}${AUTH_OPTS} {{ end }}-X PUT "${OPENSEARCH_URL}/${INDEX_NAME}" \
                   -H 'Content-Type: application/json' \
                   -d @/config/resources-index.json
                 echo "Index '${INDEX_NAME}' created successfully"
