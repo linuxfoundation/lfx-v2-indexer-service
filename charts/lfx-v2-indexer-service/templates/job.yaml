@@ -12,7 +12,7 @@ spec:
   backoffLimit: 3
   template:
     spec:
-      restartPolicy: Never
+      restartPolicy: OnFailure
       volumes:
         - name: index-config
           configMap:
@@ -28,7 +28,24 @@ spec:
             - sh
             - -c
             - |
-              curl -X PUT "{{ .Values.opensearch.url | trimSuffix "/" }}/{{ .Values.opensearch.index }}" \
-                -H 'Content-Type: application/json' \
-                -d @/config/resources-index.json
+              set -e
+              OPENSEARCH_URL="{{ .Values.opensearch.url | trimSuffix "/" }}"
+              INDEX_NAME="{{ .Values.opensearch.index }}"
+
+              # Check if index already exists
+              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X HEAD "${OPENSEARCH_URL}/${INDEX_NAME}")
+
+              if [ "$HTTP_CODE" = "200" ]; then
+                echo "Index '${INDEX_NAME}' already exists, skipping creation"
+                exit 0
+              elif [ "$HTTP_CODE" = "404" ]; then
+                echo "Index '${INDEX_NAME}' does not exist, creating..."
+                curl -f -X PUT "${OPENSEARCH_URL}/${INDEX_NAME}" \
+                  -H 'Content-Type: application/json' \
+                  -d @/config/resources-index.json
+                echo "Index '${INDEX_NAME}' created successfully"
+              else
+                echo "Unexpected response checking index: HTTP ${HTTP_CODE}"
+                exit 1
+              fi
 {{- end }}

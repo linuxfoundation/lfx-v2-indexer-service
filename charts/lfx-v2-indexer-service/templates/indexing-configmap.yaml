@@ -9,58 +9,5 @@ metadata:
   namespace: {{ .Release.Namespace }}
 data:
   resources-index.json: |
-    {
-      "settings": {
-        "index": {
-          "number_of_shards": 1,
-          "number_of_replicas": 1
-        }
-      },
-      "mappings": {
-        "properties": {
-          "object_ref": {
-            "type": "keyword"
-          },
-          "object_type": {
-            "type": "keyword"
-          },
-          "object_id": {
-            "type": "keyword"
-          },
-          "latest": {
-            "type": "boolean"
-          },
-          "public": {
-            "type": "boolean"
-          },
-          "parent_refs": {
-            "type": "keyword"
-          },
-          "name_and_aliases": {
-            "type": "search_as_you_type"
-          },
-          "tags": {
-            "type": "keyword"
-          },
-          "access_check_object": {
-            "type": "keyword"
-          },
-          "access_check_relation": {
-            "type": "keyword"
-          },
-          "history_check_object": {
-            "type": "keyword"
-          },
-          "history_check_relation": {
-            "type": "keyword"
-          },
-          "access_check_query": {
-            "type": "keyword"
-          },
-          "history_check_query": {
-            "type": "keyword"
-          }
-        }
-      }
-    }
+    {{ .Files.Get "files/opensearch-resources-index.json" | nindent 4 }}
 {{- end }}
