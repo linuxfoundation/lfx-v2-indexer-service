@@ -5,7 +5,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: opensearch-index-setup
+  name: {{ .Release.Name }}-opensearch-index-setup
   namespace: {{ .Release.Namespace }}
 spec:
   ttlSecondsAfterFinished: 300
@@ -16,7 +16,7 @@ spec:
       volumes:
         - name: index-config
           configMap:
-            name: opensearch-index-config
+            name: {{ .Release.Name }}-opensearch-index-config
       containers:
         - name: curl
           image: curlimages/curl:8.11.1

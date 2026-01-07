@@ -5,7 +5,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: opensearch-index-config
+  name: {{ .Release.Name }}-opensearch-index-config
   namespace: {{ .Release.Namespace }}
 data:
   resources-index.json: |
