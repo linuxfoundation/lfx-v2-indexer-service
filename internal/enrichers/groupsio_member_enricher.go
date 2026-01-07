@@ -36,7 +36,7 @@ func (e *GroupsIOMemberEnricher) setAccessControl(body *contracts.TransactionBod
 
 	mailingListLevelPermission := func(data map[string]any) string {
 		if value, ok := data["mailing_list_uid"]; ok {
-			if mailingListUID, ok := value.(string); ok {
+			if mailingListUID, ok := value.(string); ok && mailingListUID != "" {
 				return fmt.Sprintf("%s:%s", constants.ObjectTypeGroupsIOMailingList, mailingListUID)
 			}
 		}
@@ -93,9 +93,9 @@ func (e *GroupsIOMemberEnricher) setAccessControl(body *contracts.TransactionBod
 	}
 }
 
-// settExtractNameAndAliases extracts the name and aliases from the committee member data
+// setExtractNameAndAliases extracts the name and aliases from the groupsio member data
 // overrides the default name and aliases extraction logic
-func (e *GroupsIOMemberEnricher) settExtractNameAndAliases(data map[string]any) []string {
+func (e *GroupsIOMemberEnricher) setExtractNameAndAliases(data map[string]any) []string {
 	var nameAndAliases []string
 	seen := make(map[string]bool) // Deduplicate names
 	// Compile regex pattern for name-like fields
@@ -116,7 +116,7 @@ func (e *GroupsIOMemberEnricher) settExtractNameAndAliases(data map[string]any) 
 	return nameAndAliases
 }
 
-// extractSortName extracts the sort name from the committee member data
+// extractSortName extracts the sort name from the groupsio member data
 // overrides the default sort name extraction logic
 func (e *GroupsIOMemberEnricher) extractSortName(data map[string]any) string {
 	if value, ok := data["first_name"]; ok {
@@ -133,7 +133,7 @@ func NewGroupsIOMemberEnricher() Enricher {
 	gme.defaultEnricher = newDefaultEnricher(
 		constants.ObjectTypeGroupsIOMember,
 		WithAccessControl(gme.setAccessControl),
-		WithNameAndAliases(gme.settExtractNameAndAliases),
+		WithNameAndAliases(gme.setExtractNameAndAliases),
 		WithSortName(gme.extractSortName),
 	)
 	return gme
