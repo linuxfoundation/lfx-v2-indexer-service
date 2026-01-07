@@ -31,10 +31,10 @@ func TestCommitteeMemberEnricher_setAccessControl(t *testing.T) {
 			objectID:   "member-456",
 			expectedAccess: map[string]string{
 				"AccessCheckObject":    "committee:committee-123",
-				"AccessCheckRelation":  "viewer",
+				"AccessCheckRelation":  "basic_profile_viewer",
 				"HistoryCheckObject":   "committee:committee-123",
 				"HistoryCheckRelation": "writer",
-				"AccessCheckQuery":     "committee:committee-123#viewer",
+				"AccessCheckQuery":     "committee:committee-123#basic_profile_viewer",
 				"HistoryCheckQuery":    "committee:committee-123#writer",
 			},
 		},
@@ -47,10 +47,10 @@ func TestCommitteeMemberEnricher_setAccessControl(t *testing.T) {
 			objectID:   "member-456",
 			expectedAccess: map[string]string{
 				"AccessCheckObject":    "committee_member:member-456",
-				"AccessCheckRelation":  "viewer",
+				"AccessCheckRelation":  "basic_profile_viewer",
 				"HistoryCheckObject":   "committee_member:member-456",
 				"HistoryCheckRelation": "writer",
-				"AccessCheckQuery":     "committee_member:member-456#viewer",
+				"AccessCheckQuery":     "committee_member:member-456#basic_profile_viewer",
 				"HistoryCheckQuery":    "committee_member:member-456#writer",
 			},
 		},
@@ -64,10 +64,10 @@ func TestCommitteeMemberEnricher_setAccessControl(t *testing.T) {
 			objectID:   "member-456",
 			expectedAccess: map[string]string{
 				"AccessCheckObject":    "committee:",
-				"AccessCheckRelation":  "viewer",
+				"AccessCheckRelation":  "basic_profile_viewer",
 				"HistoryCheckObject":   "committee:",
 				"HistoryCheckRelation": "writer",
-				"AccessCheckQuery":     "committee:#viewer",
+				"AccessCheckQuery":     "committee:#basic_profile_viewer",
 				"HistoryCheckQuery":    "committee:#writer",
 			},
 		},
@@ -81,10 +81,10 @@ func TestCommitteeMemberEnricher_setAccessControl(t *testing.T) {
 			objectID:   "member-456",
 			expectedAccess: map[string]string{
 				"AccessCheckObject":    "committee_member:member-456",
-				"AccessCheckRelation":  "viewer",
+				"AccessCheckRelation":  "basic_profile_viewer",
 				"HistoryCheckObject":   "committee_member:member-456",
 				"HistoryCheckRelation": "writer",
-				"AccessCheckQuery":     "committee_member:member-456#viewer",
+				"AccessCheckQuery":     "committee_member:member-456#basic_profile_viewer",
 				"HistoryCheckQuery":    "committee_member:member-456#writer",
 			},
 		},
@@ -137,11 +137,11 @@ func TestCommitteeMemberEnricher_setAccessControl(t *testing.T) {
 			objectType: "committee_member",
 			objectID:   "member-999",
 			expectedAccess: map[string]string{
-				"AccessCheckObject":    "explicit:access",  // explicit
-				"AccessCheckRelation":  "viewer",           // default
-				"HistoryCheckObject":   "explicit:history", // explicit
-				"HistoryCheckRelation": "writer",           // default
-				"AccessCheckQuery":     "explicit:access#viewer",
+				"AccessCheckObject":    "explicit:access",      // explicit
+				"AccessCheckRelation":  "basic_profile_viewer", // default
+				"HistoryCheckObject":   "explicit:history",     // explicit
+				"HistoryCheckRelation": "writer",               // default
+				"AccessCheckQuery":     "explicit:access#basic_profile_viewer",
 				"HistoryCheckQuery":    "explicit:history#writer",
 			},
 		},
@@ -467,10 +467,10 @@ func TestCommitteeMemberEnricher_Integration_AccessControlWithCommitteeUID(t *te
 			},
 			expectedAccess: map[string]string{
 				"AccessCheckObject":    "committee:committee-456",
-				"AccessCheckRelation":  "viewer",
+				"AccessCheckRelation":  "basic_profile_viewer",
 				"HistoryCheckObject":   "committee:committee-456",
 				"HistoryCheckRelation": "writer",
-				"AccessCheckQuery":     "committee:committee-456#viewer",
+				"AccessCheckQuery":     "committee:committee-456#basic_profile_viewer",
 				"HistoryCheckQuery":    "committee:committee-456#writer",
 			},
 		},
@@ -483,10 +483,10 @@ func TestCommitteeMemberEnricher_Integration_AccessControlWithCommitteeUID(t *te
 			},
 			expectedAccess: map[string]string{
 				"AccessCheckObject":    "committee_member:member-789",
-				"AccessCheckRelation":  "viewer",
+				"AccessCheckRelation":  "basic_profile_viewer",
 				"HistoryCheckObject":   "committee_member:member-789",
 				"HistoryCheckRelation": "writer",
-				"AccessCheckQuery":     "committee_member:member-789#viewer",
+				"AccessCheckQuery":     "committee_member:member-789#basic_profile_viewer",
 				"HistoryCheckQuery":    "committee_member:member-789#writer",
 			},
 		},
