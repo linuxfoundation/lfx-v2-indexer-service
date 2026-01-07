@@ -84,11 +84,39 @@ type LFXTransaction struct {
 	// Enhanced fields for improved validation and processing
 	IsV1             bool        `json:"-"`
 	ParsedPrincipals []Principal `json:"-"`
+
+	// IndexingConfig contains the indexing configuration for the resource,
+	// as specified by the client. They can specify all the searchability fields
+	// such as name_and_aliases, parent_refs, tags, etc.
+	IndexingConfig *IndexingConfig `json:"indexing_config,omitempty"`
 }
 
 // =================
 // SUPPORTING TYPES
 // =================
+
+// IndexingConfig represents the strongly-typed indexing configuration for resource messages.
+// This struct ensures type safety when clients provide pre-computed enrichment values,
+// bypassing the server-side enricher system.
+type IndexingConfig struct {
+	// ObjectID is the unique identifier for the resource (required)
+	ObjectID string `json:"object_id"`
+
+	// Public indicates whether the resource is publicly accessible (optional)
+	Public *bool `json:"public,omitempty"`
+
+	// Fine-Grained Authorization (FGA) fields (required for access control)
+	AccessCheckObject   string `json:"access_check_object"`
+	AccessCheckRelation string `json:"access_check_relation"`
+	HistoryCheckObject  string `json:"history_check_object"`
+	HistoryCheckRelation string `json:"history_check_relation"`
+
+	// Search and discovery fields (optional)
+	SortName       string   `json:"sort_name,omitempty"`
+	NameAndAliases []string `json:"name_and_aliases,omitempty"`
+	ParentRefs     []string `json:"parent_refs,omitempty"`
+	Fulltext       string   `json:"fulltext,omitempty"`
+}
 
 // ContactBody represents contact information within a transaction
 type ContactBody struct {

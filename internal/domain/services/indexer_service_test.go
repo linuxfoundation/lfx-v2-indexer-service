@@ -306,3 +306,466 @@ func TestIndexerService_ValidateObjectType_RegistryBased(t *testing.T) {
 	assert.Error(t, err, "Unknown object type should be invalid")
 	assert.Contains(t, err.Error(), "no enricher found for object type: unknown-type")
 }
+
+func TestIndexerService_parseIndexingConfig(t *testing.T) {
+	// Setup
+	mockStorageRepo := mocks.NewMockStorageRepository()
+	mockMessagingRepo := mocks.NewMockMessagingRepository()
+	logger, _ := logging.TestLogger(t)
+	service := NewIndexerService(mockStorageRepo, mockMessagingRepo, logger)
+
+	tests := []struct {
+		name        string
+		input       map[string]any
+		wantErr     bool
+		errContains string
+		validate    func(t *testing.T, config *contracts.IndexingConfig)
+	}{
+		{
+			name: "valid complete config",
+			input: map[string]any{
+				"object_id":              "proj-123",
+				"public":                 true,
+				"access_check_object":    "project:proj-123",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:proj-123",
+				"history_check_relation": "historian",
+				"sort_name":              "Test Project",
+				"name_and_aliases":       []interface{}{"Test Project", "TP"},
+				"parent_refs":            []interface{}{"org:org-456"},
+				"fulltext":               "Test Project description",
+			},
+			wantErr: false,
+			validate: func(t *testing.T, config *contracts.IndexingConfig) {
+				assert.Equal(t, "proj-123", config.ObjectID)
+				assert.NotNil(t, config.Public)
+				assert.True(t, *config.Public)
+				assert.Equal(t, "project:proj-123", config.AccessCheckObject)
+				assert.Equal(t, "viewer", config.AccessCheckRelation)
+				assert.Equal(t, "project:proj-123", config.HistoryCheckObject)
+				assert.Equal(t, "historian", config.HistoryCheckRelation)
+				assert.Equal(t, "Test Project", config.SortName)
+				assert.Equal(t, []string{"Test Project", "TP"}, config.NameAndAliases)
+				assert.Equal(t, []string{"org:org-456"}, config.ParentRefs)
+				assert.Equal(t, "Test Project description", config.Fulltext)
+			},
+		},
+		{
+			name: "valid minimal config (required fields only)",
+			input: map[string]any{
+				"object_id":              "proj-456",
+				"access_check_object":    "project:proj-456",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:proj-456",
+				"history_check_relation": "historian",
+			},
+			wantErr: false,
+			validate: func(t *testing.T, config *contracts.IndexingConfig) {
+				assert.Equal(t, "proj-456", config.ObjectID)
+				assert.Nil(t, config.Public)
+				assert.Equal(t, "project:proj-456", config.AccessCheckObject)
+				assert.Equal(t, "viewer", config.AccessCheckRelation)
+				assert.Equal(t, "project:proj-456", config.HistoryCheckObject)
+				assert.Equal(t, "historian", config.HistoryCheckRelation)
+				assert.Empty(t, config.SortName)
+				assert.Empty(t, config.NameAndAliases)
+				assert.Empty(t, config.ParentRefs)
+				assert.Empty(t, config.Fulltext)
+			},
+		},
+		{
+			name: "missing object_id",
+			input: map[string]any{
+				"access_check_object":    "project:proj-123",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:proj-123",
+				"history_check_relation": "historian",
+			},
+			wantErr:     true,
+			errContains: "object_id is required",
+		},
+		{
+			name: "empty object_id",
+			input: map[string]any{
+				"object_id":              "",
+				"access_check_object":    "project:proj-123",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:proj-123",
+				"history_check_relation": "historian",
+			},
+			wantErr:     true,
+			errContains: "object_id is required",
+		},
+		{
+			name: "missing access_check_object",
+			input: map[string]any{
+				"object_id":              "proj-123",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:proj-123",
+				"history_check_relation": "historian",
+			},
+			wantErr:     true,
+			errContains: "access_check_object is required",
+		},
+		{
+			name: "missing access_check_relation",
+			input: map[string]any{
+				"object_id":              "proj-123",
+				"access_check_object":    "project:proj-123",
+				"history_check_object":   "project:proj-123",
+				"history_check_relation": "historian",
+			},
+			wantErr:     true,
+			errContains: "access_check_relation is required",
+		},
+		{
+			name: "missing history_check_object",
+			input: map[string]any{
+				"object_id":              "proj-123",
+				"access_check_object":    "project:proj-123",
+				"access_check_relation":  "viewer",
+				"history_check_relation": "historian",
+			},
+			wantErr:     true,
+			errContains: "history_check_object is required",
+		},
+		{
+			name: "missing history_check_relation",
+			input: map[string]any{
+				"object_id":             "proj-123",
+				"access_check_object":   "project:proj-123",
+				"access_check_relation": "viewer",
+				"history_check_object":  "project:proj-123",
+			},
+			wantErr:     true,
+			errContains: "history_check_relation is required",
+		},
+		{
+			name: "invalid object_id type",
+			input: map[string]any{
+				"object_id":              123,
+				"access_check_object":    "project:proj-123",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:proj-123",
+				"history_check_relation": "historian",
+			},
+			wantErr:     true,
+			errContains: "object_id is required",
+		},
+		{
+			name: "invalid access_check_object type",
+			input: map[string]any{
+				"object_id":              "proj-123",
+				"access_check_object":    123,
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:proj-123",
+				"history_check_relation": "historian",
+			},
+			wantErr:     true,
+			errContains: "access_check_object is required",
+		},
+		{
+			name: "public flag false",
+			input: map[string]any{
+				"object_id":              "proj-789",
+				"public":                 false,
+				"access_check_object":    "project:proj-789",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:proj-789",
+				"history_check_relation": "historian",
+			},
+			wantErr: false,
+			validate: func(t *testing.T, config *contracts.IndexingConfig) {
+				assert.NotNil(t, config.Public)
+				assert.False(t, *config.Public)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config, err := service.parseIndexingConfig(tt.input)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+				assert.Nil(t, config)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, config)
+				if tt.validate != nil {
+					tt.validate(t, config)
+				}
+			}
+		})
+	}
+}
+
+func TestIndexerService_buildResourceBodyFromConfig(t *testing.T) {
+	// Setup
+	mockStorageRepo := mocks.NewMockStorageRepository()
+	mockMessagingRepo := mocks.NewMockMessagingRepository()
+	logger, _ := logging.TestLogger(t)
+	service := NewIndexerService(mockStorageRepo, mockMessagingRepo, logger)
+
+	tests := []struct {
+		name       string
+		data       map[string]any
+		config     *contracts.IndexingConfig
+		objectType string
+		validate   func(t *testing.T, body *contracts.TransactionBody)
+	}{
+		{
+			name: "complete config with all optional fields",
+			data: map[string]any{
+				"id":          "proj-123",
+				"name":        "Test Project",
+				"description": "A test project",
+			},
+			config: &contracts.IndexingConfig{
+				ObjectID:             "proj-123",
+				Public:               func() *bool { b := true; return &b }(),
+				AccessCheckObject:    "project:proj-123",
+				AccessCheckRelation:  "viewer",
+				HistoryCheckObject:   "project:proj-123",
+				HistoryCheckRelation: "historian",
+				SortName:             "test project",
+				NameAndAliases:       []string{"Test Project", "TP"},
+				ParentRefs:           []string{"org:org-456"},
+				Fulltext:             "Test Project description",
+			},
+			objectType: "project",
+			validate: func(t *testing.T, body *contracts.TransactionBody) {
+				assert.Equal(t, "project", body.ObjectType)
+				assert.Equal(t, "proj-123", body.ObjectID)
+				assert.Equal(t, "project:proj-123", body.ObjectRef)
+				assert.True(t, body.Public)
+				assert.Equal(t, "project:proj-123", body.AccessCheckObject)
+				assert.Equal(t, "viewer", body.AccessCheckRelation)
+				assert.Equal(t, "project:proj-123", body.HistoryCheckObject)
+				assert.Equal(t, "historian", body.HistoryCheckRelation)
+				assert.Equal(t, "project:proj-123#viewer", body.AccessCheckQuery)
+				assert.Equal(t, "project:proj-123#historian", body.HistoryCheckQuery)
+				assert.Equal(t, "test project", body.SortName)
+				assert.Equal(t, []string{"Test Project", "TP"}, body.NameAndAliases)
+				assert.Equal(t, []string{"org:org-456"}, body.ParentRefs)
+				assert.Equal(t, "Test Project description", body.Fulltext)
+				assert.NotNil(t, body.Data)
+				assert.Equal(t, "proj-123", body.Data["id"])
+			},
+		},
+		{
+			name: "minimal config with only required fields",
+			data: map[string]any{
+				"id": "proj-456",
+			},
+			config: &contracts.IndexingConfig{
+				ObjectID:             "proj-456",
+				AccessCheckObject:    "project:proj-456",
+				AccessCheckRelation:  "viewer",
+				HistoryCheckObject:   "project:proj-456",
+				HistoryCheckRelation: "historian",
+			},
+			objectType: "project",
+			validate: func(t *testing.T, body *contracts.TransactionBody) {
+				assert.Equal(t, "project", body.ObjectType)
+				assert.Equal(t, "proj-456", body.ObjectID)
+				assert.Equal(t, "project:proj-456", body.ObjectRef)
+				assert.False(t, body.Public) // Default false when not specified
+				assert.Equal(t, "project:proj-456#viewer", body.AccessCheckQuery)
+				assert.Equal(t, "project:proj-456#historian", body.HistoryCheckQuery)
+				assert.Empty(t, body.SortName)
+				assert.Empty(t, body.NameAndAliases)
+				assert.Empty(t, body.ParentRefs)
+				assert.Empty(t, body.Fulltext)
+			},
+		},
+		{
+			name: "public flag set to false",
+			data: map[string]any{
+				"id": "proj-789",
+			},
+			config: &contracts.IndexingConfig{
+				ObjectID:             "proj-789",
+				Public:               func() *bool { b := false; return &b }(),
+				AccessCheckObject:    "project:proj-789",
+				AccessCheckRelation:  "viewer",
+				HistoryCheckObject:   "project:proj-789",
+				HistoryCheckRelation: "historian",
+			},
+			objectType: "project",
+			validate: func(t *testing.T, body *contracts.TransactionBody) {
+				assert.False(t, body.Public)
+			},
+		},
+		{
+			name: "verify FGA query building",
+			data: map[string]any{
+				"id": "committee-123",
+			},
+			config: &contracts.IndexingConfig{
+				ObjectID:             "committee-123",
+				AccessCheckObject:    "committee:committee-123",
+				AccessCheckRelation:  "member",
+				HistoryCheckObject:   "committee:committee-123",
+				HistoryCheckRelation: "admin",
+			},
+			objectType: "committee",
+			validate: func(t *testing.T, body *contracts.TransactionBody) {
+				assert.Equal(t, "committee:committee-123#member", body.AccessCheckQuery)
+				assert.Equal(t, "committee:committee-123#admin", body.HistoryCheckQuery)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body, err := service.buildResourceBodyFromConfig(tt.data, tt.config, tt.objectType)
+
+			assert.NoError(t, err)
+			assert.NotNil(t, body)
+			if tt.validate != nil {
+				tt.validate(t, body)
+			}
+		})
+	}
+}
+
+func TestIndexerService_enrichTransactionData(t *testing.T) {
+	// Setup
+	mockStorageRepo := mocks.NewMockStorageRepository()
+	mockMessagingRepo := mocks.NewMockMessagingRepository()
+	logger, _ := logging.TestLogger(t)
+	service := NewIndexerService(mockStorageRepo, mockMessagingRepo, logger)
+
+	tests := []struct {
+		name        string
+		transaction *contracts.LFXTransaction
+		body        *contracts.TransactionBody
+		wantErr     bool
+		errContains string
+		validate    func(t *testing.T, body *contracts.TransactionBody)
+	}{
+		{
+			name: "with indexing_config - bypass enrichers",
+			transaction: &contracts.LFXTransaction{
+				Action:     constants.ActionCreated,
+				ObjectType: "project",
+				Data: map[string]any{
+					"id":          "proj-123",
+					"name":        "Test Project",
+					"description": "A test project",
+				},
+				IndexingConfig: &contracts.IndexingConfig{
+					ObjectID:             "proj-123",
+					Public:               func() *bool { b := true; return &b }(),
+					AccessCheckObject:    "project:proj-123",
+					AccessCheckRelation:  "viewer",
+					HistoryCheckObject:   "project:proj-123",
+					HistoryCheckRelation: "historian",
+					SortName:             "test project",
+					NameAndAliases:       []string{"Test Project", "TP"},
+					ParentRefs:           []string{"org:org-456"},
+					Fulltext:             "Test Project description",
+				},
+				Timestamp: time.Now(),
+			},
+			body:    &contracts.TransactionBody{},
+			wantErr: false,
+			validate: func(t *testing.T, body *contracts.TransactionBody) {
+				// Verify the body was populated from config
+				assert.Equal(t, "project", body.ObjectType)
+				assert.Equal(t, "proj-123", body.ObjectID)
+				assert.Equal(t, "project:proj-123", body.ObjectRef)
+				assert.True(t, body.Public)
+				assert.Equal(t, "project:proj-123#viewer", body.AccessCheckQuery)
+				assert.Equal(t, "project:proj-123#historian", body.HistoryCheckQuery)
+				assert.Equal(t, "test project", body.SortName)
+				assert.Equal(t, []string{"Test Project", "TP"}, body.NameAndAliases)
+				assert.Equal(t, []string{"org:org-456"}, body.ParentRefs)
+				assert.Equal(t, "Test Project description", body.Fulltext)
+			},
+		},
+		{
+			name: "without indexing_config - use enricher registry",
+			transaction: &contracts.LFXTransaction{
+				Action:     constants.ActionCreated,
+				ObjectType: constants.ObjectTypeProject,
+				Data: map[string]any{
+					"uid":    "proj-456",
+					"name":   "Test Project via Enricher",
+					"public": true, // Required by project enricher
+				},
+				ParsedData: map[string]any{
+					"uid":    "proj-456",
+					"name":   "Test Project via Enricher",
+					"public": true, // Required by project enricher
+				},
+				IndexingConfig: nil, // No config, should use enricher
+				Timestamp:      time.Now(),
+			},
+			body: &contracts.TransactionBody{
+				ObjectType: constants.ObjectTypeProject, // Pre-populated by GenerateTransactionBody
+			},
+			wantErr: false,
+			validate: func(t *testing.T, body *contracts.TransactionBody) {
+				// Verify the body was populated via enricher
+				assert.Equal(t, constants.ObjectTypeProject, body.ObjectType)
+				assert.Equal(t, "proj-456", body.ObjectID)
+				// Note: ObjectRef is set by GenerateTransactionBody after enrichTransactionData returns
+				assert.True(t, body.Public)
+				// Enricher should have set these
+				assert.NotEmpty(t, body.AccessCheckQuery)
+				assert.NotEmpty(t, body.HistoryCheckQuery)
+			},
+		},
+		{
+			name: "with indexing_config but invalid data type",
+			transaction: &contracts.LFXTransaction{
+				Action:     constants.ActionCreated,
+				ObjectType: "project",
+				Data:       "invalid-data-type", // Not a map
+				IndexingConfig: &contracts.IndexingConfig{
+					ObjectID:             "proj-789",
+					AccessCheckObject:    "project:proj-789",
+					AccessCheckRelation:  "viewer",
+					HistoryCheckObject:   "project:proj-789",
+					HistoryCheckRelation: "historian",
+				},
+				Timestamp: time.Now(),
+			},
+			body:        &contracts.TransactionBody{},
+			wantErr:     true,
+			errContains: "data is not a map[string]any",
+		},
+		{
+			name: "without indexing_config and invalid object type",
+			transaction: &contracts.LFXTransaction{
+				Action:         constants.ActionCreated,
+				ObjectType:     "invalid-object-type",
+				Data:           map[string]any{"id": "test-123"},
+				IndexingConfig: nil,
+				Timestamp:      time.Now(),
+			},
+			body:        &contracts.TransactionBody{},
+			wantErr:     true,
+			errContains: "no enricher found for object type",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := service.enrichTransactionData(tt.body, tt.transaction)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+			} else {
+				assert.NoError(t, err)
+				if tt.validate != nil {
+					tt.validate(t, tt.body)
+				}
+			}
+		})
+	}
+}

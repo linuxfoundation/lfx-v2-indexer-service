@@ -31,18 +31,26 @@ func NewIndexingMessageHandler(messageProcessor *application.MessageProcessor) *
 
 // Handle processes indexing messages (legacy interface for backwards compatibility)
 func (h *IndexingMessageHandler) Handle(ctx context.Context, data []byte, subject string) error {
-	// Determine message version and delegate to appropriate processor method
+	// Check for resource subject first (most specific)
+	if subject == constants.ResourceIndexSubject {
+		return h.messageProcessor.ProcessResourceIndexingMessage(ctx, data, subject)
+	}
+	// Then check for V1 messages
 	if strings.HasPrefix(subject, constants.FromV1Prefix) {
 		return h.messageProcessor.ProcessV1IndexingMessage(ctx, data, subject)
 	}
+	// Default to V2 message processing
 	return h.messageProcessor.ProcessIndexingMessage(ctx, data, subject)
 }
 
 // HandleWithReply processes indexing messages with NATS reply support
 func (h *IndexingMessageHandler) HandleWithReply(ctx context.Context, data []byte, subject string, reply func([]byte) error) error {
-	// Determine message version and process accordingly
+	// Determine message type and process accordingly
 	var err error
-	if strings.HasPrefix(subject, constants.FromV1Prefix) {
+	// Check for resource subject first (most specific)
+	if subject == constants.ResourceIndexSubject {
+		err = h.messageProcessor.ProcessResourceIndexingMessage(ctx, data, subject)
+	} else if strings.HasPrefix(subject, constants.FromV1Prefix) {
 		// Process V1 message
 		err = h.messageProcessor.ProcessV1IndexingMessage(ctx, data, subject)
 	} else {

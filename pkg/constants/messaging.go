@@ -15,13 +15,14 @@ const (
 
 // NATS subjects (professional expansion)
 const (
-	ProjectSubject    = IndexPrefix + "project"  // V2 project messages
-	V1ProjectSubject  = FromV1Prefix + "project" // V1 project messages
-	MeetingSubject    = IndexPrefix + "meeting"  // V2 meeting messages
-	SubjectIndexing   = IndexPrefix + "index"    // V2 indexing messages
-	SubjectV1Indexing = FromV1Prefix + "index"   // V1 indexing messages
-	AllSubjects       = IndexPrefix + ">"        // All V2 subjects
-	AllV1Subjects     = FromV1Prefix + ">"       // All V1 subjects
+	ResourceIndexSubject = IndexPrefix + "resource" // V2 resource indexing messages - generic
+	ProjectSubject       = IndexPrefix + "project"  // V2 project messages
+	V1ProjectSubject     = FromV1Prefix + "project" // V1 project messages
+	MeetingSubject       = IndexPrefix + "meeting"  // V2 meeting messages
+	SubjectIndexing      = IndexPrefix + "index"    // V2 indexing messages
+	SubjectV1Indexing    = FromV1Prefix + "index"   // V1 indexing messages
+	AllSubjects          = IndexPrefix + ">"        // All V2 subjects
+	AllV1Subjects        = FromV1Prefix + ">"       // All V1 subjects
 )
 
 // Transaction actions (centralized from scattered strings)
