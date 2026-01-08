@@ -61,7 +61,7 @@ func (e *CommitteeMemberEnricher) setAccessControl(body *contracts.TransactionBo
 	if accessCheckRelation, ok := data["accessCheckRelation"].(string); ok {
 		accessRelation = accessCheckRelation
 	} else if _, exists := data["accessCheckRelation"]; !exists {
-		accessRelation = "viewer"
+		accessRelation = "basic_profile_viewer"
 	}
 
 	// History check object
