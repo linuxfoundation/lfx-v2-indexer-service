@@ -1,0 +1,13 @@
+# Copyright The Linux Foundation and each contributor to LFX.
+# SPDX-License-Identifier: MIT
+{{- if .Values.opensearch.indexingJob.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-opensearch-index-config
+  namespace: {{ .Release.Namespace }}
+data:
+  resources-index.json: |
+    {{ .Files.Get "files/opensearch-resources-index.json" | nindent 4 }}
+{{- end }}
