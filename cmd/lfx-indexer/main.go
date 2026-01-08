@@ -14,6 +14,7 @@ import (
 
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/container"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/utils"
 )
 
 func main() {
@@ -25,6 +26,20 @@ func main() {
 
 	// Handle early exits (help, config-check)
 	handleEarlyExits(flags, logger)
+
+	// Set up OpenTelemetry SDK.
+	ctx := context.Background()
+	otelConfig := utils.OTelConfigFromEnv()
+	otelShutdown, err := utils.SetupOTelSDKWithConfig(ctx, otelConfig)
+	if err != nil {
+		logger.Error("error setting up OpenTelemetry SDK", "error", err)
+		os.Exit(1)
+	}
+	defer func() {
+		if shutdownErr := otelShutdown(context.Background()); shutdownErr != nil {
+			logger.Error("error shutting down OpenTelemetry SDK", "error", shutdownErr)
+		}
+	}()
 
 	// Log configuration with sources for transparency
 	logger.Info("Configuration loaded",

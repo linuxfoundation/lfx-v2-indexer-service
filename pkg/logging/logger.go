@@ -11,6 +11,8 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+
+	slogotel "github.com/remychantenay/slog-otel"
 )
 
 type contextKey string
@@ -53,7 +55,10 @@ func NewLogger(debug ...bool) *slog.Logger {
 		handler = slog.NewTextHandler(os.Stdout, opts)
 	}
 
-	logger := slog.New(handler)
+	// Wrap with slog-otel handler to add trace_id and span_id from context
+	otelHandler := slogotel.OtelHandler{Next: handler}
+
+	logger := slog.New(otelHandler)
 	slog.SetDefault(logger) // Set as default for any slog.Default() calls
 	return logger
 }
