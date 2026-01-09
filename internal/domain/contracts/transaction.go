@@ -7,6 +7,9 @@ package contracts
 import (
 	"fmt"
 	"time"
+
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/types"
 )
 
 // TransactionBody represents the OpenSearch document structure
@@ -47,7 +50,7 @@ type TransactionBody struct {
 // LFXTransaction represents the input transaction data
 type LFXTransaction struct {
 	// Action is expected to be one of "create", "update", or "delete".
-	Action string `json:"action"`
+	Action constants.MessageAction `json:"action"`
 	// Headers (at this time) is used to pass the authenticated-principal HTTP
 	// headers from the originating request. These are passed as part of the NATS
 	// data payload, rather than using native NATS headers on the message.
@@ -84,6 +87,11 @@ type LFXTransaction struct {
 	// Enhanced fields for improved validation and processing
 	IsV1             bool        `json:"-"`
 	ParsedPrincipals []Principal `json:"-"`
+
+	// IndexingConfig contains the indexing configuration for the resource,
+	// as specified by the client. They can specify all the searchability fields
+	// such as name_and_aliases, parent_refs, tags, etc.
+	IndexingConfig *types.IndexingConfig `json:"indexing_config,omitempty"`
 }
 
 // =================
