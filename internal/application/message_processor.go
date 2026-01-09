@@ -107,57 +107,6 @@ func (mp *MessageProcessor) ProcessIndexingMessage(ctx context.Context, data []b
 	return nil
 }
 
-// ProcessResourceIndexingMessage handles the complete resource indexing message workflow
-func (mp *MessageProcessor) ProcessResourceIndexingMessage(ctx context.Context, data []byte, subject string) error {
-	logger := logging.FromContext(ctx, mp.logger)
-	messageID := mp.generateMessageID()
-
-	logger.Info("Processing resource indexing message",
-		"message_id", messageID,
-		"subject", subject,
-		"message_type", "Resource")
-
-	// Create resource transaction from message data
-	transaction, err := mp.createResourceTransaction(ctx, data, subject)
-	if err != nil {
-		logging.LogError(logger, constants.LogFailedCreateResourceTransaction, err,
-			"message_id", messageID,
-			"subject", subject)
-		return fmt.Errorf("%s: %w", constants.ErrCreateResourceTransaction, err)
-	}
-
-	// Process the resource transaction (bypasses enrichers, uses pre-built body)
-	result, err := mp.indexerService.ProcessTransaction(ctx, transaction, mp.index)
-	if err != nil {
-		logging.LogError(logger, "Failed to process resource transaction", err,
-			"message_id", messageID,
-			"action", transaction.Action,
-			"object_type", transaction.ObjectType,
-			"subject", subject)
-		return fmt.Errorf("failed to process resource transaction: %w", err)
-	}
-
-	// Trigger cleanup check for the processed object
-	if result.Success && result.DocumentID != "" {
-		mp.cleanupRepository.CheckItem(result.DocumentID)
-	} else {
-		logger.Warn("Cleanup check skipped - processing failed or no document ID",
-			"message_id", messageID,
-			"result_success", result.Success,
-			"document_id", result.DocumentID)
-	}
-
-	logger.Info("Resource indexing message processed successfully",
-		"message_id", messageID,
-		"action", transaction.Action,
-		"object_type", transaction.ObjectType,
-		"document_id", result.DocumentID,
-		"subject", subject,
-		"index_success", result.IndexSuccess)
-
-	return nil
-}
-
 // ProcessV1IndexingMessage handles the complete V1 indexing message workflow
 func (mp *MessageProcessor) ProcessV1IndexingMessage(ctx context.Context, data []byte, subject string) error {
 	logger := logging.FromContext(ctx, mp.logger)
@@ -284,45 +233,6 @@ func (mp *MessageProcessor) createV1Transaction(ctx context.Context, data []byte
 	return transaction, nil
 }
 
-// createResourceTransaction creates an LFXTransaction from resource indexing message data with indexing_config
-func (mp *MessageProcessor) createResourceTransaction(ctx context.Context, data []byte, subject string) (*contracts.LFXTransaction, error) {
-	logger := logging.FromContext(ctx, mp.logger)
-
-	// Parse message data
-	var messageData map[string]any
-	if err := json.Unmarshal(data, &messageData); err != nil {
-		logger.Error("Failed to unmarshal resource message data",
-			"subject", subject,
-			"error", err.Error())
-		return nil, fmt.Errorf("failed to unmarshal resource message data: %w", err)
-	}
-
-	// Extract object type from message payload (not from subject)
-	objectType, ok := messageData["object_type"].(string)
-	if !ok || objectType == "" {
-		logger.Error("Missing or invalid object_type in resource message",
-			"subject", subject)
-		return nil, fmt.Errorf("missing or invalid object_type in resource message payload")
-	}
-
-	// Use service method for transaction creation
-	transaction, err := mp.indexerService.CreateTransactionFromMessage(messageData, objectType, false)
-	if err != nil {
-		logger.Error("Failed to create V2 transaction via service",
-			"subject", subject,
-			"object_type", objectType,
-			"error", err.Error())
-		return nil, fmt.Errorf("%s: %w", constants.ErrCreateV2Transaction, err)
-	}
-
-	logger.Info("Resource transaction created successfully",
-		"subject", subject,
-		"object_type", objectType,
-		"action", transaction.Action)
-
-	return transaction, nil
-}
-
 // =================
 // SUBSCRIPTION METHODS (streamlined from MessageProcessor)
 // =================
@@ -419,10 +329,7 @@ func (h *indexingHandler) HandleWithReply(ctx context.Context, data []byte, subj
 	var err error
 	var messageType string
 
-	if subject == constants.ResourceIndexSubject {
-		messageType = "Resource"
-		err = h.useCase.ProcessResourceIndexingMessage(ctx, data, subject)
-	} else if strings.HasPrefix(subject, constants.FromV1Prefix) {
+	if strings.HasPrefix(subject, constants.FromV1Prefix) {
 		messageType = "V1"
 		err = h.useCase.ProcessV1IndexingMessage(ctx, data, subject)
 	} else {

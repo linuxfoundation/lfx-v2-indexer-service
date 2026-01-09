@@ -10,8 +10,8 @@ import "github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 // This struct ensures type safety when clients provide pre-computed enrichment values,
 // bypassing the server-side enricher system.
 //
-// Clients can include this in their message payloads on any NATS subject (e.g., lfx.index.project,
-// lfx.index.committee, lfx.index.resource) to provide indexing metadata and bypass enrichers.
+// Clients can include this in their message payloads on object-specific NATS subjects
+// (e.g., lfx.index.project, lfx.index.committee) to provide indexing metadata and bypass enrichers.
 type IndexingConfig struct {
 	// ObjectID is the unique identifier for the resource (required)
 	ObjectID string `json:"object_id"`
@@ -36,13 +36,12 @@ type IndexingConfig struct {
 // IndexerMessageEnvelope is the complete message format sent to NATS for indexing operations.
 //
 // This is the top-level structure that clients should use when publishing messages to the indexer service.
-// It works with both object-specific subjects (e.g., lfx.index.project) and the generic resource subject
-// (lfx.index.resource).
+// Messages should be published to object-specific subjects (e.g., lfx.index.project, lfx.index.committee).
 //
 // Example usage:
 //
 //	envelope := &types.IndexerMessageEnvelope{
-//		Action: types.ActionCreated,
+//		Action: constants.ActionCreated,
 //		Headers: map[string]string{
 //			"authorization": "Bearer <token>",
 //		},

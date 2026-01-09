@@ -39,7 +39,6 @@ type IndexerMessageEnvelope struct {
 Publish to NATS subjects:
 
 - **Object-specific**: `lfx.index.<object_type>` (e.g., `lfx.index.project`)
-- **Generic**: `lfx.index.resource` (requires `object_type` in config)
 
 ## Two Approaches to Indexing
 
@@ -298,34 +297,6 @@ These fields are **always set by the server** and should **not** be included in 
 ```
 
 Note: For delete operations, `indexing_config` is not needed. The server only requires the resource ID.
-
-### Example 5: Generic Resource Subject
-
-**NATS Subject:** `lfx.index.resource`
-
-When using the generic subject, you can index any object type:
-
-```json
-{
-  "action": "created",
-  "headers": {
-    "authorization": "Bearer eyJhbGc..."
-  },
-  "data": {
-    "id": "custom-123",
-    "name": "Custom Resource",
-    "type": "widget"
-  },
-  "indexing_config": {
-    "object_id": "custom-123",
-    "public": true,
-    "access_check_object": "widget:custom-123",
-    "access_check_relation": "viewer",
-    "history_check_object": "widget:custom-123",
-    "history_check_relation": "historian"
-  }
-}
-```
 
 ## Best Practices
 

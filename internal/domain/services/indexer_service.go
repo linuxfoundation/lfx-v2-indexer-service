@@ -147,8 +147,6 @@ func (s *IndexerService) isDeleteAction(transaction *contracts.LFXTransaction) b
 func (s *IndexerService) CreateTransactionFromMessage(messageData map[string]any, objectType string, isV1 bool) (*contracts.LFXTransaction, error) {
 	logger := s.logger
 
-	slog.Info("Message data", "message_data", messageData)
-
 	// Extract action as string first, then convert to MessageAction
 	actionStr, ok := messageData["action"].(string)
 	if !ok || actionStr == "" {
@@ -1335,8 +1333,6 @@ func (s *IndexerService) parseIndexingConfig(data map[string]any) (*types.Indexi
 		}
 		config.Tags = tags
 	}
-
-	slog.Info("Parsed indexing config", "config", config)
 
 	return config, nil
 }
