@@ -20,6 +20,7 @@ import (
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/enrichers"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/types"
 )
 
 // IndexerService handles transaction processing and health checking
@@ -146,14 +147,18 @@ func (s *IndexerService) isDeleteAction(transaction *contracts.LFXTransaction) b
 func (s *IndexerService) CreateTransactionFromMessage(messageData map[string]any, objectType string, isV1 bool) (*contracts.LFXTransaction, error) {
 	logger := s.logger
 
-	action, ok := messageData["action"].(string)
-	if !ok {
+	slog.Info("Message data", "message_data", messageData)
+
+	// Extract action as string first, then convert to MessageAction
+	actionStr, ok := messageData["action"].(string)
+	if !ok || actionStr == "" {
 		logging.LogError(logger, "Failed to create transaction: missing action",
 			fmt.Errorf("missing or invalid action in message data"),
 			"object_type", objectType,
 			"is_v1", isV1)
 		return nil, fmt.Errorf("missing or invalid action in message data")
 	}
+	action := constants.MessageAction(actionStr)
 
 	logger.Debug("Creating transaction from message",
 		"action", action,
@@ -481,7 +486,7 @@ func (s *IndexerService) validateV1Action(transaction *contracts.LFXTransaction,
 			"transaction_id", transactionID,
 			"validation_step", "action_check",
 			"action", transaction.Action,
-			"valid_actions", []string{constants.ActionCreate, constants.ActionUpdate, constants.ActionDelete})
+			"valid_actions", []constants.MessageAction{constants.ActionCreate, constants.ActionUpdate, constants.ActionDelete})
 		return err
 	}
 }
@@ -509,13 +514,13 @@ func (s *IndexerService) validateV2Action(transaction *contracts.LFXTransaction,
 			"transaction_id", transactionID,
 			"validation_step", "action_check",
 			"action", transaction.Action,
-			"valid_actions", []string{constants.ActionCreated, constants.ActionUpdated, constants.ActionDeleted})
+			"valid_actions", []constants.MessageAction{constants.ActionCreated, constants.ActionUpdated, constants.ActionDeleted})
 		return err
 	}
 }
 
 // GetCanonicalAction returns the canonical (past-tense) action for indexing
-func (s *IndexerService) GetCanonicalAction(transaction *contracts.LFXTransaction) string {
+func (s *IndexerService) GetCanonicalAction(transaction *contracts.LFXTransaction) constants.MessageAction {
 	switch transaction.Action {
 	case constants.ActionCreate, constants.ActionCreated:
 		return constants.ActionCreated
@@ -978,7 +983,7 @@ func (s *IndexerService) performHealthCheck(ctx context.Context) *HealthStatus {
 }
 
 // setPrincipalFields sets principal-related fields on the transaction body
-func (s *IndexerService) setPrincipalFields(body *contracts.TransactionBody, principals []contracts.Principal, action string) {
+func (s *IndexerService) setPrincipalFields(body *contracts.TransactionBody, principals []contracts.Principal, action constants.MessageAction) {
 	for _, principal := range principals {
 		principalRef := fmt.Sprintf("%s <%s>", principal.Principal, principal.Email)
 
@@ -1131,9 +1136,9 @@ func (s *IndexerService) enrichTransactionData(body *contracts.TransactionBody, 
 				"transaction_id", transactionID)
 			return fmt.Errorf("data is not a map[string]any")
 		}
-		newBody, err := s.buildResourceBodyFromConfig(transactionData, transaction.IndexingConfig, transaction.ObjectType)
+		newBody, err := s.buildTransactionBodyFromIndexingConfig(transactionData, transaction.IndexingConfig, transaction)
 		if err != nil {
-			logging.LogError(logger, "Failed to build resource body from config", err,
+			logging.LogError(logger, "Failed to build transaction body from indexing config", err,
 				"transaction_id", transactionID)
 			return err
 		}
@@ -1194,18 +1199,22 @@ func (s *IndexerService) ClearCache() {
 	s.lastHealth = nil
 }
 
-// buildResourceBodyFromConfig builds a TransactionBody from indexing_config for create/update actions
-func (s *IndexerService) buildResourceBodyFromConfig(
+// buildTransactionBodyFromIndexingConfig builds a TransactionBody from indexing_config for create/update actions
+func (s *IndexerService) buildTransactionBodyFromIndexingConfig(
 	data map[string]any,
-	config *contracts.IndexingConfig,
-	objectType string,
+	config *types.IndexingConfig,
+	transaction *contracts.LFXTransaction,
 ) (*contracts.TransactionBody, error) {
 	body := &contracts.TransactionBody{
-		ObjectType: objectType,
+		ObjectType: transaction.ObjectType,
 		Data:       data,
 		ObjectID:   config.ObjectID,
-		ObjectRef:  fmt.Sprintf("%s:%s", objectType, config.ObjectID),
+		ObjectRef:  fmt.Sprintf("%s:%s", transaction.ObjectType, config.ObjectID),
 	}
+
+	// Set latest flag (server-side field)
+	latest := true
+	body.Latest = &latest
 
 	// Set public flag if provided
 	if config.Public != nil {
@@ -1226,14 +1235,30 @@ func (s *IndexerService) buildResourceBodyFromConfig(
 	body.SortName = config.SortName
 	body.NameAndAliases = config.NameAndAliases
 	body.ParentRefs = config.ParentRefs
+	body.Tags = config.Tags
 	body.Fulltext = config.Fulltext
+
+	// Set timestamp and principal fields based on action (server-side fields)
+	canonicalAction := s.GetCanonicalAction(transaction)
+	switch canonicalAction {
+	case constants.ActionCreated:
+		body.CreatedAt = &transaction.Timestamp
+		body.UpdatedAt = body.CreatedAt // For search sorting
+		s.setPrincipalFields(body, transaction.ParsedPrincipals, constants.ActionCreated)
+	case constants.ActionUpdated:
+		body.UpdatedAt = &transaction.Timestamp
+		s.setPrincipalFields(body, transaction.ParsedPrincipals, constants.ActionUpdated)
+	case constants.ActionDeleted:
+		body.DeletedAt = &transaction.Timestamp
+		s.setPrincipalFields(body, transaction.ParsedPrincipals, constants.ActionDeleted)
+	}
 
 	return body, nil
 }
 
 // parseIndexingConfig parses a map[string]any into a strongly-typed IndexingConfig struct
-func (s *IndexerService) parseIndexingConfig(data map[string]any) (*contracts.IndexingConfig, error) {
-	config := &contracts.IndexingConfig{}
+func (s *IndexerService) parseIndexingConfig(data map[string]any) (*types.IndexingConfig, error) {
+	config := &types.IndexingConfig{}
 
 	// Parse required string fields
 	objectID, ok := data["object_id"].(string)
@@ -1300,6 +1325,18 @@ func (s *IndexerService) parseIndexingConfig(data map[string]any) (*contracts.In
 		}
 		config.ParentRefs = parentRefs
 	}
+
+	if tagsData, ok := data["tags"].([]interface{}); ok {
+		tags := make([]string, 0, len(tagsData))
+		for _, item := range tagsData {
+			if str, ok := item.(string); ok {
+				tags = append(tags, str)
+			}
+		}
+		config.Tags = tags
+	}
+
+	slog.Info("Parsed indexing config", "config", config)
 
 	return config, nil
 }

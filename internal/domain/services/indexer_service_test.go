@@ -12,6 +12,7 @@ import (
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/mocks"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/types"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -319,7 +320,7 @@ func TestIndexerService_parseIndexingConfig(t *testing.T) {
 		input       map[string]any
 		wantErr     bool
 		errContains string
-		validate    func(t *testing.T, config *contracts.IndexingConfig)
+		validate    func(t *testing.T, config *types.IndexingConfig)
 	}{
 		{
 			name: "valid complete config",
@@ -333,10 +334,11 @@ func TestIndexerService_parseIndexingConfig(t *testing.T) {
 				"sort_name":              "Test Project",
 				"name_and_aliases":       []interface{}{"Test Project", "TP"},
 				"parent_refs":            []interface{}{"org:org-456"},
+				"tags":                   []interface{}{"tag1", "tag2", "tag3"},
 				"fulltext":               "Test Project description",
 			},
 			wantErr: false,
-			validate: func(t *testing.T, config *contracts.IndexingConfig) {
+			validate: func(t *testing.T, config *types.IndexingConfig) {
 				assert.Equal(t, "proj-123", config.ObjectID)
 				assert.NotNil(t, config.Public)
 				assert.True(t, *config.Public)
@@ -347,6 +349,7 @@ func TestIndexerService_parseIndexingConfig(t *testing.T) {
 				assert.Equal(t, "Test Project", config.SortName)
 				assert.Equal(t, []string{"Test Project", "TP"}, config.NameAndAliases)
 				assert.Equal(t, []string{"org:org-456"}, config.ParentRefs)
+				assert.Equal(t, []string{"tag1", "tag2", "tag3"}, config.Tags)
 				assert.Equal(t, "Test Project description", config.Fulltext)
 			},
 		},
@@ -360,7 +363,7 @@ func TestIndexerService_parseIndexingConfig(t *testing.T) {
 				"history_check_relation": "historian",
 			},
 			wantErr: false,
-			validate: func(t *testing.T, config *contracts.IndexingConfig) {
+			validate: func(t *testing.T, config *types.IndexingConfig) {
 				assert.Equal(t, "proj-456", config.ObjectID)
 				assert.Nil(t, config.Public)
 				assert.Equal(t, "project:proj-456", config.AccessCheckObject)
@@ -475,7 +478,7 @@ func TestIndexerService_parseIndexingConfig(t *testing.T) {
 				"history_check_relation": "historian",
 			},
 			wantErr: false,
-			validate: func(t *testing.T, config *contracts.IndexingConfig) {
+			validate: func(t *testing.T, config *types.IndexingConfig) {
 				assert.NotNil(t, config.Public)
 				assert.False(t, *config.Public)
 			},
@@ -501,7 +504,7 @@ func TestIndexerService_parseIndexingConfig(t *testing.T) {
 	}
 }
 
-func TestIndexerService_buildResourceBodyFromConfig(t *testing.T) {
+func TestIndexerService_buildTransactionBodyFromIndexingConfig(t *testing.T) {
 	// Setup
 	mockStorageRepo := mocks.NewMockStorageRepository()
 	mockMessagingRepo := mocks.NewMockMessagingRepository()
@@ -509,20 +512,20 @@ func TestIndexerService_buildResourceBodyFromConfig(t *testing.T) {
 	service := NewIndexerService(mockStorageRepo, mockMessagingRepo, logger)
 
 	tests := []struct {
-		name       string
-		data       map[string]any
-		config     *contracts.IndexingConfig
-		objectType string
-		validate   func(t *testing.T, body *contracts.TransactionBody)
+		name        string
+		data        map[string]any
+		config      *types.IndexingConfig
+		transaction *contracts.LFXTransaction
+		validate    func(t *testing.T, body *contracts.TransactionBody)
 	}{
 		{
-			name: "complete config with all optional fields",
+			name: "complete config with all optional fields - created action",
 			data: map[string]any{
 				"id":          "proj-123",
 				"name":        "Test Project",
 				"description": "A test project",
 			},
-			config: &contracts.IndexingConfig{
+			config: &types.IndexingConfig{
 				ObjectID:             "proj-123",
 				Public:               func() *bool { b := true; return &b }(),
 				AccessCheckObject:    "project:proj-123",
@@ -532,9 +535,15 @@ func TestIndexerService_buildResourceBodyFromConfig(t *testing.T) {
 				SortName:             "test project",
 				NameAndAliases:       []string{"Test Project", "TP"},
 				ParentRefs:           []string{"org:org-456"},
+				Tags:                 []string{"tag1", "tag2"},
 				Fulltext:             "Test Project description",
 			},
-			objectType: "project",
+			transaction: &contracts.LFXTransaction{
+				Action:           constants.ActionCreated,
+				ObjectType:       "project",
+				Timestamp:        time.Now(),
+				ParsedPrincipals: []contracts.Principal{{Principal: "user:123", Email: "test@example.com"}},
+			},
 			validate: func(t *testing.T, body *contracts.TransactionBody) {
 				assert.Equal(t, "project", body.ObjectType)
 				assert.Equal(t, "proj-123", body.ObjectID)
@@ -549,24 +558,42 @@ func TestIndexerService_buildResourceBodyFromConfig(t *testing.T) {
 				assert.Equal(t, "test project", body.SortName)
 				assert.Equal(t, []string{"Test Project", "TP"}, body.NameAndAliases)
 				assert.Equal(t, []string{"org:org-456"}, body.ParentRefs)
+				assert.Equal(t, []string{"tag1", "tag2"}, body.Tags)
 				assert.Equal(t, "Test Project description", body.Fulltext)
 				assert.NotNil(t, body.Data)
 				assert.Equal(t, "proj-123", body.Data["id"])
+
+				// Verify server-side fields
+				assert.NotNil(t, body.Latest)
+				assert.True(t, *body.Latest)
+				assert.NotNil(t, body.CreatedAt)
+				assert.NotNil(t, body.UpdatedAt)
+				assert.Equal(t, body.CreatedAt, body.UpdatedAt) // For created actions
+				assert.Len(t, body.CreatedBy, 1)
+				assert.Contains(t, body.CreatedBy[0], "user:123")
+				assert.Contains(t, body.CreatedBy[0], "test@example.com")
+				assert.Equal(t, []string{"user:123"}, body.CreatedByPrincipals)
+				assert.Equal(t, []string{"test@example.com"}, body.CreatedByEmails)
 			},
 		},
 		{
-			name: "minimal config with only required fields",
+			name: "minimal config with only required fields - updated action",
 			data: map[string]any{
 				"id": "proj-456",
 			},
-			config: &contracts.IndexingConfig{
+			config: &types.IndexingConfig{
 				ObjectID:             "proj-456",
 				AccessCheckObject:    "project:proj-456",
 				AccessCheckRelation:  "viewer",
 				HistoryCheckObject:   "project:proj-456",
 				HistoryCheckRelation: "historian",
 			},
-			objectType: "project",
+			transaction: &contracts.LFXTransaction{
+				Action:           constants.ActionUpdated,
+				ObjectType:       "project",
+				Timestamp:        time.Now(),
+				ParsedPrincipals: []contracts.Principal{{Principal: "user:456", Email: "updater@example.com"}},
+			},
 			validate: func(t *testing.T, body *contracts.TransactionBody) {
 				assert.Equal(t, "project", body.ObjectType)
 				assert.Equal(t, "proj-456", body.ObjectID)
@@ -578,14 +605,24 @@ func TestIndexerService_buildResourceBodyFromConfig(t *testing.T) {
 				assert.Empty(t, body.NameAndAliases)
 				assert.Empty(t, body.ParentRefs)
 				assert.Empty(t, body.Fulltext)
+
+				// Verify server-side fields for update action
+				assert.NotNil(t, body.Latest)
+				assert.True(t, *body.Latest)
+				assert.NotNil(t, body.UpdatedAt)
+				assert.Nil(t, body.CreatedAt) // Should not be set for updates
+				assert.Len(t, body.UpdatedBy, 1)
+				assert.Contains(t, body.UpdatedBy[0], "user:456")
+				assert.Equal(t, []string{"user:456"}, body.UpdatedByPrincipals)
+				assert.Equal(t, []string{"updater@example.com"}, body.UpdatedByEmails)
 			},
 		},
 		{
-			name: "public flag set to false",
+			name: "public flag set to false - deleted action",
 			data: map[string]any{
 				"id": "proj-789",
 			},
-			config: &contracts.IndexingConfig{
+			config: &types.IndexingConfig{
 				ObjectID:             "proj-789",
 				Public:               func() *bool { b := false; return &b }(),
 				AccessCheckObject:    "project:proj-789",
@@ -593,9 +630,25 @@ func TestIndexerService_buildResourceBodyFromConfig(t *testing.T) {
 				HistoryCheckObject:   "project:proj-789",
 				HistoryCheckRelation: "historian",
 			},
-			objectType: "project",
+			transaction: &contracts.LFXTransaction{
+				Action:           constants.ActionDeleted,
+				ObjectType:       "project",
+				Timestamp:        time.Now(),
+				ParsedPrincipals: []contracts.Principal{{Principal: "user:789", Email: ""}},
+			},
 			validate: func(t *testing.T, body *contracts.TransactionBody) {
 				assert.False(t, body.Public)
+
+				// Verify server-side fields for delete action
+				assert.NotNil(t, body.Latest)
+				assert.True(t, *body.Latest)
+				assert.NotNil(t, body.DeletedAt)
+				assert.Nil(t, body.CreatedAt)
+				assert.Nil(t, body.UpdatedAt)
+				assert.Len(t, body.DeletedBy, 1)
+				assert.Contains(t, body.DeletedBy[0], "user:789")
+				assert.Equal(t, []string{"user:789"}, body.DeletedByPrincipals)
+				assert.Empty(t, body.DeletedByEmails) // No email in this test
 			},
 		},
 		{
@@ -603,14 +656,19 @@ func TestIndexerService_buildResourceBodyFromConfig(t *testing.T) {
 			data: map[string]any{
 				"id": "committee-123",
 			},
-			config: &contracts.IndexingConfig{
+			config: &types.IndexingConfig{
 				ObjectID:             "committee-123",
 				AccessCheckObject:    "committee:committee-123",
 				AccessCheckRelation:  "member",
 				HistoryCheckObject:   "committee:committee-123",
 				HistoryCheckRelation: "admin",
 			},
-			objectType: "committee",
+			transaction: &contracts.LFXTransaction{
+				Action:           constants.ActionCreated,
+				ObjectType:       "committee",
+				Timestamp:        time.Now(),
+				ParsedPrincipals: []contracts.Principal{},
+			},
 			validate: func(t *testing.T, body *contracts.TransactionBody) {
 				assert.Equal(t, "committee:committee-123#member", body.AccessCheckQuery)
 				assert.Equal(t, "committee:committee-123#admin", body.HistoryCheckQuery)
@@ -620,7 +678,7 @@ func TestIndexerService_buildResourceBodyFromConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			body, err := service.buildResourceBodyFromConfig(tt.data, tt.config, tt.objectType)
+			body, err := service.buildTransactionBodyFromIndexingConfig(tt.data, tt.config, tt.transaction)
 
 			assert.NoError(t, err)
 			assert.NotNil(t, body)
@@ -656,7 +714,7 @@ func TestIndexerService_enrichTransactionData(t *testing.T) {
 					"name":        "Test Project",
 					"description": "A test project",
 				},
-				IndexingConfig: &contracts.IndexingConfig{
+				IndexingConfig: &types.IndexingConfig{
 					ObjectID:             "proj-123",
 					Public:               func() *bool { b := true; return &b }(),
 					AccessCheckObject:    "project:proj-123",
@@ -666,6 +724,7 @@ func TestIndexerService_enrichTransactionData(t *testing.T) {
 					SortName:             "test project",
 					NameAndAliases:       []string{"Test Project", "TP"},
 					ParentRefs:           []string{"org:org-456"},
+					Tags:                 []string{"tag1", "tag2"},
 					Fulltext:             "Test Project description",
 				},
 				Timestamp: time.Now(),
@@ -683,6 +742,7 @@ func TestIndexerService_enrichTransactionData(t *testing.T) {
 				assert.Equal(t, "test project", body.SortName)
 				assert.Equal(t, []string{"Test Project", "TP"}, body.NameAndAliases)
 				assert.Equal(t, []string{"org:org-456"}, body.ParentRefs)
+				assert.Equal(t, []string{"tag1", "tag2"}, body.Tags)
 				assert.Equal(t, "Test Project description", body.Fulltext)
 			},
 		},
@@ -725,7 +785,7 @@ func TestIndexerService_enrichTransactionData(t *testing.T) {
 				Action:     constants.ActionCreated,
 				ObjectType: "project",
 				Data:       "invalid-data-type", // Not a map
-				IndexingConfig: &contracts.IndexingConfig{
+				IndexingConfig: &types.IndexingConfig{
 					ObjectID:             "proj-789",
 					AccessCheckObject:    "project:proj-789",
 					AccessCheckRelation:  "viewer",

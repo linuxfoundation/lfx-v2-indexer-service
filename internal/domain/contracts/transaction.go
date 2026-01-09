@@ -7,6 +7,9 @@ package contracts
 import (
 	"fmt"
 	"time"
+
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/types"
 )
 
 // TransactionBody represents the OpenSearch document structure
@@ -47,7 +50,7 @@ type TransactionBody struct {
 // LFXTransaction represents the input transaction data
 type LFXTransaction struct {
 	// Action is expected to be one of "create", "update", or "delete".
-	Action string `json:"action"`
+	Action constants.MessageAction `json:"action"`
 	// Headers (at this time) is used to pass the authenticated-principal HTTP
 	// headers from the originating request. These are passed as part of the NATS
 	// data payload, rather than using native NATS headers on the message.
@@ -88,35 +91,12 @@ type LFXTransaction struct {
 	// IndexingConfig contains the indexing configuration for the resource,
 	// as specified by the client. They can specify all the searchability fields
 	// such as name_and_aliases, parent_refs, tags, etc.
-	IndexingConfig *IndexingConfig `json:"indexing_config,omitempty"`
+	IndexingConfig *types.IndexingConfig `json:"indexing_config,omitempty"`
 }
 
 // =================
 // SUPPORTING TYPES
 // =================
-
-// IndexingConfig represents the strongly-typed indexing configuration for resource messages.
-// This struct ensures type safety when clients provide pre-computed enrichment values,
-// bypassing the server-side enricher system.
-type IndexingConfig struct {
-	// ObjectID is the unique identifier for the resource (required)
-	ObjectID string `json:"object_id"`
-
-	// Public indicates whether the resource is publicly accessible (optional)
-	Public *bool `json:"public,omitempty"`
-
-	// Fine-Grained Authorization (FGA) fields (required for access control)
-	AccessCheckObject   string `json:"access_check_object"`
-	AccessCheckRelation string `json:"access_check_relation"`
-	HistoryCheckObject  string `json:"history_check_object"`
-	HistoryCheckRelation string `json:"history_check_relation"`
-
-	// Search and discovery fields (optional)
-	SortName       string   `json:"sort_name,omitempty"`
-	NameAndAliases []string `json:"name_and_aliases,omitempty"`
-	ParentRefs     []string `json:"parent_refs,omitempty"`
-	Fulltext       string   `json:"fulltext,omitempty"`
-}
 
 // ContactBody represents contact information within a transaction
 type ContactBody struct {
