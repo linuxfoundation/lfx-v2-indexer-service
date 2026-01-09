@@ -4,7 +4,9 @@
 // Package types provides public types that can be used by external clients.
 package types
 
-import "github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
+import (
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
+)
 
 // IndexingConfig represents the strongly-typed indexing configuration for resource messages.
 // This struct ensures type safety when clients provide pre-computed enrichment values,
@@ -26,11 +28,21 @@ type IndexingConfig struct {
 	HistoryCheckRelation string `json:"history_check_relation"`
 
 	// Search and discovery fields (optional)
-	SortName       string   `json:"sort_name,omitempty"`
-	NameAndAliases []string `json:"name_and_aliases,omitempty"`
-	ParentRefs     []string `json:"parent_refs,omitempty"`
-	Tags           []string `json:"tags,omitempty"`
-	Fulltext       string   `json:"fulltext,omitempty"`
+	SortName       string        `json:"sort_name,omitempty"`
+	NameAndAliases []string      `json:"name_and_aliases,omitempty"`
+	ParentRefs     []string      `json:"parent_refs,omitempty"`
+	Tags           []string      `json:"tags,omitempty"`
+	Fulltext       string        `json:"fulltext,omitempty"`
+	Contacts       []ContactBody `json:"contacts,omitempty"`
+}
+
+// ContactBody represents contact information within a transaction
+type ContactBody struct {
+	LfxPrincipal string         `json:"lfx_principal,omitempty"`
+	Name         string         `json:"name,omitempty"`
+	Emails       []string       `json:"emails,omitempty"`
+	Bot          *bool          `json:"bot,omitempty"`
+	Profile      map[string]any `json:"profile,omitempty"`
 }
 
 // IndexerMessageEnvelope is the complete message format sent to NATS for indexing operations.
