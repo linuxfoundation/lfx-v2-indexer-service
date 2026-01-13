@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -180,7 +181,15 @@ func (s *IndexerService) CreateTransactionFromMessage(messageData map[string]any
 
 	// Parse indexing_config if present (for resource indexing)
 	if indexingConfigData, ok := messageData["indexing_config"].(map[string]any); ok {
-		indexingConfig, err := s.parseIndexingConfig(indexingConfigData)
+		// Get transaction data for template expansion
+		var transactionData map[string]any
+		if dataMap, ok := messageData["data"].(map[string]any); ok {
+			transactionData = dataMap
+		} else {
+			transactionData = make(map[string]any)
+		}
+
+		indexingConfig, err := s.parseIndexingConfig(indexingConfigData, transactionData)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse indexing_config: %w", err)
 		}
@@ -1203,6 +1212,8 @@ func (s *IndexerService) buildTransactionBodyFromIndexingConfig(
 	config *types.IndexingConfig,
 	transaction *contracts.LFXTransaction,
 ) (*contracts.TransactionBody, error) {
+	slog.Debug("Building transaction body from indexing config", "config", config)
+
 	body := &contracts.TransactionBody{
 		ObjectType: transaction.ObjectType,
 		Data:       data,
@@ -1251,11 +1262,141 @@ func (s *IndexerService) buildTransactionBodyFromIndexingConfig(
 		s.setPrincipalFields(body, transaction.ParsedPrincipals, constants.ActionDeleted)
 	}
 
+	slog.Debug("Built transaction body from indexing config", "body", body)
+
 	return body, nil
 }
 
+// expandTemplates recursively expands template variables in the format {{ field_name }}
+// with values from the provided data map. Supports nested field access (e.g., {{ parent.id }})
+// and preserves original data types.
+func expandTemplates(data map[string]any, value any) (any, error) {
+	switch v := value.(type) {
+	case string:
+		return expandTemplateString(data, v)
+	case []interface{}:
+		// Handle arrays - expand templates in each element
+		result := make([]interface{}, len(v))
+		for i, item := range v {
+			expanded, err := expandTemplates(data, item)
+			if err != nil {
+				return nil, err
+			}
+			result[i] = expanded
+		}
+		return result, nil
+	case map[string]interface{}:
+		// Handle nested objects - expand templates in each value
+		result := make(map[string]interface{}, len(v))
+		for key, val := range v {
+			expanded, err := expandTemplates(data, val)
+			if err != nil {
+				return nil, err
+			}
+			result[key] = expanded
+		}
+		return result, nil
+	default:
+		// Return non-string types as-is
+		return value, nil
+	}
+}
+
+// expandTemplateString expands template variables in a string
+func expandTemplateString(data map[string]any, template string) (any, error) {
+	// Check if this is an escaped template (e.g., \{{ field }})
+	if strings.Contains(template, "\\{{") {
+		// Remove escape characters
+		return strings.ReplaceAll(template, "\\{{", "{{"), nil
+	}
+
+	// Check if this is a simple template (entire string is a template)
+	// This allows us to preserve the original type
+	if strings.HasPrefix(template, "{{") && strings.HasSuffix(template, "}}") && strings.Count(template, "{{") == 1 {
+		fieldPath := strings.TrimSpace(template[2 : len(template)-2])
+		value, err := getNestedField(data, fieldPath)
+		if err != nil {
+			return nil, err
+		}
+		// Return the original type
+		return value, nil
+	}
+
+	// Handle templates embedded in strings (force string conversion)
+	result := template
+	templateRegex := regexp.MustCompile(`\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}`)
+	matches := templateRegex.FindAllStringSubmatch(template, -1)
+
+	for _, match := range matches {
+		fullMatch := match[0] // e.g., "{{ uid }}"
+		fieldPath := match[1] // e.g., "uid"
+
+		value, err := getNestedField(data, fieldPath)
+		if err != nil {
+			return nil, err
+		}
+
+		// Convert value to string for embedding
+		var strValue string
+		switch v := value.(type) {
+		case string:
+			strValue = v
+		case int, int64, int32, int16, int8:
+			strValue = fmt.Sprintf("%d", v)
+		case float64, float32:
+			strValue = fmt.Sprintf("%v", v)
+		case bool:
+			strValue = fmt.Sprintf("%t", v)
+		default:
+			strValue = fmt.Sprintf("%v", v)
+		}
+
+		result = strings.ReplaceAll(result, fullMatch, strValue)
+	}
+
+	return result, nil
+}
+
+// getNestedField retrieves a value from a nested map using dot notation
+// e.g., "parent.id" retrieves data["parent"]["id"]
+func getNestedField(data map[string]any, fieldPath string) (any, error) {
+	parts := strings.Split(fieldPath, ".")
+	var current any = data
+
+	for i, part := range parts {
+		currentMap, ok := current.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("template field path '%s' is invalid: '%s' is not an object", fieldPath, strings.Join(parts[:i], "."))
+		}
+
+		value, exists := currentMap[part]
+		if !exists {
+			return nil, fmt.Errorf("template field '%s' not found in data", fieldPath)
+		}
+
+		current = value
+	}
+
+	return current, nil
+}
+
 // parseIndexingConfig parses a map[string]any into a strongly-typed IndexingConfig struct
-func (s *IndexerService) parseIndexingConfig(data map[string]any) (*types.IndexingConfig, error) {
+// and expands any template variables using the provided transaction data.
+func (s *IndexerService) parseIndexingConfig(indexingConfigData map[string]any, transactionData map[string]any) (*types.IndexingConfig, error) {
+	logger := s.logger
+	logger.Debug("Parsing indexing config", "indexing_config", indexingConfigData)
+
+	// First, expand all templates in the indexing_config data
+	expandedData, err := expandTemplates(transactionData, indexingConfigData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to expand templates in indexing_config: %w", err)
+	}
+
+	// The expanded data should still be a map
+	data, ok := expandedData.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("indexing_config must be an object after template expansion")
+	}
 	config := &types.IndexingConfig{}
 
 	// Parse required string fields
@@ -1333,6 +1474,8 @@ func (s *IndexerService) parseIndexingConfig(data map[string]any) (*types.Indexi
 		}
 		config.Tags = tags
 	}
+
+	logger.Debug("Parsed indexing config", "config", config)
 
 	return config, nil
 }

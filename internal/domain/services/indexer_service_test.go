@@ -487,7 +487,275 @@ func TestIndexerService_parseIndexingConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config, err := service.parseIndexingConfig(tt.input)
+			// Pass empty transaction data for backward compatibility tests
+			config, err := service.parseIndexingConfig(tt.input, map[string]any{})
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+				assert.Nil(t, config)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, config)
+				if tt.validate != nil {
+					tt.validate(t, config)
+				}
+			}
+		})
+	}
+}
+
+func TestIndexerService_parseIndexingConfig_TemplateExpansion(t *testing.T) {
+	// Setup
+	mockStorageRepo := mocks.NewMockStorageRepository()
+	mockMessagingRepo := mocks.NewMockMessagingRepository()
+	logger, _ := logging.TestLogger(t)
+	service := NewIndexerService(mockStorageRepo, mockMessagingRepo, logger)
+
+	tests := []struct {
+		name            string
+		indexingConfig  map[string]any
+		transactionData map[string]any
+		wantErr         bool
+		errContains     string
+		validate        func(t *testing.T, config *types.IndexingConfig)
+	}{
+		{
+			name: "simple string template in object_id",
+			indexingConfig: map[string]any{
+				"object_id":              "{{ uid }}",
+				"access_check_object":    "project:proj-123",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:proj-123",
+				"history_check_relation": "historian",
+			},
+			transactionData: map[string]any{
+				"uid": "proj-123",
+			},
+			wantErr: false,
+			validate: func(t *testing.T, config *types.IndexingConfig) {
+				assert.Equal(t, "proj-123", config.ObjectID)
+			},
+		},
+		{
+			name: "template with prefix and suffix",
+			indexingConfig: map[string]any{
+				"object_id":              "proj-123",
+				"access_check_object":    "project:{{ uid }}",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:{{ uid }}",
+				"history_check_relation": "historian",
+			},
+			transactionData: map[string]any{
+				"uid": "proj-123",
+			},
+			wantErr: false,
+			validate: func(t *testing.T, config *types.IndexingConfig) {
+				assert.Equal(t, "project:proj-123", config.AccessCheckObject)
+				assert.Equal(t, "project:proj-123", config.HistoryCheckObject)
+			},
+		},
+		{
+			name: "nested field access with dot notation",
+			indexingConfig: map[string]any{
+				"object_id":              "{{ uid }}",
+				"access_check_object":    "project:{{ uid }}",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:{{ uid }}",
+				"history_check_relation": "historian",
+				"parent_refs":            []interface{}{"org:{{ parent.id }}"},
+			},
+			transactionData: map[string]any{
+				"uid": "proj-123",
+				"parent": map[string]any{
+					"id": "org-456",
+				},
+			},
+			wantErr: false,
+			validate: func(t *testing.T, config *types.IndexingConfig) {
+				assert.Equal(t, "proj-123", config.ObjectID)
+				assert.Equal(t, []string{"org:org-456"}, config.ParentRefs)
+			},
+		},
+		{
+			name: "multiple templates in array",
+			indexingConfig: map[string]any{
+				"object_id":              "{{ uid }}",
+				"access_check_object":    "project:{{ uid }}",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:{{ uid }}",
+				"history_check_relation": "historian",
+				"name_and_aliases":       []interface{}{"{{ name }}", "{{ short_name }}"},
+				"parent_refs":            []interface{}{"org:{{ parent_id }}", "project:{{ uid }}"},
+			},
+			transactionData: map[string]any{
+				"uid":        "proj-123",
+				"name":       "My Project",
+				"short_name": "MP",
+				"parent_id":  "org-456",
+			},
+			wantErr: false,
+			validate: func(t *testing.T, config *types.IndexingConfig) {
+				assert.Equal(t, []string{"My Project", "MP"}, config.NameAndAliases)
+				assert.Equal(t, []string{"org:org-456", "project:proj-123"}, config.ParentRefs)
+			},
+		},
+		{
+			name: "type preservation - integer",
+			indexingConfig: map[string]any{
+				"object_id":              "{{ uid }}",
+				"access_check_object":    "project:{{ uid }}",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:{{ uid }}",
+				"history_check_relation": "historian",
+				"sort_name":              "{{ name }}",
+			},
+			transactionData: map[string]any{
+				"uid":  "proj-123",
+				"name": "Test Project",
+			},
+			wantErr: false,
+			validate: func(t *testing.T, config *types.IndexingConfig) {
+				assert.Equal(t, "Test Project", config.SortName)
+			},
+		},
+		{
+			name: "escaped template should be literal",
+			indexingConfig: map[string]any{
+				"object_id":              "proj-123",
+				"access_check_object":    "project:proj-123",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:proj-123",
+				"history_check_relation": "historian",
+				"sort_name":              "\\{{ not_a_template }}",
+			},
+			transactionData: map[string]any{
+				"uid": "proj-123",
+			},
+			wantErr: false,
+			validate: func(t *testing.T, config *types.IndexingConfig) {
+				assert.Equal(t, "{{ not_a_template }}", config.SortName)
+			},
+		},
+		{
+			name: "missing template field should error",
+			indexingConfig: map[string]any{
+				"object_id":              "{{ missing_field }}",
+				"access_check_object":    "project:proj-123",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:proj-123",
+				"history_check_relation": "historian",
+			},
+			transactionData: map[string]any{
+				"uid": "proj-123",
+			},
+			wantErr:     true,
+			errContains: "template field 'missing_field' not found in data",
+		},
+		{
+			name: "invalid nested field path should error",
+			indexingConfig: map[string]any{
+				"object_id":              "{{ uid }}",
+				"access_check_object":    "project:{{ uid }}",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:{{ uid }}",
+				"history_check_relation": "historian",
+				"parent_refs":            []interface{}{"org:{{ parent.invalid.path }}"},
+			},
+			transactionData: map[string]any{
+				"uid":    "proj-123",
+				"parent": "not-an-object",
+			},
+			wantErr:     true,
+			errContains: "is not an object",
+		},
+		{
+			name: "mixed templates and literals in array",
+			indexingConfig: map[string]any{
+				"object_id":              "{{ uid }}",
+				"access_check_object":    "project:{{ uid }}",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:{{ uid }}",
+				"history_check_relation": "historian",
+				"tags":                   []interface{}{"static-tag", "{{ dynamic_tag }}", "another-static"},
+			},
+			transactionData: map[string]any{
+				"uid":         "proj-123",
+				"dynamic_tag": "generated",
+			},
+			wantErr: false,
+			validate: func(t *testing.T, config *types.IndexingConfig) {
+				assert.Equal(t, []string{"static-tag", "generated", "another-static"}, config.Tags)
+			},
+		},
+		{
+			name: "complex template with multiple fields",
+			indexingConfig: map[string]any{
+				"object_id":              "{{ uid }}",
+				"access_check_object":    "project:{{ uid }}",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:{{ uid }}",
+				"history_check_relation": "historian",
+				"fulltext":               "{{ name }} - {{ description }} - {{ status }}",
+			},
+			transactionData: map[string]any{
+				"uid":         "proj-123",
+				"name":        "My Project",
+				"description": "A great project",
+				"status":      "active",
+			},
+			wantErr: false,
+			validate: func(t *testing.T, config *types.IndexingConfig) {
+				assert.Equal(t, "My Project - A great project - active", config.Fulltext)
+			},
+		},
+		{
+			name: "deeply nested field access",
+			indexingConfig: map[string]any{
+				"object_id":              "{{ uid }}",
+				"access_check_object":    "project:{{ uid }}",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:{{ uid }}",
+				"history_check_relation": "historian",
+				"parent_refs":            []interface{}{"org:{{ metadata.organization.id }}"},
+			},
+			transactionData: map[string]any{
+				"uid": "proj-123",
+				"metadata": map[string]any{
+					"organization": map[string]any{
+						"id": "org-789",
+					},
+				},
+			},
+			wantErr: false,
+			validate: func(t *testing.T, config *types.IndexingConfig) {
+				assert.Equal(t, []string{"org:org-789"}, config.ParentRefs)
+			},
+		},
+		{
+			name: "template with whitespace",
+			indexingConfig: map[string]any{
+				"object_id":              "{{   uid   }}",
+				"access_check_object":    "project:{{uid}}",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:{{ uid}}",
+				"history_check_relation": "historian",
+			},
+			transactionData: map[string]any{
+				"uid": "proj-123",
+			},
+			wantErr: false,
+			validate: func(t *testing.T, config *types.IndexingConfig) {
+				assert.Equal(t, "proj-123", config.ObjectID)
+				assert.Equal(t, "project:proj-123", config.AccessCheckObject)
+				assert.Equal(t, "project:proj-123", config.HistoryCheckObject)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config, err := service.parseIndexingConfig(tt.indexingConfig, tt.transactionData)
 
 			if tt.wantErr {
 				assert.Error(t, err)
