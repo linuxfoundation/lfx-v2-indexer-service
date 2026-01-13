@@ -751,6 +751,84 @@ func TestIndexerService_parseIndexingConfig_TemplateExpansion(t *testing.T) {
 				assert.Equal(t, "project:proj-123", config.HistoryCheckObject)
 			},
 		},
+		{
+			name: "contacts field parsing",
+			indexingConfig: map[string]any{
+				"object_id":              "proj-123",
+				"access_check_object":    "project:proj-123",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:proj-123",
+				"history_check_relation": "historian",
+				"contacts": []interface{}{
+					map[string]interface{}{
+						"lfx_principal": "user-123",
+						"name":          "John Doe",
+						"emails":        []interface{}{"john@example.com", "jdoe@example.com"},
+						"bot":           false,
+						"profile": map[string]interface{}{
+							"title": "Developer",
+						},
+					},
+					map[string]interface{}{
+						"name":   "Jane Smith",
+						"emails": []interface{}{"jane@example.com"},
+					},
+				},
+			},
+			transactionData: map[string]any{},
+			wantErr:         false,
+			validate: func(t *testing.T, config *types.IndexingConfig) {
+				assert.Len(t, config.Contacts, 2)
+
+				// Validate first contact
+				contact1 := config.Contacts[0]
+				assert.Equal(t, "user-123", contact1.LfxPrincipal)
+				assert.Equal(t, "John Doe", contact1.Name)
+				assert.Equal(t, []string{"john@example.com", "jdoe@example.com"}, contact1.Emails)
+				assert.NotNil(t, contact1.Bot)
+				assert.False(t, *contact1.Bot)
+				assert.NotNil(t, contact1.Profile)
+				assert.Equal(t, "Developer", contact1.Profile["title"])
+
+				// Validate second contact
+				contact2 := config.Contacts[1]
+				assert.Equal(t, "", contact2.LfxPrincipal)
+				assert.Equal(t, "Jane Smith", contact2.Name)
+				assert.Equal(t, []string{"jane@example.com"}, contact2.Emails)
+				assert.Nil(t, contact2.Bot)
+			},
+		},
+		{
+			name: "contacts field with template expansion",
+			indexingConfig: map[string]any{
+				"object_id":              "proj-123",
+				"access_check_object":    "project:proj-123",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:proj-123",
+				"history_check_relation": "historian",
+				"contacts": []interface{}{
+					map[string]interface{}{
+						"lfx_principal": "{{ owner_id }}",
+						"name":          "{{ owner_name }}",
+						"emails":        []interface{}{"{{ owner_email }}"},
+					},
+				},
+			},
+			transactionData: map[string]any{
+				"owner_id":    "user-456",
+				"owner_name":  "Alice Johnson",
+				"owner_email": "alice@example.com",
+			},
+			wantErr: false,
+			validate: func(t *testing.T, config *types.IndexingConfig) {
+				assert.Len(t, config.Contacts, 1)
+
+				contact := config.Contacts[0]
+				assert.Equal(t, "user-456", contact.LfxPrincipal)
+				assert.Equal(t, "Alice Johnson", contact.Name)
+				assert.Equal(t, []string{"alice@example.com"}, contact.Emails)
+			},
+		},
 	}
 
 	for _, tt := range tests {

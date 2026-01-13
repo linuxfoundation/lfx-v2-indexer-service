@@ -1246,6 +1246,7 @@ func (s *IndexerService) buildTransactionBodyFromIndexingConfig(
 	body.ParentRefs = config.ParentRefs
 	body.Tags = config.Tags
 	body.Fulltext = config.Fulltext
+	body.Contacts = config.Contacts
 
 	// Set timestamp and principal fields based on action (server-side fields)
 	canonicalAction := s.GetCanonicalAction(transaction)
@@ -1473,6 +1474,41 @@ func (s *IndexerService) parseIndexingConfig(indexingConfigData map[string]any, 
 			}
 		}
 		config.Tags = tags
+	}
+
+	// Parse contacts array if present
+	if contactsData, ok := data["contacts"].([]interface{}); ok {
+		contacts := make([]types.ContactBody, 0, len(contactsData))
+		for _, item := range contactsData {
+			if contactMap, ok := item.(map[string]interface{}); ok {
+				contact := types.ContactBody{}
+
+				if lfxPrincipal, ok := contactMap["lfx_principal"].(string); ok {
+					contact.LfxPrincipal = lfxPrincipal
+				}
+				if name, ok := contactMap["name"].(string); ok {
+					contact.Name = name
+				}
+				if emailsData, ok := contactMap["emails"].([]interface{}); ok {
+					emails := make([]string, 0, len(emailsData))
+					for _, email := range emailsData {
+						if emailStr, ok := email.(string); ok {
+							emails = append(emails, emailStr)
+						}
+					}
+					contact.Emails = emails
+				}
+				if bot, ok := contactMap["bot"].(bool); ok {
+					contact.Bot = &bot
+				}
+				if profile, ok := contactMap["profile"].(map[string]interface{}); ok {
+					contact.Profile = profile
+				}
+
+				contacts = append(contacts, contact)
+			}
+		}
+		config.Contacts = contacts
 	}
 
 	logger.Debug("Parsed indexing config", "config", config)

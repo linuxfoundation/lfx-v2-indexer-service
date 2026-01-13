@@ -305,6 +305,65 @@ Templates use double curly braces: `{{ field_name }}`
 | `parent_refs` | array | References to parent resources | `["org:org-456"]` |
 | `tags` | array | Additional static tags for the document | `["featured", "active"]` |
 | `fulltext` | string | Full-text search content | `"searchable content"` |
+| `contacts` | array | Contact information for the resource (see Contact structure below) | See example below |
+
+#### Contact Structure
+
+Each contact in the `contacts` array supports the following fields:
+
+| Field | Type | Description | Example |
+|-------|------|-------------|---------|
+| `lfx_principal` | string | LFX principal ID for the contact | `"user:user-123"` |
+| `name` | string | Display name of the contact | `"John Doe"` |
+| `emails` | array | Email addresses for the contact | `["john@example.com"]` |
+| `bot` | boolean | Whether the contact is a bot account | `false` |
+| `profile` | object | Additional profile information | `{"title": "Developer"}` |
+
+**Example contacts array:**
+
+```json
+{
+  "contacts": [
+    {
+      "lfx_principal": "user:user-123",
+      "name": "John Doe",
+      "emails": ["john@example.com", "jdoe@example.com"],
+      "bot": false,
+      "profile": {
+        "title": "Project Lead",
+        "organization": "ACME Corp"
+      }
+    },
+    {
+      "name": "Jane Smith",
+      "emails": ["jane@example.com"]
+    }
+  ]
+}
+```
+
+**Note:** Contacts support template expansion, allowing you to reference fields from the `data` object:
+
+```json
+{
+  "data": {
+    "uid": "proj-123",
+    "owner_id": "user-456",
+    "owner_name": "Alice Johnson",
+    "owner_email": "alice@example.com"
+  },
+  "indexing_config": {
+    "object_id": "{{ uid }}",
+    "contacts": [
+      {
+        "lfx_principal": "{{ owner_id }}",
+        "name": "{{ owner_name }}",
+        "emails": ["{{ owner_email }}"]
+      }
+    ]
+  }
+}
+```
 
 ### Server-Side Fields (Automatically Set)
 
