@@ -442,8 +442,10 @@ JANITOR_ENABLED=true                         # Enable cleanup service (default: 
 
 The LFX V2 Indexer Service provides two approaches for indexing your resources:
 
-1. **Server-Side Enrichment** - Send your resource data and let the server handle indexing metadata
-2. **Client-Provided Configuration** - Provide complete indexing metadata via `indexing_config` for full control
+1. **Server-Side Enrichment** - Send your resource data and let the server handle indexing metadata (⚠️ **will be removed in future releases**)
+2. **Client-Provided Configuration** - Provide complete indexing metadata via `indexing_config` for full control (**✅ recommended**)
+
+**⚠️ Important: Use client-provided configuration (option 2).** Server-side enrichers will be removed once all clients migrate to providing their own `indexing_config`.
 
 For detailed guidance on integrating with the indexer service, see the **[Client Guide](docs/client-guide.md)**:
 

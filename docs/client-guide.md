@@ -6,19 +6,15 @@ This guide explains how to send messages to the LFX Indexer Service to index you
 
 - [Overview](#overview)
 - [Message Format](#message-format)
-- [Two Approaches to Indexing](#two-approaches-to-indexing)
-  - [Approach 1: Server-Side Enrichment](#approach-1-server-side-enrichment-default)
-  - [Approach 2: Client-Provided Configuration](#approach-2-client-provided-configuration-indexing_config)
+- [Using indexing_config](#using-indexing_config)
+- [Template Support](#template-support-in-indexing_config)
 - [Field Reference](#field-reference)
 - [Examples](#examples)
 - [Best Practices](#best-practices)
 
 ## Overview
 
-The LFX Indexer Service processes messages from NATS and indexes resources into OpenSearch for search and discovery. There are two ways to index your resources:
-
-1. **Server-Side Enrichment**: Send minimal data and let the server compute indexing metadata
-2. **Client-Provided Configuration**: Send complete indexing metadata via `indexing_config` to bypass enrichers
+The LFX Indexer Service processes messages from NATS and indexes resources into OpenSearch for search and discovery. Clients should provide complete indexing metadata via the `indexing_config` field to ensure proper access control and search behavior.
 
 ## Message Format
 
@@ -40,66 +36,16 @@ Publish to NATS subjects:
 
 - **Object-specific**: `lfx.index.<object_type>` (e.g., `lfx.index.project`)
 
-## Two Approaches to Indexing
+## Using indexing_config
 
-### Approach 1: Server-Side Enrichment (Default)
+All messages should include the `indexing_config` field to provide complete indexing metadata. This gives you full control over how your resources are indexed and ensures proper access control.
 
-Send your resource data and let the server handle indexing metadata via registered enrichers.
+**Benefits:**
 
-**Pros:**
-
-- Simpler message payloads
-- Server handles access control logic
-- Centralized enrichment rules
-
-**Cons:**
-
-- Requires server-side enricher implementation for your object type
-- Less control over indexing behavior
-- Potential performance overhead from server-side computation
-
-**Example:**
-
-```json
-{
-  "action": "created",
-  "headers": {
-    "authorization": "Bearer <token>"
-  },
-  "data": {
-    "uid": "proj-123",
-    "name": "My Project",
-    "slug": "my-project",
-    "public": true,
-    "description": "A sample project"
-  },
-  "tags": ["uid", "slug"]
-}
-```
-
-The server will:
-
-- Use the `project` enricher to compute access control fields
-- Extract `object_id` from `uid`
-- Build FGA (Fine-Grained Authorization) queries
-- Set searchability fields
-
-### Approach 2: Client-Provided Configuration (`indexing_config`)
-
-Provide complete indexing metadata to bypass server-side enrichers and have full control.
-
-**Pros:**
-
-- No server-side enricher required
 - Full control over indexing behavior
-- Better performance (no server-side computation)
+- Explicit access control configuration
 - Works for any object type
-
-**Cons:**
-
-- Larger message payloads
-- Client must compute access control metadata
-- Client responsible for correctness
+- Consistent indexing across all clients
 
 **Example:**
 
@@ -134,7 +80,7 @@ Provide complete indexing metadata to bypass server-side enrichers and have full
 
 The server will:
 
-- Use the provided config directly (no enricher called)
+- Use the provided config directly
 - Set server-side fields: `latest`, timestamps, and principals
 - Index the document with your exact specifications
 
@@ -387,28 +333,7 @@ These fields are **always set by the server** and should **not** be included in 
 
 ## Examples
 
-### Example 1: Create with Server-Side Enrichment
-
-**NATS Subject:** `lfx.index.project`
-
-```json
-{
-  "action": "created",
-  "headers": {
-    "authorization": "Bearer eyJhbGc..."
-  },
-  "data": {
-    "uid": "proj-123",
-    "name": "My Project",
-    "slug": "my-project",
-    "public": true,
-    "parent_id": "org-456"
-  },
-  "tags": ["uid", "slug"]
-}
-```
-
-### Example 2: Create with Client-Provided Configuration
+### Example 1: Create Resource
 
 **NATS Subject:** `lfx.index.project`
 
@@ -441,7 +366,7 @@ These fields are **always set by the server** and should **not** be included in 
 }
 ```
 
-### Example 3: Update with Configuration
+### Example 2: Update Resource
 
 **NATS Subject:** `lfx.index.project`
 
@@ -469,7 +394,7 @@ These fields are **always set by the server** and should **not** be included in 
 }
 ```
 
-### Example 4: Delete Operation
+### Example 3: Delete Resource
 
 **NATS Subject:** `lfx.index.project`
 
@@ -487,22 +412,7 @@ Note: For delete operations, `indexing_config` is not needed. The server only re
 
 ## Best Practices
 
-### When to Use `indexing_config`
-
-✅ **Use `indexing_config` when:**
-
-- Your object type doesn't have a server-side enricher
-- You need precise control over access control queries
-- You want to optimize performance by pre-computing metadata
-- You're building a new service and want to control indexing behavior
-
-❌ **Avoid `indexing_config` when:**
-
-- A server-side enricher already exists and works well
-- You want centralized access control logic
-- You prefer simpler message payloads
-
-### Access Control Best Practices
+### Access Control
 
 1. **FGA Pattern**: Use the pattern `<type>:<id>#<relation>` for FGA queries
    - Example: `project:proj-123#viewer`
