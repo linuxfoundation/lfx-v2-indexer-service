@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +21,7 @@ import (
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/enrichers"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/types"
 )
 
 // IndexerService handles transaction processing and health checking
@@ -146,14 +148,16 @@ func (s *IndexerService) isDeleteAction(transaction *contracts.LFXTransaction) b
 func (s *IndexerService) CreateTransactionFromMessage(messageData map[string]any, objectType string, isV1 bool) (*contracts.LFXTransaction, error) {
 	logger := s.logger
 
-	action, ok := messageData["action"].(string)
-	if !ok {
+	// Extract action as string first, then convert to MessageAction
+	actionStr, ok := messageData["action"].(string)
+	if !ok || actionStr == "" {
 		logging.LogError(logger, "Failed to create transaction: missing action",
 			fmt.Errorf("missing or invalid action in message data"),
 			"object_type", objectType,
 			"is_v1", isV1)
 		return nil, fmt.Errorf("missing or invalid action in message data")
 	}
+	action := constants.MessageAction(actionStr)
 
 	logger.Debug("Creating transaction from message",
 		"action", action,
@@ -173,6 +177,23 @@ func (s *IndexerService) CreateTransactionFromMessage(messageData map[string]any
 	// Set V1 data if this is a V1 transaction
 	if isV1 {
 		s.setV1Data(transaction, messageData)
+	}
+
+	// Parse indexing_config if present (for resource indexing)
+	if indexingConfigData, ok := messageData["indexing_config"].(map[string]any); ok {
+		// Get transaction data for template expansion
+		var transactionData map[string]any
+		if dataMap, ok := messageData["data"].(map[string]any); ok {
+			transactionData = dataMap
+		} else {
+			transactionData = make(map[string]any)
+		}
+
+		indexingConfig, err := s.parseIndexingConfig(indexingConfigData, transactionData)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse indexing_config: %w", err)
+		}
+		transaction.IndexingConfig = indexingConfig
 	}
 
 	// Convert headers
@@ -472,7 +493,7 @@ func (s *IndexerService) validateV1Action(transaction *contracts.LFXTransaction,
 			"transaction_id", transactionID,
 			"validation_step", "action_check",
 			"action", transaction.Action,
-			"valid_actions", []string{constants.ActionCreate, constants.ActionUpdate, constants.ActionDelete})
+			"valid_actions", []constants.MessageAction{constants.ActionCreate, constants.ActionUpdate, constants.ActionDelete})
 		return err
 	}
 }
@@ -500,13 +521,13 @@ func (s *IndexerService) validateV2Action(transaction *contracts.LFXTransaction,
 			"transaction_id", transactionID,
 			"validation_step", "action_check",
 			"action", transaction.Action,
-			"valid_actions", []string{constants.ActionCreated, constants.ActionUpdated, constants.ActionDeleted})
+			"valid_actions", []constants.MessageAction{constants.ActionCreated, constants.ActionUpdated, constants.ActionDeleted})
 		return err
 	}
 }
 
 // GetCanonicalAction returns the canonical (past-tense) action for indexing
-func (s *IndexerService) GetCanonicalAction(transaction *contracts.LFXTransaction) string {
+func (s *IndexerService) GetCanonicalAction(transaction *contracts.LFXTransaction) constants.MessageAction {
 	switch transaction.Action {
 	case constants.ActionCreate, constants.ActionCreated:
 		return constants.ActionCreated
@@ -560,14 +581,16 @@ func (s *IndexerService) EnrichTransaction(ctx context.Context, transaction *con
 	}
 	logger.Debug("Action validation completed", "transaction_id", transactionID)
 
-	// Validate object type using enricher registry
-	if err := s.ValidateObjectType(transaction); err != nil {
-		logging.LogError(logger, "Transaction enrichment failed: object type validation", err,
-			"transaction_id", transactionID,
-			"step", "validate_object_type")
-		return fmt.Errorf("%s: %w", constants.ErrInvalidObjectType, err)
+	if transaction.IndexingConfig == nil {
+		// Validate object type using enricher registry
+		if err := s.ValidateObjectType(transaction); err != nil {
+			logging.LogError(logger, "Transaction enrichment failed: object type validation", err,
+				"transaction_id", transactionID,
+				"step", "validate_object_type")
+			return fmt.Errorf("%s: %w", constants.ErrInvalidObjectType, err)
+		}
+		logger.Debug("Object type validation completed", "transaction_id", transactionID)
 	}
-	logger.Debug("Object type validation completed", "transaction_id", transactionID)
 
 	// Validate transaction data
 	if err := s.ValidateTransactionData(transaction); err != nil {
@@ -967,7 +990,7 @@ func (s *IndexerService) performHealthCheck(ctx context.Context) *HealthStatus {
 }
 
 // setPrincipalFields sets principal-related fields on the transaction body
-func (s *IndexerService) setPrincipalFields(body *contracts.TransactionBody, principals []contracts.Principal, action string) {
+func (s *IndexerService) setPrincipalFields(body *contracts.TransactionBody, principals []contracts.Principal, action constants.MessageAction) {
 	for _, principal := range principals {
 		principalRef := fmt.Sprintf("%s <%s>", principal.Principal, principal.Email)
 
@@ -1112,29 +1135,46 @@ func (s *IndexerService) enrichTransactionData(body *contracts.TransactionBody, 
 		"object_type", transaction.ObjectType,
 		"action", transaction.Action)
 
-	// Use the registry to find the appropriate enricher for the object type
-	enricher, exists := s.enricherRegistry.GetEnricher(transaction.ObjectType)
-	if !exists {
-		err := fmt.Errorf("no enricher found for object type: %s", transaction.ObjectType)
-		logging.LogError(logger, "Enrichment failed: no enricher found", err,
+	if transaction.IndexingConfig != nil {
+		// Use the indexing config instead of the data enrichers if it is present
+		transactionData, ok := transaction.Data.(map[string]any)
+		if !ok {
+			logging.LogError(logger, "Failed to extract data from transaction", fmt.Errorf("data is not a map[string]any"),
+				"transaction_id", transactionID)
+			return fmt.Errorf("data is not a map[string]any")
+		}
+		newBody, err := s.buildTransactionBodyFromIndexingConfig(transactionData, transaction.IndexingConfig, transaction)
+		if err != nil {
+			logging.LogError(logger, "Failed to build transaction body from indexing config", err,
+				"transaction_id", transactionID)
+			return err
+		}
+		*body = *newBody
+	} else {
+		// Use the registry to find the appropriate enricher for the object type
+		enricher, exists := s.enricherRegistry.GetEnricher(transaction.ObjectType)
+		if !exists {
+			err := fmt.Errorf("no enricher found for object type: %s", transaction.ObjectType)
+			logging.LogError(logger, "Enrichment failed: no enricher found", err,
+				"transaction_id", transactionID,
+				"object_type", transaction.ObjectType,
+				"enrichment_step", "enricher_lookup")
+			return err
+		}
+
+		logger.Debug("Found enricher for object type",
 			"transaction_id", transactionID,
 			"object_type", transaction.ObjectType,
-			"enrichment_step", "enricher_lookup")
-		return err
-	}
+			"enricher_type", fmt.Sprintf("%T", enricher))
 
-	logger.Debug("Found enricher for object type",
-		"transaction_id", transactionID,
-		"object_type", transaction.ObjectType,
-		"enricher_type", fmt.Sprintf("%T", enricher))
-
-	// Delegate to the specific enricher
-	if err := enricher.EnrichData(body, transaction); err != nil {
-		logging.LogError(logger, "Enrichment failed during data processing", err,
-			"transaction_id", transactionID,
-			"object_type", transaction.ObjectType,
-			"enrichment_step", "data_processing")
-		return err
+		// Delegate to the specific enricher
+		if err := enricher.EnrichData(body, transaction); err != nil {
+			logging.LogError(logger, "Enrichment failed during data processing", err,
+				"transaction_id", transactionID,
+				"object_type", transaction.ObjectType,
+				"enrichment_step", "data_processing")
+			return err
+		}
 	}
 
 	logger.Info("Transaction data enrichment completed successfully",
@@ -1164,4 +1204,314 @@ func (s *IndexerService) ClearCache() {
 	s.lastReadiness = nil
 	s.lastLiveness = nil
 	s.lastHealth = nil
+}
+
+// buildTransactionBodyFromIndexingConfig builds a TransactionBody from indexing_config for create/update actions
+func (s *IndexerService) buildTransactionBodyFromIndexingConfig(
+	data map[string]any,
+	config *types.IndexingConfig,
+	transaction *contracts.LFXTransaction,
+) (*contracts.TransactionBody, error) {
+	slog.Debug("Building transaction body from indexing config", "config", config)
+
+	body := &contracts.TransactionBody{
+		ObjectType: transaction.ObjectType,
+		Data:       data,
+		ObjectID:   config.ObjectID,
+		ObjectRef:  fmt.Sprintf("%s:%s", transaction.ObjectType, config.ObjectID),
+	}
+
+	// Set latest flag (server-side field)
+	latest := true
+	body.Latest = &latest
+
+	// Set public flag if provided
+	if config.Public != nil {
+		body.Public = *config.Public
+	}
+
+	// Set FGA fields (required)
+	body.AccessCheckObject = config.AccessCheckObject
+	body.AccessCheckRelation = config.AccessCheckRelation
+	body.HistoryCheckObject = config.HistoryCheckObject
+	body.HistoryCheckRelation = config.HistoryCheckRelation
+
+	// Build FGA query strings
+	body.AccessCheckQuery = contracts.JoinFgaQuery(config.AccessCheckObject, config.AccessCheckRelation)
+	body.HistoryCheckQuery = contracts.JoinFgaQuery(config.HistoryCheckObject, config.HistoryCheckRelation)
+
+	// Set optional search fields
+	body.SortName = config.SortName
+	body.NameAndAliases = config.NameAndAliases
+	body.ParentRefs = config.ParentRefs
+	body.Tags = config.Tags
+	body.Fulltext = config.Fulltext
+	body.Contacts = config.Contacts
+
+	// Set timestamp and principal fields based on action (server-side fields)
+	canonicalAction := s.GetCanonicalAction(transaction)
+	switch canonicalAction {
+	case constants.ActionCreated:
+		body.CreatedAt = &transaction.Timestamp
+		body.UpdatedAt = body.CreatedAt // For search sorting
+		s.setPrincipalFields(body, transaction.ParsedPrincipals, constants.ActionCreated)
+	case constants.ActionUpdated:
+		body.UpdatedAt = &transaction.Timestamp
+		s.setPrincipalFields(body, transaction.ParsedPrincipals, constants.ActionUpdated)
+	case constants.ActionDeleted:
+		body.DeletedAt = &transaction.Timestamp
+		s.setPrincipalFields(body, transaction.ParsedPrincipals, constants.ActionDeleted)
+	}
+
+	slog.Debug("Built transaction body from indexing config", "body", body)
+
+	return body, nil
+}
+
+// expandTemplates recursively expands template variables in the format {{ field_name }}
+// with values from the provided data map. Supports nested field access (e.g., {{ parent.id }})
+// and preserves original data types.
+func expandTemplates(data map[string]any, value any) (any, error) {
+	switch v := value.(type) {
+	case string:
+		return expandTemplateString(data, v)
+	case []interface{}:
+		// Handle arrays - expand templates in each element
+		result := make([]interface{}, len(v))
+		for i, item := range v {
+			expanded, err := expandTemplates(data, item)
+			if err != nil {
+				return nil, err
+			}
+			result[i] = expanded
+		}
+		return result, nil
+	case map[string]interface{}:
+		// Handle nested objects - expand templates in each value
+		result := make(map[string]interface{}, len(v))
+		for key, val := range v {
+			expanded, err := expandTemplates(data, val)
+			if err != nil {
+				return nil, err
+			}
+			result[key] = expanded
+		}
+		return result, nil
+	default:
+		// Return non-string types as-is
+		return value, nil
+	}
+}
+
+// expandTemplateString expands template variables in a string
+func expandTemplateString(data map[string]any, template string) (any, error) {
+	// Check if this is an escaped template (e.g., \{{ field }})
+	if strings.Contains(template, "\\{{") {
+		// Remove escape characters
+		return strings.ReplaceAll(template, "\\{{", "{{"), nil
+	}
+
+	// Check if this is a simple template (entire string is a template)
+	// This allows us to preserve the original type
+	if strings.HasPrefix(template, "{{") && strings.HasSuffix(template, "}}") && strings.Count(template, "{{") == 1 {
+		fieldPath := strings.TrimSpace(template[2 : len(template)-2])
+		value, err := getNestedField(data, fieldPath)
+		if err != nil {
+			return nil, err
+		}
+		// Return the original type
+		return value, nil
+	}
+
+	// Handle templates embedded in strings (force string conversion)
+	result := template
+	templateRegex := regexp.MustCompile(`\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}`)
+	matches := templateRegex.FindAllStringSubmatch(template, -1)
+
+	for _, match := range matches {
+		fullMatch := match[0] // e.g., "{{ uid }}"
+		fieldPath := match[1] // e.g., "uid"
+
+		value, err := getNestedField(data, fieldPath)
+		if err != nil {
+			return nil, err
+		}
+
+		// Convert value to string for embedding
+		var strValue string
+		switch v := value.(type) {
+		case string:
+			strValue = v
+		case int, int64, int32, int16, int8:
+			strValue = fmt.Sprintf("%d", v)
+		case float64, float32:
+			strValue = fmt.Sprintf("%v", v)
+		case bool:
+			strValue = fmt.Sprintf("%t", v)
+		default:
+			strValue = fmt.Sprintf("%v", v)
+		}
+
+		result = strings.ReplaceAll(result, fullMatch, strValue)
+	}
+
+	return result, nil
+}
+
+// getNestedField retrieves a value from a nested map using dot notation
+// e.g., "parent.id" retrieves data["parent"]["id"]
+func getNestedField(data map[string]any, fieldPath string) (any, error) {
+	parts := strings.Split(fieldPath, ".")
+	var current any = data
+
+	for i, part := range parts {
+		currentMap, ok := current.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("template field path '%s' is invalid: '%s' is not an object", fieldPath, strings.Join(parts[:i], "."))
+		}
+
+		value, exists := currentMap[part]
+		if !exists {
+			return nil, fmt.Errorf("template field '%s' not found in data", fieldPath)
+		}
+
+		current = value
+	}
+
+	return current, nil
+}
+
+// parseIndexingConfig parses a map[string]any into a strongly-typed IndexingConfig struct
+// and expands any template variables using the provided transaction data.
+func (s *IndexerService) parseIndexingConfig(indexingConfigData map[string]any, transactionData map[string]any) (*types.IndexingConfig, error) {
+	logger := s.logger
+	logger.Debug("Parsing indexing config", "indexing_config", indexingConfigData)
+
+	// First, expand all templates in the indexing_config data
+	expandedData, err := expandTemplates(transactionData, indexingConfigData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to expand templates in indexing_config: %w", err)
+	}
+
+	// The expanded data should still be a map
+	data, ok := expandedData.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("indexing_config must be an object after template expansion")
+	}
+	config := &types.IndexingConfig{}
+
+	// Parse required string fields
+	objectID, ok := data["object_id"].(string)
+	if !ok || objectID == "" {
+		return nil, fmt.Errorf("indexing_config: object_id is required and must be a non-empty string")
+	}
+	config.ObjectID = objectID
+
+	accessCheckObject, ok := data["access_check_object"].(string)
+	if !ok || accessCheckObject == "" {
+		return nil, fmt.Errorf("indexing_config: access_check_object is required and must be a non-empty string")
+	}
+	config.AccessCheckObject = accessCheckObject
+
+	accessCheckRelation, ok := data["access_check_relation"].(string)
+	if !ok || accessCheckRelation == "" {
+		return nil, fmt.Errorf("indexing_config: access_check_relation is required and must be a non-empty string")
+	}
+	config.AccessCheckRelation = accessCheckRelation
+
+	historyCheckObject, ok := data["history_check_object"].(string)
+	if !ok || historyCheckObject == "" {
+		return nil, fmt.Errorf("indexing_config: history_check_object is required and must be a non-empty string")
+	}
+	config.HistoryCheckObject = historyCheckObject
+
+	historyCheckRelation, ok := data["history_check_relation"].(string)
+	if !ok || historyCheckRelation == "" {
+		return nil, fmt.Errorf("indexing_config: history_check_relation is required and must be a non-empty string")
+	}
+	config.HistoryCheckRelation = historyCheckRelation
+
+	// Parse optional boolean field
+	if publicVal, ok := data["public"].(bool); ok {
+		config.Public = &publicVal
+	}
+
+	// Parse optional string fields
+	if sortName, ok := data["sort_name"].(string); ok {
+		config.SortName = sortName
+	}
+
+	if fulltext, ok := data["fulltext"].(string); ok {
+		config.Fulltext = fulltext
+	}
+
+	// Parse optional array fields
+	if nameAndAliasesData, ok := data["name_and_aliases"].([]interface{}); ok {
+		nameAndAliases := make([]string, 0, len(nameAndAliasesData))
+		for _, item := range nameAndAliasesData {
+			if str, ok := item.(string); ok {
+				nameAndAliases = append(nameAndAliases, str)
+			}
+		}
+		config.NameAndAliases = nameAndAliases
+	}
+
+	if parentRefsData, ok := data["parent_refs"].([]interface{}); ok {
+		parentRefs := make([]string, 0, len(parentRefsData))
+		for _, item := range parentRefsData {
+			if str, ok := item.(string); ok {
+				parentRefs = append(parentRefs, str)
+			}
+		}
+		config.ParentRefs = parentRefs
+	}
+
+	if tagsData, ok := data["tags"].([]interface{}); ok {
+		tags := make([]string, 0, len(tagsData))
+		for _, item := range tagsData {
+			if str, ok := item.(string); ok {
+				tags = append(tags, str)
+			}
+		}
+		config.Tags = tags
+	}
+
+	// Parse contacts array if present
+	if contactsData, ok := data["contacts"].([]interface{}); ok {
+		contacts := make([]types.ContactBody, 0, len(contactsData))
+		for _, item := range contactsData {
+			if contactMap, ok := item.(map[string]interface{}); ok {
+				contact := types.ContactBody{}
+
+				if lfxPrincipal, ok := contactMap["lfx_principal"].(string); ok {
+					contact.LfxPrincipal = lfxPrincipal
+				}
+				if name, ok := contactMap["name"].(string); ok {
+					contact.Name = name
+				}
+				if emailsData, ok := contactMap["emails"].([]interface{}); ok {
+					emails := make([]string, 0, len(emailsData))
+					for _, email := range emailsData {
+						if emailStr, ok := email.(string); ok {
+							emails = append(emails, emailStr)
+						}
+					}
+					contact.Emails = emails
+				}
+				if bot, ok := contactMap["bot"].(bool); ok {
+					contact.Bot = &bot
+				}
+				if profile, ok := contactMap["profile"].(map[string]interface{}); ok {
+					contact.Profile = profile
+				}
+
+				contacts = append(contacts, contact)
+			}
+		}
+		config.Contacts = contacts
+	}
+
+	logger.Debug("Parsed indexing config", "config", config)
+
+	return config, nil
 }
