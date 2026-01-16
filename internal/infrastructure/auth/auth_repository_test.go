@@ -459,7 +459,7 @@ func TestAuthRepository_HelperMethods(t *testing.T) {
 
 	t.Run("isMachineUser", func(t *testing.T) {
 		// Test machine user
-		result := repo.isMachineUser(constants.MachineUserPrefix + "test-machine")
+		result := repo.isMachineUser("test-machine" + constants.MachineUserSuffix)
 		assert.True(t, result)
 
 		// Test regular user
