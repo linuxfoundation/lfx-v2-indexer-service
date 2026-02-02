@@ -17,6 +17,16 @@ import (
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/utils"
 )
 
+// Build-time variables set via ldflags
+var (
+	Version   = "dev"
+	BuildTime = "unknown"
+	GitCommit = "unknown"
+)
+
+// gracefulShutdownSeconds is the maximum time to wait for OpenTelemetry SDK to flush
+const gracefulShutdownSeconds = 30
+
 func main() {
 	// Parse CLI flags
 	flags := parseCLIFlags()
@@ -28,15 +38,22 @@ func main() {
 	handleEarlyExits(flags, logger)
 
 	// Set up OpenTelemetry SDK.
-	ctx := context.Background()
+	// Command-line/environment OTEL_SERVICE_VERSION takes precedence over
+	// the build-time Version variable.
 	otelConfig := utils.OTelConfigFromEnv()
-	otelShutdown, err := utils.SetupOTelSDKWithConfig(ctx, otelConfig)
+	if otelConfig.ServiceVersion == "" {
+		otelConfig.ServiceVersion = Version
+	}
+	otelShutdown, err := utils.SetupOTelSDKWithConfig(context.Background(), otelConfig)
 	if err != nil {
 		logger.Error("error setting up OpenTelemetry SDK", "error", err)
 		os.Exit(1)
 	}
+	// Handle shutdown properly so nothing leaks.
 	defer func() {
-		if shutdownErr := otelShutdown(context.Background()); shutdownErr != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), gracefulShutdownSeconds*time.Second)
+		defer cancel()
+		if shutdownErr := otelShutdown(ctx); shutdownErr != nil {
 			logger.Error("error shutting down OpenTelemetry SDK", "error", shutdownErr)
 		}
 	}()
