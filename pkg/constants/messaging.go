@@ -24,14 +24,22 @@ const (
 	AllV1Subjects     = FromV1Prefix + ">"       // All V1 subjects
 )
 
-// Transaction actions (centralized from scattered strings)
+// MessageAction represents the type of indexing operation to perform.
+type MessageAction string
+
 const (
-	ActionCreate  = "create"  // V1 format (present tense)
-	ActionCreated = "created" // V2 format (past tense)
-	ActionUpdate  = "update"  // V1 format (present tense)
-	ActionUpdated = "updated" // V2 format (past tense)
-	ActionDelete  = "delete"  // V1 format (present tense)
-	ActionDeleted = "deleted" // V2 format (past tense)
+	// ActionCreate indicates a resource will be created
+	ActionCreate MessageAction = "create"
+	// ActionCreated indicates a resource was created
+	ActionCreated MessageAction = "created"
+	// ActionUpdate indicates a resource will be updated
+	ActionUpdate MessageAction = "update"
+	// ActionUpdated indicates a resource was updated
+	ActionUpdated MessageAction = "updated"
+	// ActionDelete indicates a resource will be deleted
+	ActionDelete MessageAction = "delete"
+	// ActionDeleted indicates a resource was deleted
+	ActionDeleted MessageAction = "deleted"
 )
 
 // Header constants (centralized)
@@ -42,25 +50,27 @@ const (
 
 // Object types (centralized)
 const (
-	ObjectTypeProject                = "project"
-	ObjectTypeProjectSettings        = "project_settings"
-	ObjectTypeCommittee              = "committee"
-	ObjectTypeCommitteeSettings      = "committee_settings"
-	ObjectTypeCommitteeMember        = "committee_member"
-	ObjectTypeMeeting                = "meeting"
-	ObjectTypeMeetingSettings        = "meeting_settings"
-	ObjectTypeMeetingRegistrant      = "meeting_registrant"
-	ObjectTypeMeetingRSVP            = "meeting_rsvp"
-	ObjectTypeMeetingAttachment      = "meeting_attachment"
-	ObjectTypePastMeeting            = "past_meeting"
-	ObjectTypePastMeetingAttachment  = "past_meeting_attachment"
-	ObjectTypePastMeetingParticipant = "past_meeting_participant"
-	ObjectTypePastMeetingRecording   = "past_meeting_recording"
-	ObjectTypePastMeetingTranscript  = "past_meeting_transcript"
-	ObjectTypePastMeetingSummary     = "past_meeting_summary"
-	ObjectTypeGroupsIOService        = "groupsio_service"
-	ObjectTypeGroupsIOMailingList    = "groupsio_mailing_list"
-	ObjectTypeGroupsIOMember         = "groupsio_member"
+	ObjectTypeProject                     = "project"
+	ObjectTypeProjectSettings             = "project_settings"
+	ObjectTypeCommittee                   = "committee"
+	ObjectTypeCommitteeSettings           = "committee_settings"
+	ObjectTypeCommitteeMember             = "committee_member"
+	ObjectTypeMeeting                     = "meeting"
+	ObjectTypeMeetingSettings             = "meeting_settings"
+	ObjectTypeMeetingRegistrant           = "meeting_registrant"
+	ObjectTypeMeetingRSVP                 = "meeting_rsvp"
+	ObjectTypeMeetingAttachment           = "meeting_attachment"
+	ObjectTypePastMeeting                 = "past_meeting"
+	ObjectTypePastMeetingAttachment       = "past_meeting_attachment"
+	ObjectTypePastMeetingParticipant      = "past_meeting_participant"
+	ObjectTypePastMeetingRecording        = "past_meeting_recording"
+	ObjectTypePastMeetingTranscript       = "past_meeting_transcript"
+	ObjectTypePastMeetingSummary          = "past_meeting_summary"
+	ObjectTypeGroupsIOService             = "groupsio_service"
+	ObjectTypeGroupsIOServiceSettings     = "groupsio_service_settings"
+	ObjectTypeGroupsIOMailingList         = "groupsio_mailing_list"
+	ObjectTypeGroupsIOMailingListSettings = "groupsio_mailing_list_settings"
+	ObjectTypeGroupsIOMember              = "groupsio_member"
 
 	// V1 Meeting object types
 	ObjectTypeV1Meeting                = "v1_meeting"

@@ -304,7 +304,7 @@ func defaultSetParentReferences(body *contracts.TransactionBody, data map[string
 
 	parentRefFunc := func(pattern *regexp.Regexp) {
 		for key, value := range data {
-			if pattern.MatchString(key) && key != "parent_uid" && key != "parentID" {
+			if pattern.MatchString(key) && key != "parent_uid" && key != "parentID" && value != nil && value != "" {
 				// remove the suffix from the key
 				match := pattern.FindStringSubmatch(key)
 				if len(match) > 1 {

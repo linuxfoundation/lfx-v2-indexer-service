@@ -663,6 +663,57 @@ func TestDefaultSetParentReferences(t *testing.T) {
 				"project:false",
 			},
 		},
+		{
+			name: "empty string values are skipped",
+			data: map[string]any{
+				"uid":           "test-123",
+				"project_uid":   "",         // empty string should be skipped
+				"committee_uid": "comm-456", // valid value
+				"MeetingID":     "",         // empty string should be skipped
+			},
+			objectType: "event",
+			expectedParents: []string{
+				"committee:comm-456", // Only non-empty value should be included
+			},
+		},
+		{
+			name: "all empty string values result in no parent refs",
+			data: map[string]any{
+				"uid":           "test-123",
+				"project_uid":   "",
+				"committee_uid": "",
+				"MeetingID":     "",
+			},
+			objectType:      "event",
+			expectedParents: nil,
+		},
+		{
+			name: "nil values are skipped",
+			data: map[string]any{
+				"uid":           "test-123",
+				"project_uid":   nil,        // nil value should be skipped
+				"committee_uid": "comm-789", // valid value
+				"meeting_uid":   nil,        // nil value should be skipped
+			},
+			objectType: "event",
+			expectedParents: []string{
+				"committee:comm-789", // Only non-nil value should be included
+			},
+		},
+		{
+			name: "mixed nil, empty string, and valid values",
+			data: map[string]any{
+				"uid":           "test-123",
+				"project_uid":   nil,        // nil - should be skipped
+				"committee_uid": "",         // empty string - should be skipped
+				"meeting_uid":   "meet-456", // valid value
+				"ProjectID":     nil,        // nil - should be skipped
+			},
+			objectType: "event",
+			expectedParents: []string{
+				"meeting:meet-456", // Only valid value should be included
+			},
+		},
 	}
 
 	for _, tt := range tests {

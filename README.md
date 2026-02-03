@@ -436,6 +436,59 @@ JANITOR_ENABLED=true                         # Enable cleanup service (default: 
 | **Domain** | `IndexerService`, `Contracts Package`, `LFXTransaction Entity` | Business logic, action validation, pure domain data structures, repository interfaces |
 | **Infrastructure** | `Container`, `MessagingRepository`, `StorageRepository`, `AuthRepository`, `CleanupRepository` | External service integration, data persistence, event-driven processing |
 
+## 📚 Client Integration
+
+### Indexing Your Resources
+
+The LFX V2 Indexer Service provides two approaches for indexing your resources:
+
+1. **Server-Side Enrichment** - Send your resource data and let the server handle indexing metadata (⚠️ **will be removed in future releases**)
+2. **Client-Provided Configuration** - Provide complete indexing metadata via `indexing_config` for full control (**✅ recommended**)
+
+**⚠️ Important: Use client-provided configuration (option 2).** Server-side enrichers will be removed once all clients migrate to providing their own `indexing_config`.
+
+For detailed guidance on integrating with the indexer service, see the **[Client Guide](docs/client-guide.md)**:
+
+- **Message Format**: Learn the `IndexerMessageEnvelope` structure
+- **Field Reference**: Complete reference of all available fields
+- **Examples**: Real-world examples for create, update, and delete operations
+- **Best Practices**: Tips for optimal search performance and access control
+- **Go Client Integration**: Using the public `pkg/types` package
+
+Quick example with client-provided configuration:
+
+```json
+{
+  "action": "created",
+  "headers": {
+    "authorization": "Bearer <token>"
+  },
+  "data": {
+    "id": "proj-123",
+    "name": "My Project"
+  },
+  "indexing_config": {
+    "object_id": "proj-123",
+    "public": true,
+    "access_check_object": "project:proj-123",
+    "access_check_relation": "viewer",
+    "history_check_object": "project:proj-123",
+    "history_check_relation": "historian",
+    "sort_name": "my project",
+    "name_and_aliases": ["My Project"],
+    "tags": ["featured"]
+  }
+}
+```
+
+**Key Benefits of `indexing_config`:**
+- ✅ No server-side enricher required for your object type
+- ✅ Full control over indexing behavior and access control
+- ✅ Better performance (bypasses server-side computation)
+- ✅ Server automatically sets timestamps and principal fields
+
+See the **[Client Guide](docs/client-guide.md)** for complete documentation.
+
 ## Data Enrichment System
 
 The LFX V2 Indexer Service includes a powerful data enrichment system that transforms raw transaction data into search-optimized documents with access control, metadata, and full-text search capabilities.
