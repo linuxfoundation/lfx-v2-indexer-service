@@ -479,7 +479,11 @@ func (r *AuthRepository) safePrincipalLog(principal string) string {
 	if principal == "" {
 		return "<empty>"
 	}
-	// Don't log full email addresses for privacy
+	// Machine users are not personal information and should be logged in full for debugging.
+	if r.isMachineUser(principal) {
+		return principal
+	}
+	// Don't log full email addresses for privacy.
 	if strings.Contains(principal, "@") {
 		parts := strings.Split(principal, "@")
 		if len(parts) == 2 {
