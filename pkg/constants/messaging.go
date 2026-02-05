@@ -24,14 +24,22 @@ const (
 	AllV1Subjects     = FromV1Prefix + ">"       // All V1 subjects
 )
 
-// Transaction actions (centralized from scattered strings)
+// MessageAction represents the type of indexing operation to perform.
+type MessageAction string
+
 const (
-	ActionCreate  = "create"  // V1 format (present tense)
-	ActionCreated = "created" // V2 format (past tense)
-	ActionUpdate  = "update"  // V1 format (present tense)
-	ActionUpdated = "updated" // V2 format (past tense)
-	ActionDelete  = "delete"  // V1 format (present tense)
-	ActionDeleted = "deleted" // V2 format (past tense)
+	// ActionCreate indicates a resource will be created
+	ActionCreate MessageAction = "create"
+	// ActionCreated indicates a resource was created
+	ActionCreated MessageAction = "created"
+	// ActionUpdate indicates a resource will be updated
+	ActionUpdate MessageAction = "update"
+	// ActionUpdated indicates a resource was updated
+	ActionUpdated MessageAction = "updated"
+	// ActionDelete indicates a resource will be deleted
+	ActionDelete MessageAction = "delete"
+	// ActionDeleted indicates a resource was deleted
+	ActionDeleted MessageAction = "deleted"
 )
 
 // Header constants (centralized)

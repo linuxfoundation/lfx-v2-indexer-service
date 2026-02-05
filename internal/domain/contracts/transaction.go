@@ -7,47 +7,50 @@ package contracts
 import (
 	"fmt"
 	"time"
+
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/types"
 )
 
 // TransactionBody represents the OpenSearch document structure
 type TransactionBody struct {
-	ObjectRef            string         `json:"object_ref,omitempty"`
-	ObjectType           string         `json:"object_type,omitempty"`
-	ObjectID             string         `json:"object_id,omitempty"`
-	ParentRefs           []string       `json:"parent_refs,omitempty"`
-	SortName             string         `json:"sort_name,omitempty"`
-	NameAndAliases       []string       `json:"name_and_aliases,omitempty"`
-	Tags                 []string       `json:"tags,omitempty"`
-	Public               bool           `json:"public,omitempty"`
-	AccessCheckObject    string         `json:"access_check_object,omitempty"`    // deprecated - use AccessCheckQuery instead
-	AccessCheckRelation  string         `json:"access_check_relation,omitempty"`  // deprecated - use AccessCheckQuery instead
-	HistoryCheckObject   string         `json:"history_check_object,omitempty"`   // deprecated - use HistoryCheckQuery instead
-	HistoryCheckRelation string         `json:"history_check_relation,omitempty"` // deprecated - use HistoryCheckQuery instead
-	AccessCheckQuery     string         `json:"access_check_query,omitempty"`
-	HistoryCheckQuery    string         `json:"history_check_query,omitempty"`
-	Latest               *bool          `json:"latest,omitempty"`
-	CreatedAt            *time.Time     `json:"created_at,omitempty"`
-	CreatedBy            []string       `json:"created_by,omitempty"`
-	CreatedByPrincipals  []string       `json:"created_by_principals,omitempty"`
-	CreatedByEmails      []string       `json:"created_by_emails,omitempty"`
-	UpdatedAt            *time.Time     `json:"updated_at,omitempty"`
-	UpdatedBy            []string       `json:"updated_by,omitempty"`
-	UpdatedByPrincipals  []string       `json:"updated_by_principals,omitempty"`
-	UpdatedByEmails      []string       `json:"updated_by_emails,omitempty"`
-	DeletedAt            *time.Time     `json:"deleted_at,omitempty"`
-	DeletedBy            []string       `json:"deleted_by,omitempty"`
-	DeletedByPrincipals  []string       `json:"deleted_by_principals,omitempty"`
-	DeletedByEmails      []string       `json:"deleted_by_emails,omitempty"`
-	Data                 map[string]any `json:"data,omitempty"`
-	Fulltext             string         `json:"fulltext,omitempty"`
-	Contacts             []ContactBody  `json:"contacts,omitempty"`
-	V1Data               map[string]any `json:"v1_data,omitempty"`
+	ObjectRef            string              `json:"object_ref,omitempty"`
+	ObjectType           string              `json:"object_type,omitempty"`
+	ObjectID             string              `json:"object_id,omitempty"`
+	ParentRefs           []string            `json:"parent_refs,omitempty"`
+	SortName             string              `json:"sort_name,omitempty"`
+	NameAndAliases       []string            `json:"name_and_aliases,omitempty"`
+	Tags                 []string            `json:"tags,omitempty"`
+	Public               bool                `json:"public,omitempty"`
+	AccessCheckObject    string              `json:"access_check_object,omitempty"`    // deprecated - use AccessCheckQuery instead
+	AccessCheckRelation  string              `json:"access_check_relation,omitempty"`  // deprecated - use AccessCheckQuery instead
+	HistoryCheckObject   string              `json:"history_check_object,omitempty"`   // deprecated - use HistoryCheckQuery instead
+	HistoryCheckRelation string              `json:"history_check_relation,omitempty"` // deprecated - use HistoryCheckQuery instead
+	AccessCheckQuery     string              `json:"access_check_query,omitempty"`
+	HistoryCheckQuery    string              `json:"history_check_query,omitempty"`
+	Latest               *bool               `json:"latest,omitempty"`
+	CreatedAt            *time.Time          `json:"created_at,omitempty"`
+	CreatedBy            []string            `json:"created_by,omitempty"`
+	CreatedByPrincipals  []string            `json:"created_by_principals,omitempty"`
+	CreatedByEmails      []string            `json:"created_by_emails,omitempty"`
+	UpdatedAt            *time.Time          `json:"updated_at,omitempty"`
+	UpdatedBy            []string            `json:"updated_by,omitempty"`
+	UpdatedByPrincipals  []string            `json:"updated_by_principals,omitempty"`
+	UpdatedByEmails      []string            `json:"updated_by_emails,omitempty"`
+	DeletedAt            *time.Time          `json:"deleted_at,omitempty"`
+	DeletedBy            []string            `json:"deleted_by,omitempty"`
+	DeletedByPrincipals  []string            `json:"deleted_by_principals,omitempty"`
+	DeletedByEmails      []string            `json:"deleted_by_emails,omitempty"`
+	Data                 map[string]any      `json:"data,omitempty"`
+	Fulltext             string              `json:"fulltext,omitempty"`
+	Contacts             []types.ContactBody `json:"contacts,omitempty"`
+	V1Data               map[string]any      `json:"v1_data,omitempty"`
 }
 
 // LFXTransaction represents the input transaction data
 type LFXTransaction struct {
 	// Action is expected to be one of "create", "update", or "delete".
-	Action string `json:"action"`
+	Action constants.MessageAction `json:"action"`
 	// Headers (at this time) is used to pass the authenticated-principal HTTP
 	// headers from the originating request. These are passed as part of the NATS
 	// data payload, rather than using native NATS headers on the message.
@@ -84,20 +87,16 @@ type LFXTransaction struct {
 	// Enhanced fields for improved validation and processing
 	IsV1             bool        `json:"-"`
 	ParsedPrincipals []Principal `json:"-"`
+
+	// IndexingConfig contains the indexing configuration for the resource,
+	// as specified by the client. They can specify all the searchability fields
+	// such as name_and_aliases, parent_refs, tags, etc.
+	IndexingConfig *types.IndexingConfig `json:"indexing_config,omitempty"`
 }
 
 // =================
 // SUPPORTING TYPES
 // =================
-
-// ContactBody represents contact information within a transaction
-type ContactBody struct {
-	LfxPrincipal string         `json:"lfx_principal,omitempty"`
-	Name         string         `json:"name,omitempty"`
-	Emails       []string       `json:"emails,omitempty"`
-	Bot          *bool          `json:"bot,omitempty"`
-	Profile      map[string]any `json:"profile,omitempty"`
-}
 
 // Principal is used to temporarily store parsed Heimdall authorization tokens.
 type Principal struct {
