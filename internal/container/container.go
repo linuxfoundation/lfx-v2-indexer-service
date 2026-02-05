@@ -15,6 +15,7 @@ import (
 
 	natsgo "github.com/nats-io/nats.go"
 	opensearchgo "github.com/opensearch-project/opensearch-go/v2"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/application"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
@@ -202,6 +203,7 @@ func (c *Container) initializeInfrastructure() error {
 
 	opensearchConfig := opensearchgo.Config{
 		Addresses: []string{c.Config.OpenSearch.URL},
+		Transport: otelhttp.NewTransport(nil),
 	}
 	opensearchClient, err := opensearchgo.NewClient(opensearchConfig)
 	if err != nil {
