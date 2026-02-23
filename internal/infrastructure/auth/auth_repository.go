@@ -9,12 +9,15 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/auth0/go-jwt-middleware/v2/jwks"
 	"github.com/auth0/go-jwt-middleware/v2/validator"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
@@ -64,8 +67,12 @@ func NewAuthRepository(issuer string, audiences []string, jwksURL string, clockS
 		return nil, fmt.Errorf("invalid JWKS URL: %w", err)
 	}
 
-	// Set up JWKS provider with 5 minute cache
-	provider := jwks.NewCachingProvider(issuerURL, 5*time.Minute, jwks.WithCustomJWKSURI(jwksURLParsed))
+	// Set up JWKS provider with 5 minute cache and traced HTTP client
+	jwksHTTPClient := &http.Client{Transport: otelhttp.NewTransport(nil)}
+	provider := jwks.NewCachingProvider(issuerURL, 5*time.Minute,
+		jwks.WithCustomJWKSURI(jwksURLParsed),
+		jwks.WithCustomClient(jwksHTTPClient),
+	)
 
 	// Factory for custom JWT claims target
 	customClaims := func() validator.CustomClaims {
