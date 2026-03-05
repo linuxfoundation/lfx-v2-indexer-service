@@ -71,7 +71,42 @@ This is a **Clean Architecture** implementation processing NATS messages into Op
 
 ```
 NATS → MessagingRepository → IndexingMessageHandler → MessageProcessor → IndexerService → [Enricher] → OpenSearch
+                                                                                                              ↓
+                                                                                                    NATS Event Published
+                                                                                                  lfx.{object_type}.{action}
 ```
+
+### Domain Events (Outbound)
+
+After every successful OpenSearch write, the service publishes a NATS event. The subject is dynamic based on the object type and action — every object type the indexer handles (project, committee, meeting, etc.) automatically gets its own set of event subjects.
+
+**Subject format**: `lfx.{object_type}.{action}`
+
+Examples for `project` (same pattern applies to all object types):
+
+- `lfx.project.created`
+- `lfx.project.updated`
+- `lfx.project.deleted`
+
+Useful wildcard subscriptions:
+
+- `lfx.project.*` — all actions for a specific type
+- `lfx.*.created` — created events across all types
+
+**Payload** (`internal/domain/contracts/events.go` — `IndexingEvent`):
+
+```json
+{
+  "document_id": "project:abc-123",
+  "object_id":   "abc-123",
+  "object_type": "project",
+  "action":      "created",
+  "timestamp":   "2026-03-05T19:57:25.679Z",
+  "body": { ... }
+}
+```
+
+`body` is the full `TransactionBody` written to OpenSearch. Publish failures are **non-blocking** — the OpenSearch write is unaffected and the error is logged.
 
 ### Critical Patterns
 
@@ -126,6 +161,8 @@ JANITOR_ENABLED=true
 3. Register enricher in `IndexerService.NewIndexerService()`
 4. Add tests for the new enricher
 
+Domain events (`lfx.{object_type}.created/updated/deleted`) are emitted automatically for all object types — no additional work required.
+
 ### Message Processing Requirements
 
 - Always reply to NATS messages with "OK" or "ERROR: details"
@@ -143,8 +180,9 @@ JANITOR_ENABLED=true
 ## Key Files for Understanding the System
 
 - `internal/domain/services/indexer_service.go`: Core business logic
-- `internal/application/message_processor.go`: Message workflow orchestration  
+- `internal/application/message_processor.go`: Message workflow orchestration
 - `internal/domain/contracts/transaction.go`: Core business entities
+- `internal/domain/contracts/events.go`: `IndexingEvent` — the outbound domain event payload
 - `internal/enrichers/registry.go`: Enricher registration and lookup
 - `internal/infrastructure/config/app_config.go`: Configuration management
 - `cmd/lfx-indexer/main.go`: Dependency injection and service startup

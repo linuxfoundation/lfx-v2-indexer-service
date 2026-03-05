@@ -9,9 +9,16 @@ import "time"
 // NATS subject prefixes (preserved from existing)
 // These constants define the protocol format for NATS message subjects
 const (
-	IndexPrefix  = "lfx.index."    // V2 message prefix
-	FromV1Prefix = "lfx.v1.index." // V1 message prefix
+	IndexPrefix        = "lfx.index."    // V2 message prefix
+	FromV1Prefix       = "lfx.v1.index." // V1 message prefix
+	EventSubjectPrefix = "lfx."          // Post-indexing domain event prefix: lfx.{object_type}.{action}
 )
+
+// BuildEventSubject constructs the NATS subject for a post-indexing domain event.
+// Format: lfx.{object_type}.{action} (e.g., "lfx.project.created", "lfx.committee.deleted").
+func BuildEventSubject(objectType string, action MessageAction) string {
+	return EventSubjectPrefix + objectType + "." + string(action)
+}
 
 // NATS subjects (professional expansion)
 const (
