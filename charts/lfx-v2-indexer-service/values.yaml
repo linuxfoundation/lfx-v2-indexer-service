@@ -104,6 +104,11 @@ app:
     # (default: "tracecontext,baggage")
     propagators: "tracecontext,baggage,jaeger"
 
+podDisruptionBudget:
+  enabled: false
+  # minAvailable: 1
+  # maxUnavailable: 1
+
 # image is the configuration for the container image
 image:
   # repository is the container image repository
