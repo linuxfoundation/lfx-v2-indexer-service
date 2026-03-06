@@ -104,6 +104,10 @@ app:
     # (default: "tracecontext,baggage")
     propagators: "tracecontext,baggage,jaeger"
 
+podAnnotations: {}
+
+podLabels: {}
+
 # image is the configuration for the container image
 image:
   # repository is the container image repository
