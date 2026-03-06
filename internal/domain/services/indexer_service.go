@@ -806,7 +806,53 @@ func (s *IndexerService) ProcessTransaction(ctx context.Context, transaction *co
 		"transaction_id", transactionID,
 		"object_ref", body.ObjectRef)
 
+	// Publish post-indexing event. Non-blocking — failure is logged but does not
+	// affect the result of the indexing operation itself.
+	s.publishIndexingEvent(ctx, body, s.GetCanonicalAction(transaction))
+
 	return result, nil
+}
+
+// publishIndexingEvent publishes a domain event to NATS after a successful OpenSearch write.
+// Failures are non-blocking: the error is logged and the caller continues normally.
+// Subject format: lfx.{object_type}.{action} (e.g., "lfx.project.created").
+func (s *IndexerService) publishIndexingEvent(ctx context.Context, body *contracts.TransactionBody, canonicalAction constants.MessageAction) {
+	logger := logging.FromContext(ctx, s.logger)
+
+	event := &contracts.IndexingEvent{
+		DocumentID: body.ObjectRef,
+		ObjectID:   body.ObjectID,
+		ObjectType: body.ObjectType,
+		Action:     canonicalAction,
+		Body:       body,
+		Timestamp:  time.Now().UTC(),
+	}
+
+	eventBytes, err := json.Marshal(event)
+	if err != nil {
+		logging.LogError(logger, "Failed to marshal indexing event — skipping publish", err,
+			"document_id", body.ObjectRef,
+			"action", canonicalAction,
+			"object_type", body.ObjectType)
+		return
+	}
+
+	subject := constants.BuildEventSubject(body.ObjectType, canonicalAction)
+
+	if err := s.messagingRepo.Publish(ctx, subject, eventBytes); err != nil {
+		logging.LogError(logger, "Failed to publish indexing event — index write already succeeded", err,
+			"subject", subject,
+			"document_id", body.ObjectRef,
+			"action", canonicalAction,
+			"object_type", body.ObjectType)
+		return
+	}
+
+	logger.Info("Indexing event published",
+		"subject", subject,
+		"document_id", body.ObjectRef,
+		"action", canonicalAction,
+		"object_type", body.ObjectType)
 }
 
 // =================

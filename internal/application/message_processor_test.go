@@ -208,6 +208,7 @@ func TestMessageProcessor_ProcessIndexingMessage_Success(t *testing.T) {
 	// Mock expectations
 	mockStorageRepo.On("Index", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockMessagingRepo.On("ParsePrincipals", mock.Anything, mock.Anything).Return([]contracts.Principal{}, nil)
+	mockMessagingRepo.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	// Execute
 	err = mp.ProcessIndexingMessage(ctx, data, subject)
@@ -317,7 +318,7 @@ func TestMessageProcessor_ProcessIndexingMessage_MissingAuthHeader(t *testing.T)
 
 // Test ProcessV1IndexingMessage success case
 func TestMessageProcessor_ProcessV1IndexingMessage_Success(t *testing.T) {
-	mp, _, mockStorageRepo := setupTestMessageProcessor()
+	mp, mockMessagingRepo, mockStorageRepo := setupTestMessageProcessor()
 	ctx := context.Background()
 
 	// Test V1 data
@@ -340,6 +341,7 @@ func TestMessageProcessor_ProcessV1IndexingMessage_Success(t *testing.T) {
 
 	// Mock expectations
 	mockStorageRepo.On("Index", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockMessagingRepo.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	// Execute
 	err := mp.ProcessV1IndexingMessage(ctx, data, subject)
@@ -453,6 +455,7 @@ func TestIndexingHandler_HandleWithReply_V2Message(t *testing.T) {
 	// Mock expectations
 	mockStorageRepo.On("Index", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockMessagingRepo.On("ParsePrincipals", mock.Anything, mock.Anything).Return([]contracts.Principal{}, nil)
+	mockMessagingRepo.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	// Create handler
 	handler := &indexingHandler{useCase: mp}
@@ -469,7 +472,7 @@ func TestIndexingHandler_HandleWithReply_V2Message(t *testing.T) {
 
 // Test indexingHandler HandleWithReply with V1 message
 func TestIndexingHandler_HandleWithReply_V1Message(t *testing.T) {
-	mp, _, mockStorageRepo := setupTestMessageProcessor()
+	mp, mockMessagingRepo, mockStorageRepo := setupTestMessageProcessor()
 	ctx := context.Background()
 
 	// Test V1 data
@@ -497,6 +500,7 @@ func TestIndexingHandler_HandleWithReply_V1Message(t *testing.T) {
 
 	// Mock expectations
 	mockStorageRepo.On("Index", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockMessagingRepo.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	// Create handler
 	handler := &indexingHandler{useCase: mp}
@@ -579,6 +583,7 @@ func TestIndexingHandler_HandleWithReply_NoReply(t *testing.T) {
 	mockMessagingRepo.On("ParsePrincipals", mock.Anything, mock.Anything).Return([]contracts.Principal{
 		{Principal: "test-user", Email: "test@example.com"},
 	}, nil)
+	mockMessagingRepo.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	// Create handler
 	handler := &indexingHandler{useCase: mp}
@@ -682,6 +687,7 @@ func TestMessageProcessor_IntegrationWorkflow(t *testing.T) {
 
 	// Setup ParsePrincipals mock for V2 messages
 	mockMessagingRepo.On("ParsePrincipals", mock.Anything, mock.Anything).Return([]contracts.Principal{}, nil)
+	mockMessagingRepo.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	// Start subscriptions
 	err := mp.StartSubscriptions(ctx)
@@ -735,11 +741,12 @@ func BenchmarkMessageProcessor_GenerateMessageID(b *testing.B) {
 }
 
 func BenchmarkMessageProcessor_ProcessIndexingMessage(b *testing.B) {
-	mp, _, mockStorageRepo := setupTestMessageProcessor()
+	mp, mockMessagingRepo, mockStorageRepo := setupTestMessageProcessor()
 	ctx := context.Background()
 
 	// Setup mocks
 	mockStorageRepo.On("Index", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockMessagingRepo.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	// Test data
 	testData := map[string]any{
@@ -762,11 +769,12 @@ func BenchmarkMessageProcessor_ProcessIndexingMessage(b *testing.B) {
 }
 
 func BenchmarkIndexingHandler_HandleWithReply(b *testing.B) {
-	mp, _, mockStorageRepo := setupTestMessageProcessor()
+	mp, mockMessagingRepo, mockStorageRepo := setupTestMessageProcessor()
 	ctx := context.Background()
 
 	// Setup mocks
 	mockStorageRepo.On("Index", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockMessagingRepo.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	// Test data
 	testData := map[string]any{
