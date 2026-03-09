@@ -5,6 +5,8 @@ package services
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -1174,4 +1176,145 @@ func TestIndexerService_enrichTransactionData(t *testing.T) {
 			}
 		})
 	}
+}
+
+// =============================================================================
+// publishIndexingEvent tests
+// =============================================================================
+
+func TestIndexerService_ProcessTransaction_PublishesIndexingEvent(t *testing.T) {
+	mockStorageRepo := mocks.NewMockStorageRepository()
+	mockMessagingRepo := mocks.NewMockMessagingRepository()
+	logger, _ := logging.TestLogger(t)
+	service := NewIndexerService(mockStorageRepo, mockMessagingRepo, logger)
+
+	transaction := &contracts.LFXTransaction{
+		Action:     constants.ActionCreated,
+		ObjectType: constants.ObjectTypeProject,
+		Headers:    map[string]string{"authorization": "Bearer valid-token"},
+		Data: map[string]any{
+			"id":     "test-project",
+			"name":   "Test Project",
+			"public": true,
+		},
+		Timestamp: time.Now(),
+		ParsedPrincipals: []contracts.Principal{
+			{Principal: "test_user", Email: "test@example.com"},
+		},
+	}
+
+	result, err := service.ProcessTransaction(context.Background(), transaction, "test-index")
+
+	assert.NoError(t, err)
+	assert.True(t, result.Success)
+
+	// Exactly one publish call with the correct subject
+	assert.Len(t, mockMessagingRepo.PublishCalls, 1)
+	publishCall := mockMessagingRepo.PublishCalls[0]
+	assert.Equal(t, "lfx.project.created", publishCall.Subject)
+
+	// Payload deserializes to a valid IndexingEvent
+	var event contracts.IndexingEvent
+	assert.NoError(t, json.Unmarshal(publishCall.Data, &event))
+	assert.Equal(t, "project:test-project", event.DocumentID)
+	assert.Equal(t, "test-project", event.ObjectID)
+	assert.Equal(t, constants.ObjectTypeProject, event.ObjectType)
+	assert.Equal(t, constants.ActionCreated, event.Action)
+	assert.NotNil(t, event.Body)
+	assert.Equal(t, constants.ObjectTypeProject, event.Body.ObjectType)
+	assert.False(t, event.Timestamp.IsZero())
+}
+
+func TestIndexerService_ProcessTransaction_PublishFailureIsNonBlocking(t *testing.T) {
+	mockStorageRepo := mocks.NewMockStorageRepository()
+	mockMessagingRepo := mocks.NewMockMessagingRepository()
+	mockMessagingRepo.PublishError = fmt.Errorf("NATS connection lost")
+	logger, _ := logging.TestLogger(t)
+	service := NewIndexerService(mockStorageRepo, mockMessagingRepo, logger)
+
+	transaction := &contracts.LFXTransaction{
+		Action:     constants.ActionUpdated,
+		ObjectType: constants.ObjectTypeProject,
+		Headers:    map[string]string{"authorization": "Bearer valid-token"},
+		Data: map[string]any{
+			"id":     "test-project",
+			"name":   "Test Project",
+			"public": true,
+		},
+		Timestamp: time.Now(),
+		ParsedPrincipals: []contracts.Principal{
+			{Principal: "test_user", Email: "test@example.com"},
+		},
+	}
+
+	result, err := service.ProcessTransaction(context.Background(), transaction, "test-index")
+
+	// Index succeeded even though publish failed
+	assert.NoError(t, err)
+	assert.True(t, result.Success)
+	assert.True(t, result.IndexSuccess)
+	assert.Equal(t, "project:test-project", result.DocumentID)
+	assert.Len(t, mockStorageRepo.IndexCalls, 1)
+}
+
+func TestIndexerService_ProcessTransaction_NoEventPublishedOnIndexFailure(t *testing.T) {
+	mockStorageRepo := mocks.NewMockStorageRepository()
+	mockStorageRepo.IndexError = fmt.Errorf("opensearch unavailable")
+	mockMessagingRepo := mocks.NewMockMessagingRepository()
+	logger, _ := logging.TestLogger(t)
+	service := NewIndexerService(mockStorageRepo, mockMessagingRepo, logger)
+
+	transaction := &contracts.LFXTransaction{
+		Action:     constants.ActionCreated,
+		ObjectType: constants.ObjectTypeProject,
+		Headers:    map[string]string{"authorization": "Bearer valid-token"},
+		Data: map[string]any{
+			"id":     "test-project",
+			"name":   "Test Project",
+			"public": true,
+		},
+		Timestamp: time.Now(),
+		ParsedPrincipals: []contracts.Principal{
+			{Principal: "test_user", Email: "test@example.com"},
+		},
+	}
+
+	result, err := service.ProcessTransaction(context.Background(), transaction, "test-index")
+
+	assert.Error(t, err)
+	assert.False(t, result.Success)
+	// No event published when indexing fails
+	assert.Len(t, mockMessagingRepo.PublishCalls, 0)
+}
+
+func TestIndexerService_ProcessTransaction_V1ActionCanonicalizedInEvent(t *testing.T) {
+	mockStorageRepo := mocks.NewMockStorageRepository()
+	mockMessagingRepo := mocks.NewMockMessagingRepository()
+	logger, _ := logging.TestLogger(t)
+	service := NewIndexerService(mockStorageRepo, mockMessagingRepo, logger)
+
+	// V1 uses present-tense "create" instead of past-tense "created"
+	transaction := &contracts.LFXTransaction{
+		Action:     constants.ActionCreate,
+		ObjectType: constants.ObjectTypeProject,
+		IsV1:       true,
+		Headers:    map[string]string{"x-username": "admin", "x-email": "admin@example.com"},
+		Data: map[string]any{
+			"id":     "v1-project",
+			"name":   "V1 Project",
+			"public": true,
+		},
+		Timestamp: time.Now(),
+		ParsedPrincipals: []contracts.Principal{
+			{Principal: "admin", Email: "admin@example.com"},
+		},
+	}
+
+	result, err := service.ProcessTransaction(context.Background(), transaction, "test-index")
+
+	assert.NoError(t, err)
+	assert.True(t, result.Success)
+	assert.Len(t, mockMessagingRepo.PublishCalls, 1)
+	// Subject must use canonical past-tense "created", not raw "create"
+	assert.Equal(t, "lfx.project.created", mockMessagingRepo.PublishCalls[0].Subject)
 }
