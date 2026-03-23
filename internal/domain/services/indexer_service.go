@@ -319,8 +319,11 @@ func (s *IndexerService) decodeTransactionData(transaction *contracts.LFXTransac
 			// If there is no error, then we can unmarshal the data.
 			// Otherwise, it means the data wasn't base64 encoded and therefore
 			// we can just use the data as is.
-			switch {
-			case s.isCreateAction(transaction) || s.isUpdateAction(transaction):
+			logger.Debug("Transaction data is base64 encoded, decoding",
+				"transaction_id", transactionID,
+				"action", transaction.Action,
+				"object_type", transaction.ObjectType)
+			if s.isCreateAction(transaction) || s.isUpdateAction(transaction) {
 				var data map[string]any
 				if err := json.Unmarshal(decodedData, &data); err != nil {
 					logging.LogError(logger, "Failed to unmarshal JSON", err,
@@ -330,8 +333,6 @@ func (s *IndexerService) decodeTransactionData(transaction *contracts.LFXTransac
 					return err
 				}
 				transaction.Data = data
-			case s.isDeleteAction(transaction):
-				transaction.Data = string(decodedData)
 			}
 		}
 	}

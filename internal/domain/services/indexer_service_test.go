@@ -5,6 +5,7 @@ package services
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/types"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestIndexerService_ProcessTransaction_Success(t *testing.T) {
@@ -1317,4 +1319,128 @@ func TestIndexerService_ProcessTransaction_V1ActionCanonicalizedInEvent(t *testi
 	assert.Len(t, mockMessagingRepo.PublishCalls, 1)
 	// Subject must use canonical past-tense "created", not raw "create"
 	assert.Equal(t, "lfx.project.created", mockMessagingRepo.PublishCalls[0].Subject)
+}
+
+func TestDecodeTransactionData(t *testing.T) {
+	mustBase64JSON := func(v map[string]any) string {
+		b, err := json.Marshal(v)
+		require.NoError(t, err)
+		return base64.StdEncoding.EncodeToString(b)
+	}
+
+	tests := []struct {
+		name        string
+		transaction *contracts.LFXTransaction
+		wantErr     bool
+		assertData  func(t *testing.T, got any)
+	}{
+		// --- delete: ID must always be preserved as-is ---
+		{
+			name: "delete/uuid ID preserved - hyphen breaks base64",
+			transaction: &contracts.LFXTransaction{
+				Action: constants.ActionDeleted,
+				Data:   "550e8400-e29b-41d4-a716-446655440000",
+			},
+			assertData: func(t *testing.T, got any) {
+				assert.Equal(t, "550e8400-e29b-41d4-a716-446655440000", got)
+			},
+		},
+		{
+			name: "delete/numeric ID preserved - length not multiple of 4 (regression: v1_past_meeting)",
+			transaction: &contracts.LFXTransaction{
+				Action: constants.ActionDeleted,
+				Data:   "15554981610", // 11 chars — not a multiple of 4
+			},
+			assertData: func(t *testing.T, got any) {
+				assert.Equal(t, "15554981610", got)
+			},
+		},
+		{
+			name: "delete/alphanumeric ID length multiple of 4 preserved - was silently corrupted before fix",
+			transaction: &contracts.LFXTransaction{
+				Action: constants.ActionDeleted,
+				Data:   "abcd", // 4 chars, valid base64 alphabet — triggered the bug
+			},
+			assertData: func(t *testing.T, got any) {
+				assert.Equal(t, "abcd", got)
+			},
+		},
+		{
+			name: "delete/v1 present-tense action preserved",
+			transaction: &contracts.LFXTransaction{
+				Action: constants.ActionDelete,
+				Data:   "abcd", // valid base64, length 4
+			},
+			assertData: func(t *testing.T, got any) {
+				assert.Equal(t, "abcd", got)
+			},
+		},
+		// --- create/update: base64-encoded JSON must be decoded ---
+		{
+			name: "create/base64 JSON decoded and unmarshalled",
+			transaction: &contracts.LFXTransaction{
+				Action: constants.ActionCreated,
+				Data:   mustBase64JSON(map[string]any{"id": "proj-1", "name": "Test"}),
+			},
+			assertData: func(t *testing.T, got any) {
+				data, ok := got.(map[string]any)
+				require.True(t, ok, "expected map[string]any")
+				assert.Equal(t, "proj-1", data["id"])
+			},
+		},
+		{
+			name: "update/base64 JSON decoded and unmarshalled",
+			transaction: &contracts.LFXTransaction{
+				Action: constants.ActionUpdated,
+				Data:   mustBase64JSON(map[string]any{"id": "proj-2", "name": "Updated"}),
+			},
+			assertData: func(t *testing.T, got any) {
+				data, ok := got.(map[string]any)
+				require.True(t, ok, "expected map[string]any")
+				assert.Equal(t, "proj-2", data["id"])
+			},
+		},
+		{
+			name: "create/already a map - passed through untouched",
+			transaction: &contracts.LFXTransaction{
+				Action: constants.ActionCreated,
+				Data:   map[string]any{"id": "proj-3"},
+			},
+			assertData: func(t *testing.T, got any) {
+				data, ok := got.(map[string]any)
+				require.True(t, ok, "expected map[string]any")
+				assert.Equal(t, "proj-3", data["id"])
+			},
+		},
+		{
+			name: "create/valid base64 but not JSON returns error",
+			transaction: &contracts.LFXTransaction{
+				Action: constants.ActionCreated,
+				Data:   base64.StdEncoding.EncodeToString([]byte("this is not json")),
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logger, _ := logging.TestLogger(t)
+			s := NewIndexerService(
+				mocks.NewMockStorageRepository(),
+				mocks.NewMockMessagingRepository(),
+				logger,
+			)
+
+			err := s.decodeTransactionData(tt.transaction)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			if tt.assertData != nil {
+				tt.assertData(t, tt.transaction.Data)
+			}
+		})
+	}
 }
