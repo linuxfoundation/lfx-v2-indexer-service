@@ -150,9 +150,3 @@ health:
 messaging:
   # queue is the NATS queue name
   queue: "lfx.indexer.queue"
-
-# deployment configures the Deployment object itself.
-deployment:
-  # labels are additional labels applied to the Deployment metadata.
-  labels:
-    app.kubernetes.io/name: "lfx-v2-indexer-service"
