@@ -7,6 +7,10 @@ kind: Deployment
 metadata:
   name: lfx-v2-indexer-service
   namespace: lfx
+  {{- with .Values.deployment.labels }}
+  labels:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   replicas: {{ .Values.app.replicas }}
   selector:
