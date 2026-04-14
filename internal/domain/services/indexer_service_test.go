@@ -1318,3 +1318,84 @@ func TestIndexerService_ProcessTransaction_V1ActionCanonicalizedInEvent(t *testi
 	// Subject must use canonical past-tense "created", not raw "create"
 	assert.Equal(t, "lfx.project.created", mockMessagingRepo.PublishCalls[0].Subject)
 }
+
+func TestIsValidObjectID(t *testing.T) {
+	tests := []struct {
+		name  string
+		id    string
+		valid bool
+	}{
+		// Valid IDs
+		{name: "uuid", id: "550e8400-e29b-41d4-a716-446655440000", valid: true},
+		{name: "numeric string", id: "123456789", valid: true},
+		{name: "alphanumeric slug", id: "my-project", valid: true},
+		{name: "printable ASCII symbols", id: "foo_bar.baz", valid: true},
+
+		// Invalid IDs
+		{name: "empty string", id: "", valid: false},
+		{name: "space character", id: "hello world", valid: false},
+		{name: "null byte", id: "\x00", valid: false},
+		{name: "control byte 0x01", id: "\x01abc", valid: false},
+		{name: "high byte 0x80", id: "\x80abc", valid: false},
+		{name: "non-ASCII unicode", id: "abc\u05cfdef", valid: false},
+		{name: "unicode replacement char", id: "\uFFFD", valid: false},
+		{name: "tab character", id: "abc\tdef", valid: false},
+		// Exact pattern from LFXV2-1464: Hebrew letter + high bytes
+		{name: "corrupted groupsio_member id", id: "\u05cfz\ufffd\ufffd|", valid: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isValidObjectID(tt.id)
+			if got != tt.valid {
+				t.Errorf("isValidObjectID(%q) = %v, want %v", tt.id, got, tt.valid)
+			}
+		})
+	}
+}
+
+func TestIndexerService_GenerateTransactionBody_InvalidObjectID_Delete(t *testing.T) {
+	mockStorageRepo := mocks.NewMockStorageRepository()
+	mockMessagingRepo := mocks.NewMockMessagingRepository()
+	logger, _ := logging.TestLogger(t)
+	service := NewIndexerService(mockStorageRepo, mockMessagingRepo, logger)
+
+	transaction := &contracts.LFXTransaction{
+		Action:          constants.ActionDeleted,
+		ObjectType:      "groupsio_member",
+		Data:            "\u05cfz\ufffd\ufffd|", // binary/non-ASCII id from LFXV2-1464
+		ParsedObjectID:  "\u05cfz\ufffd\ufffd|",
+		Timestamp:       time.Now(),
+		ParsedPrincipals: []contracts.Principal{},
+	}
+
+	_, err := service.GenerateTransactionBody(context.Background(), transaction)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), constants.ErrInvalidObjectID)
+}
+
+func TestIndexerService_ProcessTransaction_InvalidObjectID_Delete(t *testing.T) {
+	mockStorageRepo := mocks.NewMockStorageRepository()
+	mockMessagingRepo := mocks.NewMockMessagingRepository()
+	logger, _ := logging.TestLogger(t)
+	service := NewIndexerService(mockStorageRepo, mockMessagingRepo, logger)
+
+	transaction := &contracts.LFXTransaction{
+		Action:          constants.ActionDeleted,
+		ObjectType:      "groupsio_member",
+		Data:            "\u05cfz\ufffd|",
+		ParsedObjectID:  "\u05cfz\ufffd|",
+		Timestamp:       time.Now(),
+		Headers:         map[string]string{"authorization": "Bearer token"},
+		ParsedPrincipals: []contracts.Principal{},
+	}
+
+	result, err := service.ProcessTransaction(context.Background(), transaction, "test-index")
+
+	assert.Error(t, err)
+	assert.NotNil(t, result)
+	assert.False(t, result.Success)
+	assert.Contains(t, err.Error(), constants.ErrInvalidObjectID)
+	assert.Len(t, mockStorageRepo.IndexCalls, 0) // Must not write to OpenSearch
+}

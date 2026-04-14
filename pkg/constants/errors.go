@@ -30,6 +30,7 @@ const (
 	ErrEnrichmentFailed  = "transaction enrichment failed"
 	ErrMissingObjectID   = "missing or invalid object ID"
 	ErrMissingPublicFlag = "missing or invalid public flag"
+	ErrInvalidObjectID   = "object_id contains non-ASCII or non-printable characters"
 
 	// Storage specific errors
 	ErrMarshalQuery       = "failed to marshal query"

@@ -639,6 +639,23 @@ func (s *IndexerService) EnrichTransaction(ctx context.Context, transaction *con
 	return nil
 }
 
+// isValidObjectID returns true if id is a non-empty string containing only printable,
+// non-space ASCII characters (U+0021–U+007E).
+// Documents with binary or non-ASCII object_ids produce garbled index entries in OpenSearch
+// (corrupted _id values, no data payload). Go's range loop replaces invalid UTF-8 bytes with
+// U+FFFD (> 0x7E), so invalid UTF-8 is caught by the same check.
+func isValidObjectID(id string) bool {
+	if id == "" {
+		return false
+	}
+	for _, r := range id {
+		if r < 0x21 || r > 0x7E {
+			return false
+		}
+	}
+	return true
+}
+
 // GenerateTransactionBody creates a transaction body for indexing
 func (s *IndexerService) GenerateTransactionBody(ctx context.Context, transaction *contracts.LFXTransaction) (*contracts.TransactionBody, error) {
 	logger := logging.FromContext(ctx, s.logger)
@@ -683,6 +700,16 @@ func (s *IndexerService) GenerateTransactionBody(ctx context.Context, transactio
 	case constants.ActionDeleted:
 		body.DeletedAt = &transaction.Timestamp
 		s.setPrincipalFields(body, transaction.ParsedPrincipals, constants.ActionDeleted)
+
+		if !isValidObjectID(transaction.ParsedObjectID) {
+			err := fmt.Errorf("%s: %q", constants.ErrInvalidObjectID, transaction.ParsedObjectID)
+			logging.LogError(logger, constants.ErrInvalidObjectID, err,
+				"transaction_id", transactionID,
+				"object_type", transaction.ObjectType,
+				"action", canonicalAction)
+			return nil, err
+		}
+
 		body.ObjectID = transaction.ParsedObjectID
 		body.ObjectRef = transaction.ObjectType + ":" + transaction.ParsedObjectID
 
@@ -711,6 +738,15 @@ func (s *IndexerService) GenerateTransactionBody(ctx context.Context, transactio
 		return nil, fmt.Errorf("failed to enrich transaction data: %w", err)
 	}
 	logger.Debug("Transaction data enrichment completed", "transaction_id", transactionID)
+
+	if !isValidObjectID(body.ObjectID) {
+		err := fmt.Errorf("%s: %q", constants.ErrInvalidObjectID, body.ObjectID)
+		logging.LogError(logger, constants.ErrInvalidObjectID, err,
+			"transaction_id", transactionID,
+			"object_type", transaction.ObjectType,
+			"action", canonicalAction)
+		return nil, err
+	}
 
 	// Set object reference
 	body.ObjectRef = transaction.ObjectType + ":" + body.ObjectID
