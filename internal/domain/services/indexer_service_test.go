@@ -1509,15 +1509,20 @@ func TestIndexerService_ProcessTransaction_InvalidObjectID_Delete(t *testing.T) 
 		logger,
 	)
 
+	// Use a registered object type and IsV1=true (no auth headers required).
+	// For delete actions, Data must be a string — it is parsed into ParsedObjectID by
+	// parseTransactionData, ensuring the full enrichment pipeline is exercised.
 	transaction := &contracts.LFXTransaction{
-		ObjectType:      "groupsio_member",
-		Action:          constants.ActionDeleted,
-		ParsedObjectID:  "\u05cfz\ufffd\ufffd|", // corrupted binary member ID from LFXV2-1464
-		ParsedPrincipals: []contracts.Principal{},
-		Timestamp:       time.Now(),
+		ObjectType: constants.ObjectTypeProject,
+		Action:     constants.ActionDelete, // V1 uses present-tense; canonicalized to ActionDeleted internally
+		IsV1:       true,
+		Headers:    map[string]string{},
+		Data:       "\u05cfz\ufffd\ufffd|", // corrupted binary member ID from LFXV2-1464
+		Timestamp:  time.Now(),
 	}
 
 	_, err := s.ProcessTransaction(context.Background(), transaction, "test-index")
 	require.Error(t, err)
+	assert.Contains(t, err.Error(), constants.ErrInvalidObjectID)
 	assert.Empty(t, mockStorageRepo.IndexCalls, "expected no writes to OpenSearch for corrupted object_id")
 }
