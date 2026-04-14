@@ -1444,3 +1444,85 @@ func TestDecodeTransactionData(t *testing.T) {
 		})
 	}
 }
+
+func TestIsValidObjectID(t *testing.T) {
+	tests := []struct {
+		name  string
+		id    string
+		valid bool
+	}{
+		{name: "uuid", id: "550e8400-e29b-41d4-a716-446655440000", valid: true},
+		{name: "numeric string", id: "123456789", valid: true},
+		{name: "alphanumeric", id: "abc123", valid: true},
+		{name: "printable ASCII with symbols", id: "foo_bar.baz", valid: true},
+		{name: "empty string", id: "", valid: false},
+		{name: "space character", id: "hello world", valid: false},
+		{name: "binary byte 0x00", id: "\x00", valid: false},
+		{name: "binary byte 0x01", id: "\x01abc", valid: false},
+		{name: "high byte 0x80", id: "\x80abc", valid: false},
+		{name: "non-ASCII unicode", id: "abc\u05cfdef", valid: false},
+		{name: "replacement char (invalid UTF-8 proxy)", id: "\uFFFD", valid: false},
+		{name: "tab character", id: "abc\tdef", valid: false},
+		{name: "newline character", id: "abc\ndef", valid: false},
+		// The exact pattern from LFXV2-1464: Hebrew letter + high bytes
+		{name: "corrupted member id from ticket", id: "\u05cfz\ufffd\ufffd|", valid: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isValidObjectID(tt.id)
+			if got != tt.valid {
+				t.Errorf("isValidObjectID(%q) = %v, want %v", tt.id, got, tt.valid)
+			}
+		})
+	}
+}
+
+func TestIndexerService_GenerateTransactionBody_InvalidObjectID_Delete(t *testing.T) {
+	logger, _ := logging.TestLogger(t)
+	s := NewIndexerService(
+		mocks.NewMockStorageRepository(),
+		mocks.NewMockMessagingRepository(),
+		logger,
+	)
+
+	transaction := &contracts.LFXTransaction{
+		ObjectType:      "groupsio_member",
+		Action:          constants.ActionDeleted,
+		ParsedObjectID:  "\u05cfz\ufffd\ufffd|", // corrupted binary member ID from LFXV2-1464
+		ParsedPrincipals: []contracts.Principal{},
+		Timestamp:       time.Now(),
+	}
+
+	body, err := s.GenerateTransactionBody(context.Background(), transaction)
+	require.Error(t, err)
+	assert.Nil(t, body)
+	assert.Contains(t, err.Error(), constants.ErrInvalidObjectID)
+}
+
+func TestIndexerService_ProcessTransaction_InvalidObjectID_Delete(t *testing.T) {
+	mockStorageRepo := mocks.NewMockStorageRepository()
+	logger, _ := logging.TestLogger(t)
+	s := NewIndexerService(
+		mockStorageRepo,
+		mocks.NewMockMessagingRepository(),
+		logger,
+	)
+
+	// Use a registered object type and IsV1=true (no auth headers required).
+	// For delete actions, Data must be a string — it is parsed into ParsedObjectID by
+	// parseTransactionData, ensuring the full enrichment pipeline is exercised.
+	transaction := &contracts.LFXTransaction{
+		ObjectType: constants.ObjectTypeProject,
+		Action:     constants.ActionDelete, // V1 uses present-tense; canonicalized to ActionDeleted internally
+		IsV1:       true,
+		Headers:    map[string]string{},
+		Data:       "\u05cfz\ufffd\ufffd|", // corrupted binary member ID from LFXV2-1464
+		Timestamp:  time.Now(),
+	}
+
+	_, err := s.ProcessTransaction(context.Background(), transaction, "test-index")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), constants.ErrInvalidObjectID)
+	assert.Empty(t, mockStorageRepo.IndexCalls, "expected no writes to OpenSearch for corrupted object_id")
+}
