@@ -168,9 +168,14 @@ func (r *AuthRepository) ParsePrincipals(ctx context.Context, headers map[string
 		case constants.AuthorizationHeader:
 			principal, email, err := r.parsePrincipalAndEmail(ctx, value)
 			if err != nil {
-				r.logger.Warn("Failed to parse principal from authorization header",
-					"auth_id", authID,
-					"error", err.Error())
+				if strings.Contains(err.Error(), "token is not a JWT") {
+					r.logger.Debug("Authorization header contains non-JWT token",
+						"auth_id", authID)
+				} else {
+					r.logger.Warn("Failed to parse principal from authorization header",
+						"auth_id", authID,
+						"error", err.Error())
+				}
 				continue
 			}
 
@@ -219,12 +224,14 @@ func (r *AuthRepository) ParsePrincipals(ctx context.Context, headers map[string
 				if err != nil {
 					errCount++
 					lastError = err
-					r.logger.Warn("Failed to parse on-behalf-of token",
-						"auth_id", authID,
-						"token_index", i,
-						"error", err.Error(),
-						"error_type", r.classifyAuthError(err),
-						"token_preview", r.safeTokenLog(strings.TrimSpace(jwt)))
+					if !strings.Contains(err.Error(), "token is not a JWT") {
+						r.logger.Warn("Failed to parse on-behalf-of token",
+							"auth_id", authID,
+							"token_index", i,
+							"error", err.Error(),
+							"error_type", r.classifyAuthError(err),
+							"token_preview", r.safeTokenLog(strings.TrimSpace(jwt)))
+					}
 					continue
 				}
 
@@ -242,13 +249,20 @@ func (r *AuthRepository) ParsePrincipals(ctx context.Context, headers map[string
 			}
 
 			if lastError != nil {
-				r.logger.Error("On-behalf-of parsing completed with errors",
-					"auth_id", authID,
-					"total_tokens", len(forwardedJWTs),
-					"error_count", errCount,
-					"success_count", len(onBehalfOfPrincipals),
-					"last_error", lastError.Error(),
-					"last_error_type", r.classifyAuthError(lastError))
+				if strings.Contains(lastError.Error(), "token is not a JWT") {
+					r.logger.Debug("On-behalf-of parsing skipped: non-JWT tokens",
+						"auth_id", authID,
+						"total_tokens", len(forwardedJWTs),
+						"error_count", errCount)
+				} else {
+					r.logger.Error("On-behalf-of parsing completed with errors",
+						"auth_id", authID,
+						"total_tokens", len(forwardedJWTs),
+						"error_count", errCount,
+						"success_count", len(onBehalfOfPrincipals),
+						"last_error", lastError.Error(),
+						"last_error_type", r.classifyAuthError(lastError))
+				}
 			}
 		}
 	}
@@ -341,6 +355,13 @@ func (r *AuthRepository) parsePrincipalAndEmail(ctx context.Context, token strin
 		r.logger.Warn("Empty token provided for principal parsing",
 			"original_token_length", len(originalToken))
 		return "", "", errors.New("empty token")
+	}
+
+	// Skip validation for non-JWT tokens (e.g., service identity strings)
+	if !strings.Contains(token, ".") {
+		r.logger.Debug("Skipping non-JWT token",
+			"token_preview", r.safeTokenLog(token))
+		return "", "", fmt.Errorf("token is not a JWT: %s", r.safeTokenLog(token))
 	}
 
 	parsedJWT, err := r.validator.ValidateToken(ctx, token)
