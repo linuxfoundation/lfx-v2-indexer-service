@@ -567,8 +567,8 @@ func TestAuthRepository_EdgeCases(t *testing.T) {
 		assert.Error(t, err)
 		assert.Empty(t, principal)
 		assert.Empty(t, email)
-		// "Bearer " (length 7) doesn't trigger the prefix strip, so it's treated as a non-JWT token
-		assert.Contains(t, err.Error(), "token is not a JWT")
+		// "Bearer " (length 7) triggers the prefix strip, leaving an empty string
+		assert.Contains(t, err.Error(), "empty token")
 	})
 }
 

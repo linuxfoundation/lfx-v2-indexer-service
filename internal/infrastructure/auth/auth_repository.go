@@ -23,6 +23,9 @@ import (
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
 )
 
+// ErrNonJWTToken is returned when a token does not have the structure of a JWT.
+var ErrNonJWTToken = errors.New("token is not a JWT")
+
 // HeimdallClaims contains extra custom claims we want to parse from the JWT token
 type HeimdallClaims struct {
 	Principal string `json:"principal"`
@@ -107,7 +110,7 @@ func (r *AuthRepository) ValidateToken(ctx context.Context, token string) (*cont
 
 	// Trim any leading, case-insensitive "bearer " prefix
 	originalToken := token
-	if len(token) > 7 && strings.ToLower(token[:7]) == constants.BearerPrefix {
+	if len(token) >= 7 && strings.ToLower(token[:7]) == constants.BearerPrefix {
 		token = token[7:]
 	}
 
@@ -168,7 +171,7 @@ func (r *AuthRepository) ParsePrincipals(ctx context.Context, headers map[string
 		case constants.AuthorizationHeader:
 			principal, email, err := r.parsePrincipalAndEmail(ctx, value)
 			if err != nil {
-				if strings.Contains(err.Error(), "token is not a JWT") {
+				if errors.Is(err, ErrNonJWTToken) {
 					r.logger.Debug("Authorization header contains non-JWT token",
 						"auth_id", authID)
 				} else {
@@ -211,6 +214,7 @@ func (r *AuthRepository) ParsePrincipals(ctx context.Context, headers map[string
 				"token_count", len(forwardedJWTs))
 
 			errCount := 0
+			hasRealJWTError := false
 			var err, lastError error
 			for i, jwt := range forwardedJWTs {
 				var principal, email string
@@ -224,7 +228,8 @@ func (r *AuthRepository) ParsePrincipals(ctx context.Context, headers map[string
 				if err != nil {
 					errCount++
 					lastError = err
-					if !strings.Contains(err.Error(), "token is not a JWT") {
+					if !errors.Is(err, ErrNonJWTToken) {
+						hasRealJWTError = true
 						r.logger.Warn("Failed to parse on-behalf-of token",
 							"auth_id", authID,
 							"token_index", i,
@@ -249,7 +254,7 @@ func (r *AuthRepository) ParsePrincipals(ctx context.Context, headers map[string
 			}
 
 			if lastError != nil {
-				if strings.Contains(lastError.Error(), "token is not a JWT") {
+				if !hasRealJWTError {
 					r.logger.Debug("On-behalf-of parsing skipped: non-JWT tokens",
 						"auth_id", authID,
 						"total_tokens", len(forwardedJWTs),
@@ -346,7 +351,7 @@ func (r *AuthRepository) parsePrincipalAndEmail(ctx context.Context, token strin
 
 	// Trim any leading, case-insensitive "bearer " prefix
 	originalToken := token
-	if len(token) > 7 && strings.ToLower(token[:7]) == constants.BearerPrefix {
+	if len(token) >= 7 && strings.ToLower(token[:7]) == constants.BearerPrefix {
 		token = token[7:]
 	}
 
@@ -361,7 +366,7 @@ func (r *AuthRepository) parsePrincipalAndEmail(ctx context.Context, token strin
 	if !strings.Contains(token, ".") {
 		r.logger.Debug("Skipping non-JWT token",
 			"token_preview", r.safeTokenLog(token))
-		return "", "", fmt.Errorf("token is not a JWT: %s", r.safeTokenLog(token))
+		return "", "", fmt.Errorf("%w: %s", ErrNonJWTToken, r.safeTokenLog(token))
 	}
 
 	parsedJWT, err := r.validator.ValidateToken(ctx, token)
