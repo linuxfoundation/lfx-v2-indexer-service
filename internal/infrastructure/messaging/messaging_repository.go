@@ -11,38 +11,45 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nats-io/nats.go"
+
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
-	"github.com/nats-io/nats.go"
 )
 
 // MessagingRepository implements the MessagingRepository interface for NATS operations
 type MessagingRepository struct {
-	conn           *nats.Conn
-	authRepo       contracts.AuthRepository
-	logger         *slog.Logger
-	subscriptions  []*nats.Subscription
-	mu             sync.RWMutex
-	drainTimeout   time.Duration
-	isShuttingDown bool
+	conn              *nats.Conn
+	authRepo          contracts.AuthRepository
+	logger            *slog.Logger
+	subscriptions     []*nats.Subscription
+	mu                sync.RWMutex
+	drainTimeout      time.Duration
+	isShuttingDown    bool
+	pendingMsgLimit   int
+	pendingBytesLimit int
+	sem               chan struct{}
 }
 
 // NewMessagingRepository creates a new NATS messaging repository with auth delegation
-func NewMessagingRepository(conn *nats.Conn, authRepo contracts.AuthRepository, logger *slog.Logger, drainTimeout time.Duration) *MessagingRepository {
+func NewMessagingRepository(conn *nats.Conn, authRepo contracts.AuthRepository, logger *slog.Logger, drainTimeout time.Duration, pendingMsgLimit int, pendingBytesLimit int, workerCount int) *MessagingRepository {
 	msgLogger := logging.WithComponent(logger, constants.ComponentNATS)
 
 	repo := &MessagingRepository{
-		conn:           conn,
-		authRepo:       authRepo,
-		logger:         msgLogger,
-		subscriptions:  make([]*nats.Subscription, 0),
-		drainTimeout:   drainTimeout,
-		isShuttingDown: false,
+		conn:              conn,
+		authRepo:          authRepo,
+		logger:            msgLogger,
+		subscriptions:     make([]*nats.Subscription, 0),
+		drainTimeout:      drainTimeout,
+		isShuttingDown:    false,
+		pendingMsgLimit:   pendingMsgLimit,
+		pendingBytesLimit: pendingBytesLimit,
+		sem:               make(chan struct{}, workerCount),
 	}
 
 	// Log initialization
-	msgLogger.Info("NATS messaging repository initialized", "drain_timeout", drainTimeout, "auth_repo_configured", authRepo != nil)
+	msgLogger.Info("NATS messaging repository initialized", "drain_timeout", drainTimeout, "worker_count", workerCount, "auth_repo_configured", authRepo != nil)
 
 	return repo
 }
@@ -60,15 +67,19 @@ func (r *MessagingRepository) Subscribe(ctx context.Context, subject string, han
 
 	// Create the NATS message handler
 	natsHandler := func(msg *nats.Msg) {
-		// Generate request_id at NATS entry point
-		ctx, logger := logging.WithRequestID(context.Background(), r.logger)
+		data := msg.Data
+		msgSubject := msg.Subject
+		go func() {
+			r.sem <- struct{}{}
+			defer func() { <-r.sem }()
 
-		logger.Debug("NATS message received", "subject", msg.Subject, "size", len(msg.Data))
+			ctx, logger := logging.WithRequestID(context.Background(), r.logger)
+			logger.Debug("NATS message received", "subject", msgSubject, "size", len(data))
 
-		// Handle the message
-		if err := handler.Handle(ctx, msg.Data, msg.Subject); err != nil {
-			logger.Error("Message handler failed", "error", err.Error())
-		}
+			if err := handler.Handle(ctx, data, msgSubject); err != nil {
+				logger.Error("Message handler failed", "error", err.Error())
+			}
+		}()
 	}
 
 	// Subscribe to the subject
@@ -94,15 +105,20 @@ func (r *MessagingRepository) QueueSubscribe(ctx context.Context, subject string
 
 	// Create the NATS message handler
 	natsHandler := func(msg *nats.Msg) {
-		// Generate request_id at NATS entry point
-		ctx, logger := logging.WithRequestID(context.Background(), r.logger)
+		// Capture message data before handing off to goroutine
+		data := msg.Data
+		subject := msg.Subject
+		go func() {
+			r.sem <- struct{}{}
+			defer func() { <-r.sem }()
 
-		logger.Debug("NATS queue message received", "subject", msg.Subject, "queue", queue, "size", len(msg.Data))
+			ctx, logger := logging.WithRequestID(context.Background(), r.logger)
+			logger.Debug("NATS queue message received", "subject", subject, "queue", queue, "size", len(data))
 
-		// Handle the message
-		if err := handler.Handle(ctx, msg.Data, msg.Subject); err != nil {
-			logger.Error("Queue message handler failed", "queue", queue, "error", err.Error())
-		}
+			if err := handler.Handle(ctx, data, subject); err != nil {
+				logger.Error("Queue message handler failed", "queue", queue, "error", err.Error())
+			}
+		}()
 	}
 
 	// Subscribe to the subject with queue group
@@ -110,6 +126,10 @@ func (r *MessagingRepository) QueueSubscribe(ctx context.Context, subject string
 	if err != nil {
 		r.logger.Error("Failed to queue subscribe to NATS", "subject", subject, "queue", queue, "error", err.Error())
 		return fmt.Errorf("failed to queue subscribe to subject %s with queue %s: %w", subject, queue, err)
+	}
+
+	if err := sub.SetPendingLimits(r.pendingMsgLimit, r.pendingBytesLimit); err != nil {
+		r.logger.Warn("Failed to set pending limits on subscription", "subject", subject, "error", err.Error())
 	}
 
 	// Store the subscription for cleanup
@@ -128,29 +148,34 @@ func (r *MessagingRepository) QueueSubscribeWithReply(ctx context.Context, subje
 
 	// Create the NATS message handler with reply support
 	natsHandler := func(msg *nats.Msg) {
-		// Generate request_id at NATS entry point
-		ctx, logger := logging.WithRequestID(context.Background(), r.logger)
+		// Capture fields needed by goroutine before msg may be reused
+		data := msg.Data
+		msgSubject := msg.Subject
+		replySubject := msg.Reply
 
-		logger.Debug("NATS queue message with reply received", "subject", msg.Subject, "queue", queue, "has_reply", msg.Reply != "")
+		go func() {
+			r.sem <- struct{}{}
+			defer func() { <-r.sem }()
 
-		// Create reply function if message has reply subject
-		var replyFunc func([]byte) error
-		if msg.Reply != "" {
-			replyFunc = func(data []byte) error {
-				logger.Debug("Sending reply to NATS message", "reply_subject", msg.Reply, "reply_size", len(data))
+			ctx, logger := logging.WithRequestID(context.Background(), r.logger)
+			logger.Debug("NATS queue message with reply received", "subject", msgSubject, "queue", queue, "has_reply", replySubject != "")
 
-				err := msg.Respond(data)
-				if err != nil {
-					logger.Error("Failed to send reply", "reply_subject", msg.Reply, "error", err.Error())
+			var replyFunc func([]byte) error
+			if replySubject != "" {
+				replyFunc = func(replyData []byte) error {
+					logger.Debug("Sending reply to NATS message", "reply_subject", replySubject, "reply_size", len(replyData))
+					if err := msg.Respond(replyData); err != nil {
+						logger.Error("Failed to send reply", "reply_subject", replySubject, "error", err.Error())
+						return err
+					}
+					return nil
 				}
-				return err
 			}
-		}
 
-		// Handle the message with reply support
-		if err := handler.HandleWithReply(ctx, msg.Data, msg.Subject, replyFunc); err != nil {
-			logger.Error("Queue message with reply handler failed", "queue", queue, "error", err.Error())
-		}
+			if err := handler.HandleWithReply(ctx, data, msgSubject, replyFunc); err != nil {
+				logger.Error("Queue message with reply handler failed", "queue", queue, "error", err.Error())
+			}
+		}()
 	}
 
 	// Subscribe to the subject with queue group
@@ -158,6 +183,10 @@ func (r *MessagingRepository) QueueSubscribeWithReply(ctx context.Context, subje
 	if err != nil {
 		r.logger.Error("Failed to queue subscribe with reply to NATS", "subject", subject, "queue", queue, "error", err.Error())
 		return fmt.Errorf("failed to queue subscribe with reply to subject %s with queue %s: %w", subject, queue, err)
+	}
+
+	if err := sub.SetPendingLimits(r.pendingMsgLimit, r.pendingBytesLimit); err != nil {
+		r.logger.Warn("Failed to set pending limits on subscription", "subject", subject, "error", err.Error())
 	}
 
 	// Store the subscription for cleanup

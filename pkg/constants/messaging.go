@@ -97,3 +97,10 @@ const (
 	RefreshFalse = "false" // OpenSearch refresh parameter
 	ReplyTimeout = 5 * time.Second
 )
+
+// NATS pending buffer and concurrency defaults
+const (
+	DefaultPendingMsgLimit   = 1_000_000         // 1M messages
+	DefaultPendingBytesLimit = 512 * 1024 * 1024 // 512 MiB
+	DefaultWorkerCount       = 100               // concurrent message handlers
+)

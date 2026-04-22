@@ -13,11 +13,12 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/opensearch-project/opensearch-go/v2"
+	"github.com/opensearch-project/opensearch-go/v2/opensearchapi"
+
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
-	"github.com/opensearch-project/opensearch-go/v2"
-	"github.com/opensearch-project/opensearch-go/v2/opensearchapi"
 )
 
 // StorageRepository implements the domain StorageRepository interface
@@ -43,7 +44,7 @@ func (r *StorageRepository) Index(ctx context.Context, index string, docID strin
 		Index:      index,
 		DocumentID: docID,
 		Body:       body,
-		Refresh:    constants.RefreshTrue,
+		Refresh:    constants.RefreshFalse,
 	}
 
 	res, err := req.Do(ctx, r.client)
@@ -185,7 +186,7 @@ func (r *StorageRepository) Update(ctx context.Context, index string, docID stri
 		Index:      index,
 		DocumentID: docID,
 		Body:       body,
-		Refresh:    constants.RefreshTrue,
+		Refresh:    constants.RefreshFalse,
 	}
 
 	res, err := req.Do(ctx, r.client)
@@ -219,7 +220,7 @@ func (r *StorageRepository) Delete(ctx context.Context, index string, docID stri
 	req := opensearchapi.DeleteRequest{
 		Index:      index,
 		DocumentID: docID,
-		Refresh:    constants.RefreshTrue,
+		Refresh:    constants.RefreshFalse,
 	}
 
 	res, err := req.Do(ctx, r.client)
@@ -290,7 +291,7 @@ func (r *StorageRepository) BulkIndex(ctx context.Context, operations []contract
 
 	req := opensearchapi.BulkRequest{
 		Body:    &buf,
-		Refresh: constants.RefreshTrue,
+		Refresh: constants.RefreshFalse,
 	}
 
 	res, err := req.Do(ctx, r.client)
@@ -368,7 +369,7 @@ func (r *StorageRepository) UpdateWithOptimisticLock(ctx context.Context, index,
 		Index:      index,
 		DocumentID: docID,
 		Body:       body,
-		Refresh:    constants.RefreshTrue,
+		Refresh:    constants.RefreshFalse,
 	}
 
 	// Add optimistic concurrency control parameters if provided

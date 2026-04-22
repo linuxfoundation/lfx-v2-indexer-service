@@ -243,6 +243,9 @@ func (c *Container) initializeRepositories() error {
 		c.AuthRepository,
 		c.Logger,
 		c.Config.NATS.DrainTimeout,
+		c.Config.NATS.PendingMsgLimit,
+		c.Config.NATS.PendingBytesLimit,
+		c.Config.NATS.WorkerCount,
 	)
 
 	// Initialize cleanup repository (background operations)
