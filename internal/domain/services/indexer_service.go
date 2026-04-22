@@ -1353,15 +1353,15 @@ func (s *IndexerService) buildTransactionBodyFromIndexingConfig(
 // expandTemplates recursively expands template variables in the format {{ field_name }}
 // with values from the provided data map. Supports nested field access (e.g., {{ parent.id }})
 // and preserves original data types.
-func expandTemplates(data map[string]any, value any, objectType string) (any, error) {
+func expandTemplates(data map[string]any, value any, objectType string, logger *slog.Logger) (any, error) {
 	switch v := value.(type) {
 	case string:
-		return expandTemplateString(data, v, objectType)
+		return expandTemplateString(data, v, objectType, logger)
 	case []interface{}:
 		// Handle arrays - expand templates in each element
 		result := make([]interface{}, len(v))
 		for i, item := range v {
-			expanded, err := expandTemplates(data, item, objectType)
+			expanded, err := expandTemplates(data, item, objectType, logger)
 			if err != nil {
 				return nil, err
 			}
@@ -1372,7 +1372,7 @@ func expandTemplates(data map[string]any, value any, objectType string) (any, er
 		// Handle nested objects - expand templates in each value
 		result := make(map[string]interface{}, len(v))
 		for key, val := range v {
-			expanded, err := expandTemplates(data, val, objectType)
+			expanded, err := expandTemplates(data, val, objectType, logger)
 			if err != nil {
 				return nil, err
 			}
@@ -1389,7 +1389,7 @@ func expandTemplates(data map[string]any, value any, objectType string) (any, er
 // If a referenced field is not present in data, the expansion is skipped (empty
 // string for whole-value templates, blank substitution for embedded ones) and a
 // warning is logged. Structural errors (e.g. traversing a non-object) are fatal.
-func expandTemplateString(data map[string]any, template string, objectType string) (any, error) {
+func expandTemplateString(data map[string]any, template string, objectType string, logger *slog.Logger) (any, error) {
 	// Check if this is an escaped template (e.g., \{{ field }})
 	if strings.Contains(template, "\\{{") {
 		// Remove escape characters
@@ -1403,10 +1403,10 @@ func expandTemplateString(data map[string]any, template string, objectType strin
 		value, err := getNestedField(data, fieldPath)
 		if err != nil {
 			if isFieldNotFoundError(err) {
-				// Upstream publishers (e.g. ONAP via groupsio_artifact) embed
-				// infrastructure-specific template vars that have no LFX data
-				// counterpart. Skip silently rather than dropping the document.
-				slog.Default().Warn("Skipping unresolvable template field",
+				// Upstream publishers embed infrastructure-specific template vars
+				// that have no LFX data counterpart. Warn and skip expansion
+				// rather than dropping the document.
+				logger.Warn("Skipping unresolvable template field",
 					"field", fieldPath,
 					"object_type", objectType)
 				return "", nil
@@ -1429,7 +1429,7 @@ func expandTemplateString(data map[string]any, template string, objectType strin
 		value, err := getNestedField(data, fieldPath)
 		if err != nil {
 			if isFieldNotFoundError(err) {
-				slog.Default().Warn("Skipping unresolvable template field",
+				logger.Warn("Skipping unresolvable template field",
 					"field", fieldPath,
 					"object_type", objectType)
 				result = strings.ReplaceAll(result, fullMatch, "")
@@ -1503,7 +1503,7 @@ func (s *IndexerService) parseIndexingConfig(indexingConfigData map[string]any, 
 	logger.Debug("Parsing indexing config", "indexing_config", indexingConfigData, "object_type", objectType)
 
 	// First, expand all templates in the indexing_config data
-	expandedData, err := expandTemplates(transactionData, indexingConfigData, objectType)
+	expandedData, err := expandTemplates(transactionData, indexingConfigData, objectType, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to expand templates in indexing_config: %w", err)
 	}
