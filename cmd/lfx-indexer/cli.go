@@ -42,6 +42,9 @@ func parseCLIFlags() *config.CLIConfig {
 		fmt.Fprintf(os.Stderr, "  --bind <iface>   Interface to bind on (default: *, use 0.0.0.0 for all)\n")
 		fmt.Fprintf(os.Stderr, "  --nojanitor      Disable background janitor service\n")
 		fmt.Fprintf(os.Stderr, "  --simple-health  Use simple 'OK' health responses for K8s\n")
+		fmt.Fprintf(os.Stderr, "  --nats-pending-msg-limit <n>   NATS subscription pending message limit (0 = use env/default)\n")
+		fmt.Fprintf(os.Stderr, "  --nats-pending-bytes-limit <n> NATS subscription pending bytes limit (0 = use env/default)\n")
+		fmt.Fprintf(os.Stderr, "  --nats-worker-count <n>        NATS concurrent message handler goroutines (0 = use env/default)\n")
 		fmt.Fprintf(os.Stderr, "  --check-config   Check configuration and exit\n")
 		fmt.Fprintf(os.Stderr, "  --help           Show this help message\n\n")
 
@@ -63,6 +66,9 @@ func parseCLIFlags() *config.CLIConfig {
 		fmt.Fprintf(os.Stderr, "    LOG_LEVEL=info         Logging level (debug,info,warn,error)\n")
 		fmt.Fprintf(os.Stderr, "    LOG_FORMAT=json        Log format (json,text)\n")
 		fmt.Fprintf(os.Stderr, "    NATS_URL=nats://...    NATS server URL\n")
+		fmt.Fprintf(os.Stderr, "    NATS_PENDING_MSG_LIMIT=1000000     NATS pending message limit\n")
+		fmt.Fprintf(os.Stderr, "    NATS_PENDING_BYTES_LIMIT=536870912 NATS pending bytes limit\n")
+		fmt.Fprintf(os.Stderr, "    NATS_WORKER_COUNT=100              NATS concurrent handlers\n")
 		fmt.Fprintf(os.Stderr, "    OPENSEARCH_URL=http... OpenSearch URL\n\n")
 
 		fmt.Fprintf(os.Stderr, "Configuration precedence: CLI flags > Environment variables > Defaults\n\n")

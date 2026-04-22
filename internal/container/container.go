@@ -103,17 +103,17 @@ func NewContainer(logger *slog.Logger, cliConfig *config.CLIConfig) (*Container,
 			logger.Info("Bind address set by CLI flag", "bind", cliConfig.Bind)
 		}
 
-		if cliConfig.NATSPendingMsgLimit > 0 {
+		if cliConfig.NATSPendingMsgLimit != 0 {
 			config.NATS.PendingMsgLimit = cliConfig.NATSPendingMsgLimit
 			logger.Info("NATS pending message limit overridden by CLI flag", "pending_msg_limit", cliConfig.NATSPendingMsgLimit)
 		}
 
-		if cliConfig.NATSPendingBytesLimit > 0 {
+		if cliConfig.NATSPendingBytesLimit != 0 {
 			config.NATS.PendingBytesLimit = cliConfig.NATSPendingBytesLimit
 			logger.Info("NATS pending bytes limit overridden by CLI flag", "pending_bytes_limit", cliConfig.NATSPendingBytesLimit)
 		}
 
-		if cliConfig.NATSWorkerCount > 0 {
+		if cliConfig.NATSWorkerCount != 0 {
 			config.NATS.WorkerCount = cliConfig.NATSWorkerCount
 			logger.Info("NATS worker count overridden by CLI flag", "worker_count", cliConfig.NATSWorkerCount)
 		}

@@ -237,6 +237,25 @@ func (r *MessagingRepository) Publish(ctx context.Context, subject string, data 
 	return nil
 }
 
+// waitForHandlers waits for in-flight message handler goroutines to finish,
+// bounded by the provided timeout so shutdown cannot hang indefinitely.
+func (r *MessagingRepository) waitForHandlers(timeout time.Duration) {
+	if timeout <= 0 {
+		r.logger.Warn("No time remaining to wait for in-flight NATS handlers")
+		return
+	}
+	done := make(chan struct{})
+	go func() {
+		r.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		r.logger.Warn("Timed out waiting for in-flight NATS handlers", "timeout", timeout)
+	}
+}
+
 // DrainWithTimeout performs graceful NATS connection drain with timeout
 func (r *MessagingRepository) DrainWithTimeout() error {
 	r.mu.Lock()
@@ -246,18 +265,24 @@ func (r *MessagingRepository) DrainWithTimeout() error {
 
 	r.logger.Info("Starting NATS graceful drain sequence", "timeout", r.drainTimeout, "subscriptions", totalSubscriptions)
 
+	// Record the deadline so we can compute remaining time for wg.Wait().
+	deadline := time.Now().Add(r.drainTimeout)
+
 	if r.conn == nil {
 		r.logger.Warn("NATS connection is nil, skipping drain")
+		r.waitForHandlers(r.drainTimeout)
 		return nil
 	}
 
 	if r.conn.IsClosed() {
 		r.logger.Info("NATS connection already closed, no drain needed")
+		r.waitForHandlers(r.drainTimeout)
 		return nil
 	}
 
 	if r.conn.IsDraining() {
 		r.logger.Info("NATS connection already draining, waiting for completion")
+		r.waitForHandlers(r.drainTimeout)
 		return nil
 	}
 
@@ -286,10 +311,10 @@ func (r *MessagingRepository) DrainWithTimeout() error {
 		// Drain completed successfully
 	}
 
-	// Wait for all in-flight handler goroutines to finish.
-	// Conn.Drain() only waits for callbacks to return, not for goroutines
-	// spawned inside them, so we track them with a WaitGroup.
-	r.wg.Wait()
+	// Wait for all in-flight handler goroutines to finish, bounded by the
+	// remaining drain budget. Conn.Drain() only waits for callbacks to return,
+	// not for goroutines spawned inside them, so we track them with a WaitGroup.
+	r.waitForHandlers(time.Until(deadline))
 
 	r.logger.Info("NATS drain completed successfully", "subscriptions_processed", totalSubscriptions)
 	return nil
