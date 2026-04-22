@@ -25,6 +25,7 @@ type MessagingRepository struct {
 	logger            *slog.Logger
 	subscriptions     []*nats.Subscription
 	mu                sync.RWMutex
+	wg                sync.WaitGroup
 	drainTimeout      time.Duration
 	isShuttingDown    bool
 	pendingMsgLimit   int
@@ -35,6 +36,11 @@ type MessagingRepository struct {
 // NewMessagingRepository creates a new NATS messaging repository with auth delegation
 func NewMessagingRepository(conn *nats.Conn, authRepo contracts.AuthRepository, logger *slog.Logger, drainTimeout time.Duration, pendingMsgLimit int, pendingBytesLimit int, workerCount int) *MessagingRepository {
 	msgLogger := logging.WithComponent(logger, constants.ComponentNATS)
+
+	if workerCount <= 0 {
+		msgLogger.Warn("Invalid workerCount, falling back to default", "provided", workerCount, "default", constants.DefaultWorkerCount)
+		workerCount = constants.DefaultWorkerCount
+	}
 
 	repo := &MessagingRepository{
 		conn:              conn,
@@ -70,8 +76,12 @@ func (r *MessagingRepository) Subscribe(ctx context.Context, subject string, han
 		data := append([]byte(nil), msg.Data...)
 		msgSubject := msg.Subject
 		r.sem <- struct{}{}
+		r.wg.Add(1)
 		go func() {
-			defer func() { <-r.sem }()
+			defer func() {
+				<-r.sem
+				r.wg.Done()
+			}()
 
 			ctx, logger := logging.WithRequestID(context.Background(), r.logger)
 			logger.Debug("NATS message received", "subject", msgSubject, "size", len(data))
@@ -109,8 +119,12 @@ func (r *MessagingRepository) QueueSubscribe(ctx context.Context, subject string
 		data := append([]byte(nil), msg.Data...)
 		subject := msg.Subject
 		r.sem <- struct{}{}
+		r.wg.Add(1)
 		go func() {
-			defer func() { <-r.sem }()
+			defer func() {
+				<-r.sem
+				r.wg.Done()
+			}()
 
 			ctx, logger := logging.WithRequestID(context.Background(), r.logger)
 			logger.Debug("NATS queue message received", "subject", subject, "queue", queue, "size", len(data))
@@ -129,7 +143,8 @@ func (r *MessagingRepository) QueueSubscribe(ctx context.Context, subject string
 	}
 
 	if err := sub.SetPendingLimits(r.pendingMsgLimit, r.pendingBytesLimit); err != nil {
-		r.logger.Warn("Failed to set pending limits on subscription", "subject", subject, "error", err.Error())
+		_ = sub.Unsubscribe()
+		return fmt.Errorf("failed to set pending limits on subscription %s: %w", subject, err)
 	}
 
 	// Store the subscription for cleanup
@@ -154,8 +169,12 @@ func (r *MessagingRepository) QueueSubscribeWithReply(ctx context.Context, subje
 		replySubject := msg.Reply
 
 		r.sem <- struct{}{}
+		r.wg.Add(1)
 		go func() {
-			defer func() { <-r.sem }()
+			defer func() {
+				<-r.sem
+				r.wg.Done()
+			}()
 
 			ctx, logger := logging.WithRequestID(context.Background(), r.logger)
 			logger.Debug("NATS queue message with reply received", "subject", msgSubject, "queue", queue, "has_reply", replySubject != "")
@@ -186,7 +205,8 @@ func (r *MessagingRepository) QueueSubscribeWithReply(ctx context.Context, subje
 	}
 
 	if err := sub.SetPendingLimits(r.pendingMsgLimit, r.pendingBytesLimit); err != nil {
-		r.logger.Warn("Failed to set pending limits on subscription", "subject", subject, "error", err.Error())
+		_ = sub.Unsubscribe()
+		return fmt.Errorf("failed to set pending limits on subscription %s: %w", subject, err)
 	}
 
 	// Store the subscription for cleanup
@@ -265,6 +285,11 @@ func (r *MessagingRepository) DrainWithTimeout() error {
 	}():
 		// Drain completed successfully
 	}
+
+	// Wait for all in-flight handler goroutines to finish.
+	// Conn.Drain() only waits for callbacks to return, not for goroutines
+	// spawned inside them, so we track them with a WaitGroup.
+	r.wg.Wait()
 
 	r.logger.Info("NATS drain completed successfully", "subscriptions_processed", totalSubscriptions)
 	return nil
