@@ -246,6 +246,18 @@ func (c *AppConfig) validateNATS() error {
 		return fmt.Errorf("NATS connection timeout must be positive, got: %v", c.NATS.ConnectionTimeout)
 	}
 
+	if c.NATS.PendingMsgLimit <= 0 {
+		return fmt.Errorf("NATS pending message limit must be positive, got: %d", c.NATS.PendingMsgLimit)
+	}
+
+	if c.NATS.PendingBytesLimit <= 0 {
+		return fmt.Errorf("NATS pending bytes limit must be positive, got: %d", c.NATS.PendingBytesLimit)
+	}
+
+	if c.NATS.WorkerCount <= 0 {
+		return fmt.Errorf("NATS worker count must be positive, got: %d", c.NATS.WorkerCount)
+	}
+
 	return nil
 }
 

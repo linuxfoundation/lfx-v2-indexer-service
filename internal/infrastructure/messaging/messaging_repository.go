@@ -67,10 +67,10 @@ func (r *MessagingRepository) Subscribe(ctx context.Context, subject string, han
 
 	// Create the NATS message handler
 	natsHandler := func(msg *nats.Msg) {
-		data := msg.Data
+		data := append([]byte(nil), msg.Data...)
 		msgSubject := msg.Subject
+		r.sem <- struct{}{}
 		go func() {
-			r.sem <- struct{}{}
 			defer func() { <-r.sem }()
 
 			ctx, logger := logging.WithRequestID(context.Background(), r.logger)
@@ -105,11 +105,11 @@ func (r *MessagingRepository) QueueSubscribe(ctx context.Context, subject string
 
 	// Create the NATS message handler
 	natsHandler := func(msg *nats.Msg) {
-		// Capture message data before handing off to goroutine
-		data := msg.Data
+		// Deep-copy message data before handing off to goroutine
+		data := append([]byte(nil), msg.Data...)
 		subject := msg.Subject
+		r.sem <- struct{}{}
 		go func() {
-			r.sem <- struct{}{}
 			defer func() { <-r.sem }()
 
 			ctx, logger := logging.WithRequestID(context.Background(), r.logger)
@@ -148,13 +148,13 @@ func (r *MessagingRepository) QueueSubscribeWithReply(ctx context.Context, subje
 
 	// Create the NATS message handler with reply support
 	natsHandler := func(msg *nats.Msg) {
-		// Capture fields needed by goroutine before msg may be reused
-		data := msg.Data
+		// Deep-copy fields before msg may be reused after callback returns
+		data := append([]byte(nil), msg.Data...)
 		msgSubject := msg.Subject
 		replySubject := msg.Reply
 
+		r.sem <- struct{}{}
 		go func() {
-			r.sem <- struct{}{}
 			defer func() { <-r.sem }()
 
 			ctx, logger := logging.WithRequestID(context.Background(), r.logger)
@@ -164,7 +164,7 @@ func (r *MessagingRepository) QueueSubscribeWithReply(ctx context.Context, subje
 			if replySubject != "" {
 				replyFunc = func(replyData []byte) error {
 					logger.Debug("Sending reply to NATS message", "reply_subject", replySubject, "reply_size", len(replyData))
-					if err := msg.Respond(replyData); err != nil {
+					if err := r.conn.Publish(replySubject, replyData); err != nil {
 						logger.Error("Failed to send reply", "reply_subject", replySubject, "error", err.Error())
 						return err
 					}
