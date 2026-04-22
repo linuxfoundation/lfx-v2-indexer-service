@@ -6,8 +6,9 @@ package constants_test
 import (
 	"testing"
 
-	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 )
 
 func TestBuildEventSubject(t *testing.T) {

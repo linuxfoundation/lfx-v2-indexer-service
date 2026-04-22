@@ -31,9 +31,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/env"
 	"github.com/opensearch-project/opensearch-go/v2"
 	"github.com/opensearch-project/opensearch-go/v2/opensearchapi"
+
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/env"
 )
 
 // Config holds the migration configuration
