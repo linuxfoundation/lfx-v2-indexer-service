@@ -545,6 +545,9 @@ func (r *MessagingRepository) GetMetrics() map[string]interface{} {
 		connected = r.conn.IsConnected()
 	}
 
+	workerCapacity := cap(r.sem)
+	workersInFlight := workerCapacity - len(r.sem)
+
 	return map[string]interface{}{
 		"connection_status":    connectionStatus,
 		"connected":            connected,
@@ -554,6 +557,8 @@ func (r *MessagingRepository) GetMetrics() map[string]interface{} {
 		"is_shutting_down":     r.isShuttingDown,
 		"drain_timeout":        r.drainTimeout,
 		"auth_repo_configured": r.authRepo != nil,
+		"worker_capacity":      workerCapacity,
+		"workers_in_flight":    workersInFlight,
 	}
 }
 
