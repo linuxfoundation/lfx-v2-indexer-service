@@ -99,6 +99,11 @@ func (r *MessagingRepository) Subscribe(ctx context.Context, subject string, han
 		return fmt.Errorf("failed to subscribe to subject %s: %w", subject, err)
 	}
 
+	if err := sub.SetPendingLimits(r.pendingMsgLimit, r.pendingBytesLimit); err != nil {
+		_ = sub.Unsubscribe()
+		return fmt.Errorf("failed to set pending limits on subscription %s: %w", subject, err)
+	}
+
 	// Store the subscription for cleanup
 	r.subscriptions = append(r.subscriptions, sub)
 
