@@ -100,6 +100,11 @@ const (
 	// preferred setting for high-throughput writes where eventual consistency
 	// within 1s is acceptable.
 	RefreshFalse = "false"
+	// RefreshWaitFor blocks until the next refresh cycle completes before
+	// returning, making the document immediately searchable without forcing an
+	// extra segment flush. Used when the caller is waiting for an ACK (i.e.
+	// when a NATS reply subject is present).
+	RefreshWaitFor = "wait_for"
 	ReplyTimeout = 5 * time.Second
 )
 

@@ -325,6 +325,12 @@ func (h *indexingHandler) HandleWithReply(ctx context.Context, data []byte, subj
 	messageID := h.useCase.generateMessageID()
 	logger := logging.FromContext(ctx, h.useCase.logger)
 
+	// When the caller supplied a reply subject they are waiting for an ACK, so
+	// use refresh=wait_for to make the document immediately searchable.
+	if reply != nil {
+		ctx = logging.WithRefreshWaitFor(ctx)
+	}
+
 	// Route to appropriate processing method based on subject
 	var err error
 	var messageType string
