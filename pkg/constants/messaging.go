@@ -93,7 +93,7 @@ const (
 // Message processing constants
 const (
 	DefaultQueue = "lfx.indexer.queue"
-	RefreshTrue = "true" // OpenSearch refresh parameter — forces immediate segment refresh; use sparingly (high write latency)
+	RefreshTrue  = "true" // OpenSearch refresh parameter — forces immediate segment refresh; use sparingly (high write latency)
 	// RefreshFalse defers refresh to the next scheduled interval (default 1s).
 	// Documents written with this setting are not immediately searchable — a
 	// subsequent read within ~1s may not return the new document. This is the

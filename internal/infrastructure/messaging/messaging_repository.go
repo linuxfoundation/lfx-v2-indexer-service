@@ -69,14 +69,18 @@ func (r *MessagingRepository) Subscribe(ctx context.Context, subject string, han
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	if r.isShuttingDown {
+		return fmt.Errorf("cannot subscribe to %s: repository is shutting down", subject)
+	}
+
 	r.logger.InfoContext(ctx, "Creating NATS subscription", "subject", subject)
 
 	// Create the NATS message handler
 	natsHandler := func(msg *nats.Msg) {
 		data := append([]byte(nil), msg.Data...)
 		msgSubject := msg.Subject
-		r.sem <- struct{}{}
 		r.wg.Add(1)
+		r.sem <- struct{}{}
 		go func() {
 			defer func() {
 				<-r.sem
@@ -116,15 +120,19 @@ func (r *MessagingRepository) QueueSubscribe(ctx context.Context, subject string
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	if r.isShuttingDown {
+		return fmt.Errorf("cannot queue subscribe to %s: repository is shutting down", subject)
+	}
+
 	r.logger.InfoContext(ctx, "Creating NATS queue subscription", "subject", subject, "queue", queue)
 
 	// Create the NATS message handler
 	natsHandler := func(msg *nats.Msg) {
 		// Deep-copy message data before handing off to goroutine
 		data := append([]byte(nil), msg.Data...)
-		subject := msg.Subject
-		r.sem <- struct{}{}
+		msgSubject := msg.Subject
 		r.wg.Add(1)
+		r.sem <- struct{}{}
 		go func() {
 			defer func() {
 				<-r.sem
@@ -132,9 +140,9 @@ func (r *MessagingRepository) QueueSubscribe(ctx context.Context, subject string
 			}()
 
 			ctx, logger := logging.WithRequestID(context.Background(), r.logger)
-			logger.Debug("NATS queue message received", "subject", subject, "queue", queue, "size", len(data))
+			logger.Debug("NATS queue message received", "subject", msgSubject, "queue", queue, "size", len(data))
 
-			if err := handler.Handle(ctx, data, subject); err != nil {
+			if err := handler.Handle(ctx, data, msgSubject); err != nil {
 				logger.Error("Queue message handler failed", "queue", queue, "error", err.Error())
 			}
 		}()
@@ -164,6 +172,10 @@ func (r *MessagingRepository) QueueSubscribeWithReply(ctx context.Context, subje
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	if r.isShuttingDown {
+		return fmt.Errorf("cannot queue subscribe with reply to %s: repository is shutting down", subject)
+	}
+
 	r.logger.InfoContext(ctx, "Creating NATS queue subscription with reply", "subject", subject, "queue", queue)
 
 	// Create the NATS message handler with reply support
@@ -173,8 +185,8 @@ func (r *MessagingRepository) QueueSubscribeWithReply(ctx context.Context, subje
 		msgSubject := msg.Subject
 		replySubject := msg.Reply
 
-		r.sem <- struct{}{}
 		r.wg.Add(1)
+		r.sem <- struct{}{}
 		go func() {
 			defer func() {
 				<-r.sem
@@ -300,8 +312,10 @@ func (r *MessagingRepository) DrainWithTimeout() error {
 	}
 
 	// Wait for drain to complete
+	drainTimedOut := false
 	select {
 	case <-time.After(r.drainTimeout):
+		drainTimedOut = true
 		r.logger.Warn("NATS drain timeout reached", "timeout", r.drainTimeout)
 	case <-func() <-chan struct{} {
 		done := make(chan struct{})
@@ -313,13 +327,34 @@ func (r *MessagingRepository) DrainWithTimeout() error {
 		}()
 		return done
 	}():
-		// Drain completed successfully
+		// Drain completed before timeout
 	}
 
 	// Wait for all in-flight handler goroutines to finish, bounded by the
 	// remaining drain budget. Conn.Drain() only waits for callbacks to return,
 	// not for goroutines spawned inside them, so we track them with a WaitGroup.
-	r.waitForHandlers(time.Until(deadline))
+	handlersTimedOut := false
+	remaining := time.Until(deadline)
+	if remaining > 0 {
+		done := make(chan struct{})
+		go func() {
+			r.wg.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(remaining):
+			handlersTimedOut = true
+			r.logger.Warn("Timed out waiting for in-flight NATS handlers", "timeout", remaining)
+		}
+	} else {
+		r.logger.Warn("No time remaining to wait for in-flight NATS handlers")
+	}
+
+	if drainTimedOut || handlersTimedOut {
+		r.logger.Warn("NATS drain did not complete cleanly", "drain_timed_out", drainTimedOut, "handlers_timed_out", handlersTimedOut, "subscriptions_processed", totalSubscriptions)
+		return fmt.Errorf("NATS drain timed out after %s", r.drainTimeout)
+	}
 
 	r.logger.Info("NATS drain completed successfully", "subscriptions_processed", totalSubscriptions)
 	return nil

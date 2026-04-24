@@ -11,10 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/infrastructure/config"
-	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/infrastructure/config"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
 )
 
 // TestContainer_NewContainer tests the container creation and initialization

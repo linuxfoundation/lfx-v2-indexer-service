@@ -8,10 +8,11 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/services"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/mocks"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
-	"github.com/stretchr/testify/assert"
 )
 
 func TestHealthHandler_HandleReadiness_Healthy(t *testing.T) {

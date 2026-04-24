@@ -11,10 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
-	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
 )
 
 // Test constants
