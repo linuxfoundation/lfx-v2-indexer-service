@@ -299,7 +299,23 @@ func (r *MessagingRepository) DrainWithTimeout() error {
 
 	if r.conn.IsDraining() {
 		r.logger.Info("NATS connection already draining, waiting for completion")
-		r.waitForHandlers(r.drainTimeout)
+		// Callbacks can still fire until the connection is fully closed, so
+		// wait for IsClosed before calling wg.Wait() to avoid a concurrent
+		// Add/Wait panic.
+		drainDone := make(chan struct{})
+		go func() {
+			for !r.conn.IsClosed() {
+				time.Sleep(100 * time.Millisecond)
+			}
+			close(drainDone)
+		}()
+		select {
+		case <-drainDone:
+		case <-time.After(r.drainTimeout):
+			r.logger.Warn("Timed out waiting for ongoing NATS drain", "timeout", r.drainTimeout)
+			return fmt.Errorf("timed out waiting for ongoing NATS drain after %s", r.drainTimeout)
+		}
+		r.waitForHandlers(time.Until(deadline))
 		return nil
 	}
 
@@ -353,7 +369,14 @@ func (r *MessagingRepository) DrainWithTimeout() error {
 
 	if drainTimedOut || handlersTimedOut {
 		r.logger.Warn("NATS drain did not complete cleanly", "drain_timed_out", drainTimedOut, "handlers_timed_out", handlersTimedOut, "subscriptions_processed", totalSubscriptions)
-		return fmt.Errorf("NATS drain timed out after %s", r.drainTimeout)
+		switch {
+		case drainTimedOut && handlersTimedOut:
+			return fmt.Errorf("NATS drain and in-flight handler wait both timed out after %s", r.drainTimeout)
+		case drainTimedOut:
+			return fmt.Errorf("NATS drain timed out after %s", r.drainTimeout)
+		default: // handlersTimedOut only
+			return fmt.Errorf("NATS drain completed but timed out waiting for in-flight handlers to finish")
+		}
 	}
 
 	r.logger.Info("NATS drain completed successfully", "subscriptions_processed", totalSubscriptions)
