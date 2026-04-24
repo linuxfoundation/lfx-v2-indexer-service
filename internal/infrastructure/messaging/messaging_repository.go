@@ -73,6 +73,10 @@ func (r *MessagingRepository) Subscribe(ctx context.Context, subject string, han
 		return fmt.Errorf("cannot subscribe to %s: repository is shutting down", subject)
 	}
 
+	if !r.IsConnected() {
+		return fmt.Errorf("cannot subscribe to %s: NATS connection not available", subject)
+	}
+
 	r.logger.InfoContext(ctx, "Creating NATS subscription", "subject", subject)
 
 	// Create the NATS message handler
@@ -122,6 +126,10 @@ func (r *MessagingRepository) QueueSubscribe(ctx context.Context, subject string
 
 	if r.isShuttingDown {
 		return fmt.Errorf("cannot queue subscribe to %s: repository is shutting down", subject)
+	}
+
+	if !r.IsConnected() {
+		return fmt.Errorf("cannot queue subscribe to %s: NATS connection not available", subject)
 	}
 
 	r.logger.InfoContext(ctx, "Creating NATS queue subscription", "subject", subject, "queue", queue)
@@ -174,6 +182,10 @@ func (r *MessagingRepository) QueueSubscribeWithReply(ctx context.Context, subje
 
 	if r.isShuttingDown {
 		return fmt.Errorf("cannot queue subscribe with reply to %s: repository is shutting down", subject)
+	}
+
+	if !r.IsConnected() {
+		return fmt.Errorf("cannot queue subscribe with reply to %s: NATS connection not available", subject)
 	}
 
 	r.logger.InfoContext(ctx, "Creating NATS queue subscription with reply", "subject", subject, "queue", queue)
@@ -256,10 +268,11 @@ func (r *MessagingRepository) Publish(ctx context.Context, subject string, data 
 
 // waitForHandlers waits for in-flight message handler goroutines to finish,
 // bounded by the provided timeout so shutdown cannot hang indefinitely.
-func (r *MessagingRepository) waitForHandlers(timeout time.Duration) {
+// Returns true if the wait timed out, false if all handlers finished in time.
+func (r *MessagingRepository) waitForHandlers(timeout time.Duration) bool {
 	if timeout <= 0 {
 		r.logger.Warn("No time remaining to wait for in-flight NATS handlers")
-		return
+		return false
 	}
 	done := make(chan struct{})
 	go func() {
@@ -268,8 +281,10 @@ func (r *MessagingRepository) waitForHandlers(timeout time.Duration) {
 	}()
 	select {
 	case <-done:
+		return false
 	case <-time.After(timeout):
 		r.logger.Warn("Timed out waiting for in-flight NATS handlers", "timeout", timeout)
+		return true
 	}
 }
 
@@ -349,23 +364,7 @@ func (r *MessagingRepository) DrainWithTimeout() error {
 	// Wait for all in-flight handler goroutines to finish, bounded by the
 	// remaining drain budget. Conn.Drain() only waits for callbacks to return,
 	// not for goroutines spawned inside them, so we track them with a WaitGroup.
-	handlersTimedOut := false
-	remaining := time.Until(deadline)
-	if remaining > 0 {
-		done := make(chan struct{})
-		go func() {
-			r.wg.Wait()
-			close(done)
-		}()
-		select {
-		case <-done:
-		case <-time.After(remaining):
-			handlersTimedOut = true
-			r.logger.Warn("Timed out waiting for in-flight NATS handlers", "timeout", remaining)
-		}
-	} else {
-		r.logger.Warn("No time remaining to wait for in-flight NATS handlers")
-	}
+	handlersTimedOut := r.waitForHandlers(time.Until(deadline))
 
 	if drainTimedOut || handlersTimedOut {
 		r.logger.Warn("NATS drain did not complete cleanly", "drain_timed_out", drainTimedOut, "handlers_timed_out", handlersTimedOut, "subscriptions_processed", totalSubscriptions)

@@ -105,12 +105,21 @@ const (
 	// extra segment flush. Used when the caller is waiting for an ACK (i.e.
 	// when a NATS reply subject is present).
 	RefreshWaitFor = "wait_for"
-	ReplyTimeout = 5 * time.Second
+	ReplyTimeout   = 5 * time.Second
 )
 
-// NATS pending buffer and concurrency defaults
+// NATS pending buffer and concurrency defaults.
+//
+// These pending limits are per subscription, not process-wide. In deployments
+// with multiple subscriptions in the same process (for example, V1 and V2
+// consumers together), the allowed in-memory backlog grows proportionally
+// across each subscription during downstream slowness.
+//
+// Treat these values as upper bounds that should be tuned to the memory
+// capacity and throughput characteristics of each deployment rather than as
+// universally safe defaults.
 const (
-	DefaultPendingMsgLimit   = 1_000_000         // 1M messages
-	DefaultPendingBytesLimit = 512 * 1024 * 1024 // 512 MiB
+	DefaultPendingMsgLimit   = 1_000_000         // Maximum pending messages per subscription; tune down for memory-constrained deployments.
+	DefaultPendingBytesLimit = 512 * 1024 * 1024 // Maximum pending bytes per subscription (512 MiB); tune based on aggregate process memory budget.
 	DefaultWorkerCount       = 100               // concurrent message handlers
 )

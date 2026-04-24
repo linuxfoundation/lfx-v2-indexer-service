@@ -598,6 +598,78 @@ func TestIndexingHandler_HandleWithReply_NoReply(t *testing.T) {
 	mockMessagingRepo.AssertExpectations(t)
 }
 
+// Test that HandleWithReply sets refresh=wait_for in context when reply is provided
+func TestIndexingHandler_HandleWithReply_SetsRefreshWaitFor_WithReply(t *testing.T) {
+	mp, mockMessagingRepo, mockStorageRepo := setupTestMessageProcessor()
+	ctx := context.Background()
+
+	testData := map[string]any{
+		"action": "created",
+		"data": map[string]any{
+			"id":     "test-123",
+			"name":   "Test Project",
+			"public": true,
+		},
+		"headers": map[string]string{
+			"authorization": "Bearer test-token",
+		},
+	}
+	data, _ := json.Marshal(testData)
+	subject := "lfx.index.project"
+
+	replyFunc := func(_ []byte) error { return nil }
+
+	// Index must be called with a context that has NeedsRefreshWaitFor=true
+	mockStorageRepo.On("Index", mock.MatchedBy(func(c context.Context) bool {
+		return logging.NeedsRefreshWaitFor(c)
+	}), mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockMessagingRepo.On("ParsePrincipals", mock.Anything, mock.Anything).Return([]contracts.Principal{}, nil)
+	mockMessagingRepo.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	handler := &indexingHandler{useCase: mp}
+	err := handler.HandleWithReply(ctx, data, subject, replyFunc)
+
+	assert.NoError(t, err)
+	mockStorageRepo.AssertExpectations(t)
+	mockMessagingRepo.AssertExpectations(t)
+}
+
+// Test that HandleWithReply does NOT set refresh=wait_for when no reply
+func TestIndexingHandler_HandleWithReply_NoRefreshWaitFor_WithoutReply(t *testing.T) {
+	mp, mockMessagingRepo, mockStorageRepo := setupTestMessageProcessor()
+	ctx := context.Background()
+
+	testData := map[string]any{
+		"action": "created",
+		"data": map[string]any{
+			"id":     "test-123",
+			"name":   "Test Project",
+			"public": true,
+		},
+		"headers": map[string]string{
+			"authorization": "Bearer test-token",
+		},
+	}
+	data, _ := json.Marshal(testData)
+	subject := "lfx.index.project"
+
+	// Index must be called with a context that does NOT have NeedsRefreshWaitFor=true
+	mockStorageRepo.On("Index", mock.MatchedBy(func(c context.Context) bool {
+		return !logging.NeedsRefreshWaitFor(c)
+	}), mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockMessagingRepo.On("ParsePrincipals", mock.Anything, mock.Anything).Return([]contracts.Principal{
+		{Principal: "test-user", Email: "test@example.com"},
+	}, nil)
+	mockMessagingRepo.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	handler := &indexingHandler{useCase: mp}
+	err := handler.HandleWithReply(ctx, data, subject, nil)
+
+	assert.NoError(t, err)
+	mockStorageRepo.AssertExpectations(t)
+	mockMessagingRepo.AssertExpectations(t)
+}
+
 // Test generateMessageID uniqueness
 func TestMessageProcessor_GenerateMessageID(t *testing.T) {
 	mp, _, _ := setupTestMessageProcessor()
