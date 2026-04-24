@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -189,7 +190,7 @@ func (s *IndexerService) CreateTransactionFromMessage(messageData map[string]any
 			transactionData = make(map[string]any)
 		}
 
-		indexingConfig, err := s.parseIndexingConfig(indexingConfigData, transactionData)
+		indexingConfig, err := s.parseIndexingConfig(indexingConfigData, transactionData, objectType)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse indexing_config: %w", err)
 		}
@@ -1352,15 +1353,15 @@ func (s *IndexerService) buildTransactionBodyFromIndexingConfig(
 // expandTemplates recursively expands template variables in the format {{ field_name }}
 // with values from the provided data map. Supports nested field access (e.g., {{ parent.id }})
 // and preserves original data types.
-func expandTemplates(data map[string]any, value any) (any, error) {
+func expandTemplates(data map[string]any, value any, objectType string, logger *slog.Logger) (any, error) {
 	switch v := value.(type) {
 	case string:
-		return expandTemplateString(data, v)
+		return expandTemplateString(data, v, objectType, logger)
 	case []interface{}:
 		// Handle arrays - expand templates in each element
 		result := make([]interface{}, len(v))
 		for i, item := range v {
-			expanded, err := expandTemplates(data, item)
+			expanded, err := expandTemplates(data, item, objectType, logger)
 			if err != nil {
 				return nil, err
 			}
@@ -1371,7 +1372,7 @@ func expandTemplates(data map[string]any, value any) (any, error) {
 		// Handle nested objects - expand templates in each value
 		result := make(map[string]interface{}, len(v))
 		for key, val := range v {
-			expanded, err := expandTemplates(data, val)
+			expanded, err := expandTemplates(data, val, objectType, logger)
 			if err != nil {
 				return nil, err
 			}
@@ -1384,8 +1385,11 @@ func expandTemplates(data map[string]any, value any) (any, error) {
 	}
 }
 
-// expandTemplateString expands template variables in a string
-func expandTemplateString(data map[string]any, template string) (any, error) {
+// expandTemplateString expands template variables in a string.
+// If a referenced field is not present in data, the expansion is skipped (empty
+// string for whole-value templates, blank substitution for embedded ones) and a
+// warning is logged. Structural errors (e.g. traversing a non-object) are fatal.
+func expandTemplateString(data map[string]any, template string, objectType string, logger *slog.Logger) (any, error) {
 	// Check if this is an escaped template (e.g., \{{ field }})
 	if strings.Contains(template, "\\{{") {
 		// Remove escape characters
@@ -1398,6 +1402,15 @@ func expandTemplateString(data map[string]any, template string) (any, error) {
 		fieldPath := strings.TrimSpace(template[2 : len(template)-2])
 		value, err := getNestedField(data, fieldPath)
 		if err != nil {
+			if isFieldNotFoundError(err) {
+				// Upstream publishers embed infrastructure-specific template vars
+				// that have no LFX data counterpart. Warn and skip expansion
+				// rather than dropping the document.
+				logger.Warn("Skipping unresolvable template field",
+					"field", fieldPath,
+					"object_type", objectType)
+				return "", nil
+			}
 			return nil, err
 		}
 		// Return the original type
@@ -1415,6 +1428,13 @@ func expandTemplateString(data map[string]any, template string) (any, error) {
 
 		value, err := getNestedField(data, fieldPath)
 		if err != nil {
+			if isFieldNotFoundError(err) {
+				logger.Warn("Skipping unresolvable template field",
+					"field", fieldPath,
+					"object_type", objectType)
+				result = strings.ReplaceAll(result, fullMatch, "")
+				continue
+			}
 			return nil, err
 		}
 
@@ -1439,6 +1459,20 @@ func expandTemplateString(data map[string]any, template string) (any, error) {
 	return result, nil
 }
 
+// errTemplateFieldNotFound is returned when a template references a key absent from
+// the data map. It is intentionally distinct from structural errors so callers can
+// choose to skip rather than fail.
+type errTemplateFieldNotFound struct{ field string }
+
+func (e *errTemplateFieldNotFound) Error() string {
+	return fmt.Sprintf("template field '%s' not found in data", e.field)
+}
+
+func isFieldNotFoundError(err error) bool {
+	var e *errTemplateFieldNotFound
+	return errors.As(err, &e)
+}
+
 // getNestedField retrieves a value from a nested map using dot notation
 // e.g., "parent.id" retrieves data["parent"]["id"]
 func getNestedField(data map[string]any, fieldPath string) (any, error) {
@@ -1453,7 +1487,7 @@ func getNestedField(data map[string]any, fieldPath string) (any, error) {
 
 		value, exists := currentMap[part]
 		if !exists {
-			return nil, fmt.Errorf("template field '%s' not found in data", fieldPath)
+			return nil, &errTemplateFieldNotFound{field: fieldPath}
 		}
 
 		current = value
@@ -1464,12 +1498,12 @@ func getNestedField(data map[string]any, fieldPath string) (any, error) {
 
 // parseIndexingConfig parses a map[string]any into a strongly-typed IndexingConfig struct
 // and expands any template variables using the provided transaction data.
-func (s *IndexerService) parseIndexingConfig(indexingConfigData map[string]any, transactionData map[string]any) (*types.IndexingConfig, error) {
+func (s *IndexerService) parseIndexingConfig(indexingConfigData map[string]any, transactionData map[string]any, objectType string) (*types.IndexingConfig, error) {
 	logger := s.logger
-	logger.Debug("Parsing indexing config", "indexing_config", indexingConfigData)
+	logger.Debug("Parsing indexing config", "indexing_config", indexingConfigData, "object_type", objectType)
 
 	// First, expand all templates in the indexing_config data
-	expandedData, err := expandTemplates(transactionData, indexingConfigData)
+	expandedData, err := expandTemplates(transactionData, indexingConfigData, objectType, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to expand templates in indexing_config: %w", err)
 	}
