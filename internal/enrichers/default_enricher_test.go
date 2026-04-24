@@ -8,10 +8,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
-	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 )
 
 func TestDefaultEnricher_ObjectType(t *testing.T) {

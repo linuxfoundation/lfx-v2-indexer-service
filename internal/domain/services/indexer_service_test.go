@@ -11,13 +11,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/mocks"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/types"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestIndexerService_ProcessTransaction_Success(t *testing.T) {
@@ -1506,11 +1507,11 @@ func TestIndexerService_GenerateTransactionBody_InvalidObjectID_Delete(t *testin
 	)
 
 	transaction := &contracts.LFXTransaction{
-		ObjectType:      "groupsio_member",
-		Action:          constants.ActionDeleted,
-		ParsedObjectID:  "\u05cfz\ufffd\ufffd|", // corrupted binary member ID from LFXV2-1464
+		ObjectType:       "groupsio_member",
+		Action:           constants.ActionDeleted,
+		ParsedObjectID:   "\u05cfz\ufffd\ufffd|", // corrupted binary member ID from LFXV2-1464
 		ParsedPrincipals: []contracts.Principal{},
-		Timestamp:       time.Now(),
+		Timestamp:        time.Now(),
 	}
 
 	body, err := s.GenerateTransactionBody(context.Background(), transaction)

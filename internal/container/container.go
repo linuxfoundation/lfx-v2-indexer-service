@@ -102,6 +102,21 @@ func NewContainer(logger *slog.Logger, cliConfig *config.CLIConfig) (*Container,
 		if cliConfig.Bind != "*" && cliConfig.Bind != "" {
 			logger.Info("Bind address set by CLI flag", "bind", cliConfig.Bind)
 		}
+
+		if cliConfig.NATSPendingMsgLimit != 0 {
+			config.NATS.PendingMsgLimit = cliConfig.NATSPendingMsgLimit
+			logger.Info("NATS pending message limit overridden by CLI flag", "pending_msg_limit", cliConfig.NATSPendingMsgLimit)
+		}
+
+		if cliConfig.NATSPendingBytesLimit != 0 {
+			config.NATS.PendingBytesLimit = cliConfig.NATSPendingBytesLimit
+			logger.Info("NATS pending bytes limit overridden by CLI flag", "pending_bytes_limit", cliConfig.NATSPendingBytesLimit)
+		}
+
+		if cliConfig.NATSWorkerCount != 0 {
+			config.NATS.WorkerCount = cliConfig.NATSWorkerCount
+			logger.Info("NATS worker count overridden by CLI flag", "worker_count", cliConfig.NATSWorkerCount)
+		}
 	}
 
 	// Validate configuration
@@ -243,6 +258,9 @@ func (c *Container) initializeRepositories() error {
 		c.AuthRepository,
 		c.Logger,
 		c.Config.NATS.DrainTimeout,
+		c.Config.NATS.PendingMsgLimit,
+		c.Config.NATS.PendingBytesLimit,
+		c.Config.NATS.WorkerCount,
 	)
 
 	// Initialize cleanup repository (background operations)

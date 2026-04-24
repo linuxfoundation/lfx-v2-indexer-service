@@ -13,4 +13,8 @@ type CLIConfig struct {
 	SimpleHealth bool
 	ConfigCheck  bool
 	Help         bool
+	// NATS overrides — zero value means "not set, use env/default"
+	NATSPendingMsgLimit   int
+	NATSPendingBytesLimit int
+	NATSWorkerCount       int
 }
