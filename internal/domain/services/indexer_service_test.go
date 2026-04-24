@@ -493,7 +493,7 @@ func TestIndexerService_parseIndexingConfig(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Pass empty transaction data for backward compatibility tests
-			config, err := service.parseIndexingConfig(tt.input, map[string]any{})
+			config, err := service.parseIndexingConfig(tt.input, map[string]any{}, "test_object")
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -655,7 +655,26 @@ func TestIndexerService_parseIndexingConfig_TemplateExpansion(t *testing.T) {
 				"uid": "proj-123",
 			},
 			wantErr:     true,
-			errContains: "template field 'missing_field' not found in data",
+			errContains: "object_id is required and must be a non-empty string",
+		},
+		{
+			name: "missing template field in optional embedded string should succeed",
+			indexingConfig: map[string]any{
+				"object_id":              "{{ uid }}",
+				"access_check_object":    "project:{{ uid }}",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:{{ uid }}",
+				"history_check_relation": "historian",
+				"fulltext":               "{{ name }} - {{ missing_field }}",
+			},
+			transactionData: map[string]any{
+				"uid":  "proj-123",
+				"name": "Test Project",
+			},
+			wantErr: false,
+			validate: func(t *testing.T, config *types.IndexingConfig) {
+				assert.Equal(t, "Test Project - ", config.Fulltext)
+			},
 		},
 		{
 			name: "invalid nested field path should error",
@@ -838,7 +857,7 @@ func TestIndexerService_parseIndexingConfig_TemplateExpansion(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config, err := service.parseIndexingConfig(tt.indexingConfig, tt.transactionData)
+			config, err := service.parseIndexingConfig(tt.indexingConfig, tt.transactionData, "test_object")
 
 			if tt.wantErr {
 				assert.Error(t, err)
