@@ -581,7 +581,7 @@ func (r *MessagingRepository) GetMetrics() map[string]interface{} {
 	}
 
 	workerCapacity := cap(r.sem)
-	workersInFlight := workerCapacity - len(r.sem)
+	workersInFlight := len(r.sem)
 
 	return map[string]interface{}{
 		"connection_status":    connectionStatus,
