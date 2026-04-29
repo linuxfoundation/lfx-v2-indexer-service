@@ -70,7 +70,7 @@ This is a **Clean Architecture** implementation processing NATS messages into Op
 ### Message Processing Flow
 
 ```
-NATS → MessagingRepository → IndexingMessageHandler → MessageProcessor → IndexerService → [Enricher] → OpenSearch
+NATS → MessagingRepository → IndexingMessageHandler → MessageProcessor → IndexerService → OpenSearch
                                                                                                               ↓
                                                                                                     NATS Event Published
                                                                                                   lfx.{object_type}.{action}
@@ -112,11 +112,6 @@ Useful wildcard subscriptions:
 
 **Message Routing**: Subject prefix determines version (`lfx.index.*` = V2, `lfx.v1.index.*` = V1)
 
-**Enricher System**: Extensible data processing based on object type
-
-- Current: `ProjectEnricher`, `ProjectSettingsEnricher`
-- Register new enrichers in `IndexerService.NewIndexerService()`
-
 **Authentication**:
 
 - V2: JWT tokens via `Authorization` header (validated against Heimdall)
@@ -156,10 +151,7 @@ JANITOR_ENABLED=true
 
 ### Adding New Object Types
 
-1. Add constant to `pkg/constants/messaging.go`
-2. Create enricher in `internal/enrichers/` implementing `Enricher` interface
-3. Register enricher in `IndexerService.NewIndexerService()`
-4. Add tests for the new enricher
+No indexer changes are needed for new object types. The indexer is data-agnostic — publishers send messages with any non-empty `object_type` and a valid `indexing_config` block; the indexer stores and indexes the document without resource-specific logic.
 
 Domain events (`lfx.{object_type}.created/updated/deleted`) are emitted automatically for all object types — no additional work required.
 
@@ -183,6 +175,5 @@ Domain events (`lfx.{object_type}.created/updated/deleted`) are emitted automati
 - `internal/application/message_processor.go`: Message workflow orchestration
 - `internal/domain/contracts/transaction.go`: Core business entities
 - `internal/domain/contracts/events.go`: `IndexingEvent` — the outbound domain event payload
-- `internal/enrichers/registry.go`: Enricher registration and lookup
 - `internal/infrastructure/config/app_config.go`: Configuration management
 - `cmd/lfx-indexer/main.go`: Dependency injection and service startup

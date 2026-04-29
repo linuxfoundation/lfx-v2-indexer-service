@@ -10,7 +10,6 @@ const (
 	ErrInvalidObjectType = "unsupported object type"
 	ErrInvalidSubject    = "invalid NATS subject format"
 	ErrParseTransaction  = "failed to parse transaction data"
-	ErrEnrichTransaction = "failed to enrich transaction"
 	ErrIndexDocument     = "failed to index document"
 	ErrHealthCheck       = "health check failed"
 	ErrVersionConflict   = "version conflict detected"
@@ -24,13 +23,7 @@ const (
 	ErrCreateV2Transaction = "failed to create V2 transaction"
 	ErrProcessTransaction  = "failed to process transaction"
 
-	// Data enrichment errors
-	ErrMappingUID        = "error mapping `uid` to `object_id`"
-	ErrMappingPublic     = "error mapping `public` attribute"
-	ErrEnrichmentFailed  = "transaction enrichment failed"
-	ErrMissingObjectID   = "missing or invalid object ID"
-	ErrMissingPublicFlag = "missing or invalid public flag"
-	ErrInvalidObjectID   = "object_id must be non-empty and contain only printable non-space ASCII characters (U+0021–U+007E)"
+	ErrInvalidObjectID = "object_id must be non-empty and contain only printable non-space ASCII characters (U+0021–U+007E)"
 
 	// Storage specific errors
 	ErrMarshalQuery       = "failed to marshal query"

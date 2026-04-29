@@ -486,8 +486,7 @@ Common errors:
    - Average overhead: ~500-1000 bytes
    - Consider compression for high-volume scenarios
 
-2. **Processing Speed**: `indexing_config` bypasses enrichers
-   - Faster processing (no enricher lookup/execution)
+2. **Processing Speed**: `indexing_config` is required and drives all indexing decisions
    - Reduced server CPU usage
 
 3. **Batch Operations**: Use NATS queue groups for load balancing
@@ -541,14 +540,11 @@ nc.Publish("lfx.index.project", data)
 
 **Solution**: This was a bug fixed in recent versions. Ensure you're using the latest indexer service version. These fields are always set by the server, regardless of whether you use `indexing_config`.
 
-### Issue: "No enricher found" error
+### Issue: "indexing_config is required" error
 
-**Problem**: Sending messages without `indexing_config` for unsupported object types.
+**Problem**: Sending create/update messages without an `indexing_config` block.
 
-**Solution**: Either:
-
-1. Add `indexing_config` to your message
-2. Request a server-side enricher implementation for your object type
+**Solution**: Add `indexing_config` to your message. The indexer is data-agnostic and requires clients to provide complete indexing metadata.
 
 ### Issue: Access control not working
 

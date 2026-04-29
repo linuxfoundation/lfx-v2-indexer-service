@@ -393,13 +393,6 @@ JANITOR_ENABLED=true                         # Enable cleanup service (default: 
 │   │       ├── health_handler_test.go # Health handler tests
 │   │       ├── indexing_message_handler.go # NATS message handler
 │   │       └── indexing_message_handler_test.go # Handler tests
-│   ├── enrichers/                # Data enrichment utilities
-│   │   ├── default_enricher.go   # Default enrichment with configurable options
-│   │   ├── project_enricher.go   # Project-specific enrichment
-│   │   ├── project_settings_enricher.go # Project settings enrichment
-│   │   ├── committee_enricher.go # Committee-specific enrichment
-│   │   ├── committee_settings_enricher.go # Committee settings enrichment
-│   │   └── registry.go           # Enricher registry
 │   ├── container/                # Dependency injection
 │   │   ├── container.go          # DI container implementation
 │   │   └── container_test.go     # Container tests
@@ -440,12 +433,7 @@ JANITOR_ENABLED=true                         # Enable cleanup service (default: 
 
 ### Indexing Your Resources
 
-The LFX V2 Indexer Service provides two approaches for indexing your resources:
-
-1. **Server-Side Enrichment** - Send your resource data and let the server handle indexing metadata (⚠️ **will be removed in future releases**)
-2. **Client-Provided Configuration** - Provide complete indexing metadata via `indexing_config` for full control (**✅ recommended**)
-
-**⚠️ Important: Use client-provided configuration (option 2).** Server-side enrichers will be removed once all clients migrate to providing their own `indexing_config`.
+The LFX V2 Indexer Service is **data-agnostic** — it accepts any `object_type` the publisher sends and uses the `indexing_config` block to shape the indexed document. No server-side resource knowledge is needed.
 
 For detailed guidance on integrating with the indexer service, see the **[Client Guide](docs/client-guide.md)**:
 
@@ -455,7 +443,7 @@ For detailed guidance on integrating with the indexer service, see the **[Client
 - **Best Practices**: Tips for optimal search performance and access control
 - **Go Client Integration**: Using the public `pkg/types` package
 
-Quick example with client-provided configuration:
+Quick example:
 
 ```json
 {
@@ -482,163 +470,11 @@ Quick example with client-provided configuration:
 ```
 
 **Key Benefits of `indexing_config`:**
-- ✅ No server-side enricher required for your object type
 - ✅ Full control over indexing behavior and access control
-- ✅ Better performance (bypasses server-side computation)
+- ✅ No server-side resource knowledge required — any `object_type` is accepted
 - ✅ Server automatically sets timestamps and principal fields
 
 See the **[Client Guide](docs/client-guide.md)** for complete documentation.
-
-## Data Enrichment System
-
-The LFX V2 Indexer Service includes a powerful data enrichment system that transforms raw transaction data into search-optimized documents with access control, metadata, and full-text search capabilities.
-
-### Enricher Architecture
-
-The enricher system uses a **configurable option pattern** that allows for flexible customization while maintaining code reuse:
-
-```go
-// Base enricher with configurable behavior
-enricher := newDefaultEnricher(
-    constants.ObjectTypeCommittee,
-    WithAccessControl(customAccessControlFunction),
-    WithNameAndAliases(customNameExtractionFunction),
-    WithPublicFlag(customPublicFlagFunction),
-    WithParentReferences(customParentReferenceFunction),
-)
-```
-
-#### Default Behavior
-
-```go
-// Input data
-{
-    "uid": "committee-123",
-    "name": "Technical Steering Committee"
-}
-
-// Enriched output
-{
-    "object_id": "committee-123",
-    "object_type": "committee",
-    "public": false,
-    "access_check_object": "committee:committee-123",
-    "access_check_relation": "auditor",        // Committee-settings default
-    "history_check_object": "committee:committee-123",
-    "history_check_relation": "writer",
-    "sort_name": "Technical Steering Committee",
-    "name_and_aliases": ["Technical Steering Committee"],
-    "fulltext": "Technical Steering Committee"
-}
-```
-
-### Creating Custom Enrichers
-
-To create a custom enricher, you define methods on your enricher struct and use the option pattern to override specific behaviors:
-
-```go
-type CustomEnricher struct {
-    defaultEnricher Enricher
-}
-
-// Implement the Enricher interface
-func (e *CustomEnricher) ObjectType() string {
-    return e.defaultEnricher.ObjectType()
-}
-
-func (e *CustomEnricher) EnrichData(body *contracts.TransactionBody, transaction *contracts.LFXTransaction) error {
-    return e.defaultEnricher.EnrichData(body, transaction)
-}
-
-// Custom access control method
-func (e *CustomEnricher) setAccessControl(body *contracts.TransactionBody, data map[string]any, objectType, objectID string) {
-    // Custom logic - override specific defaults
-    if accessCheckRelation, ok := data["accessCheckRelation"].(string); ok {
-        body.AccessCheckRelation = accessCheckRelation
-    } else if _, exists := data["accessCheckRelation"]; !exists {
-        body.AccessCheckRelation = "custom-role" // Your custom default
-    }
-    
-    // Keep standard logic for other fields or customize as needed
-    if _, exists := data["accessCheckObject"]; !exists {
-        body.AccessCheckObject = fmt.Sprintf("%s:%s", objectType, objectID)
-    }
-    // ... handle other access control fields
-}
-
-// Constructor using method reference and option pattern
-func NewCustomEnricher() Enricher {
-    enricher := &CustomEnricher{}
-    enricher.defaultEnricher = newDefaultEnricher(
-        constants.ObjectTypeCustom,
-        WithAccessControl(enricher.setAccessControl), // Method reference
-    )
-    return enricher
-}
-```
-
-### Available Override Options
-
-| Option | Function Signature | Purpose |
-|--------|-------------------|---------|
-| `WithAccessControl` | `func(body, data, objectType, objectID)` | Override access control logic |
-| `WithNameAndAliases` | `func(data) []string` | Override name/alias extraction |
-| `WithPublicFlag` | `func(data) bool` | Override public flag logic |
-| `WithParentReferences` | `func(body, data, objectType)` | Override parent reference logic |
-
-### Extending the Enricher System
-
-To add a new enricher:
-
-1. **Create the enricher struct**:
-```go
-type MyCustomEnricher struct {
-    defaultEnricher Enricher
-}
-```
-
-2. **Implement the Enricher interface**:
-```go
-func (e *MyCustomEnricher) ObjectType() string {
-    return e.defaultEnricher.ObjectType()
-}
-
-func (e *MyCustomEnricher) EnrichData(body *contracts.TransactionBody, transaction *contracts.LFXTransaction) error {
-    return e.defaultEnricher.EnrichData(body, transaction)
-}
-```
-
-3. **Add custom behavior** (optional):
-```go
-func (e *MyCustomEnricher) customMethod(body *contracts.TransactionBody, data map[string]any, objectType, objectID string) {
-    // Your custom logic
-}
-```
-
-4. **Create constructor with options**:
-```go
-func NewMyCustomEnricher() Enricher {
-    enricher := &MyCustomEnricher{}
-    enricher.defaultEnricher = newDefaultEnricher(
-        constants.ObjectTypeCustom,
-        WithAccessControl(enricher.customMethod),
-    )
-    return enricher
-}
-```
-
-5. **Register in the enricher registry**:
-```go
-// In registry.go
-registry.Register(NewMyCustomEnricher())
-```
-
-This pattern allows you to:
-- **Reuse** default enrichment logic
-- **Override** specific behaviors as needed
-- **Extend** with custom methods and logic
-- **Maintain** consistency across enrichers
-- **Test** individual components easily
 
 ## 🧑‍💻 Development
 

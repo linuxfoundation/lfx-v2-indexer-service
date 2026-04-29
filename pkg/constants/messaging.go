@@ -55,41 +55,6 @@ const (
 	HeaderXEmail    = "x-email"    // V1 email header
 )
 
-// Object types (centralized)
-const (
-	ObjectTypeProject                     = "project"
-	ObjectTypeProjectSettings             = "project_settings"
-	ObjectTypeCommittee                   = "committee"
-	ObjectTypeCommitteeSettings           = "committee_settings"
-	ObjectTypeCommitteeMember             = "committee_member"
-	ObjectTypeMeeting                     = "meeting"
-	ObjectTypeMeetingSettings             = "meeting_settings"
-	ObjectTypeMeetingRegistrant           = "meeting_registrant"
-	ObjectTypeMeetingRSVP                 = "meeting_rsvp"
-	ObjectTypeMeetingAttachment           = "meeting_attachment"
-	ObjectTypePastMeeting                 = "past_meeting"
-	ObjectTypePastMeetingAttachment       = "past_meeting_attachment"
-	ObjectTypePastMeetingParticipant      = "past_meeting_participant"
-	ObjectTypePastMeetingRecording        = "past_meeting_recording"
-	ObjectTypePastMeetingTranscript       = "past_meeting_transcript"
-	ObjectTypePastMeetingSummary          = "past_meeting_summary"
-	ObjectTypeGroupsIOService             = "groupsio_service"
-	ObjectTypeGroupsIOServiceSettings     = "groupsio_service_settings"
-	ObjectTypeGroupsIOMailingList         = "groupsio_mailing_list"
-	ObjectTypeGroupsIOMailingListSettings = "groupsio_mailing_list_settings"
-	ObjectTypeGroupsIOMember              = "groupsio_member"
-
-	// V1 Meeting object types
-	ObjectTypeV1Meeting                = "v1_meeting"
-	ObjectTypeV1PastMeeting            = "v1_past_meeting"
-	ObjectTypeV1MeetingRegistrant      = "v1_meeting_registrant"
-	ObjectTypeV1MeetingRSVP            = "v1_meeting_rsvp"
-	ObjectTypeV1PastMeetingParticipant = "v1_past_meeting_participant"
-	ObjectTypeV1PastMeetingRecording   = "v1_past_meeting_recording"
-	ObjectTypeV1PastMeetingTranscript  = "v1_past_meeting_transcript"
-	ObjectTypeV1PastMeetingSummary     = "v1_past_meeting_summary"
-)
-
 // Message processing constants
 const (
 	DefaultQueue = "lfx.indexer.queue"
