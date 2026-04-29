@@ -383,6 +383,18 @@ func (s *IndexerService) ValidateObjectType(transaction *contracts.LFXTransactio
 			"validation_step", "object_type_check")
 		return err
 	}
+	// Reject characters that are invalid in a NATS subject token — dots, wildcards,
+	// and whitespace would corrupt the outbound event subject lfx.{object_type}.{action}
+	// and could collide with the service's own inbound subscriptions.
+	for _, r := range transaction.ObjectType {
+		if r == '.' || r == '*' || r == '>' || r <= ' ' {
+			err := fmt.Errorf("object_type %q contains invalid character for a NATS subject token", transaction.ObjectType)
+			logging.LogError(s.logger, "Object type validation failed: invalid character", err,
+				"validation_step", "object_type_check",
+				"object_type", transaction.ObjectType)
+			return err
+		}
+	}
 	return nil
 }
 
