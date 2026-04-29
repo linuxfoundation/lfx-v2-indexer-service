@@ -160,7 +160,7 @@ func TestIndexerService_ProcessTransaction_EmptyObjectType(t *testing.T) {
 	assert.Error(t, err)
 	assert.NotNil(t, result)
 	assert.False(t, result.Success)
-	assert.Contains(t, err.Error(), "unsupported object type")
+	assert.Contains(t, err.Error(), constants.ErrInvalidObjectType)
 	assert.Len(t, mockStorageRepo.IndexCalls, 0)
 }
 

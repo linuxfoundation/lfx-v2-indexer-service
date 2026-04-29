@@ -7,7 +7,7 @@ package constants
 // Error messages (centralized from scattered string literals)
 const (
 	ErrInvalidAction     = "invalid transaction action"
-	ErrInvalidObjectType = "unsupported object type"
+	ErrInvalidObjectType = "object_type is required"
 	ErrInvalidSubject    = "invalid NATS subject format"
 	ErrParseTransaction  = "failed to parse transaction data"
 	ErrIndexDocument     = "failed to index document"

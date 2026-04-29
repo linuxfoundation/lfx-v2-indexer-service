@@ -1245,7 +1245,7 @@ func (s *IndexerService) buildTransactionBodyFromIndexingConfig(
 	body.SortName = config.SortName
 	body.NameAndAliases = config.NameAndAliases
 	body.ParentRefs = config.ParentRefs
-	body.Tags = config.Tags
+	body.Tags = append(transaction.Tags, config.Tags...)
 	body.Fulltext = config.Fulltext
 	body.Contacts = config.Contacts
 
