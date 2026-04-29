@@ -1532,11 +1532,11 @@ func TestIndexerService_ProcessTransaction_InvalidObjectID_Delete(t *testing.T) 
 		logger,
 	)
 
-	// Use a registered object type and IsV1=true (no auth headers required).
+	// Use IsV1=true (no auth headers required).
 	// For delete actions, Data must be a string — it is parsed into ParsedObjectID by
 	// parseTransactionData, ensuring the full enrichment pipeline is exercised.
 	transaction := &contracts.LFXTransaction{
-		ObjectType: constants.ObjectTypeProject,
+		ObjectType: "project",
 		Action:     constants.ActionDelete, // V1 uses present-tense; canonicalized to ActionDeleted internally
 		IsV1:       true,
 		Headers:    map[string]string{},

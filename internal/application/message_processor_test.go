@@ -655,6 +655,13 @@ func TestIndexingHandler_HandleWithReply_SetsRefreshWaitFor_WithReply(t *testing
 		"headers": map[string]string{
 			"authorization": "Bearer test-token",
 		},
+		"indexing_config": map[string]any{
+			"object_id":              "test-123",
+			"access_check_object":    "project:test-123",
+			"access_check_relation":  "viewer",
+			"history_check_object":   "project:test-123",
+			"history_check_relation": "viewer",
+		},
 	}
 	data, _ := json.Marshal(testData)
 	subject := "lfx.index.project"
@@ -690,6 +697,13 @@ func TestIndexingHandler_HandleWithReply_NoRefreshWaitFor_WithoutReply(t *testin
 		},
 		"headers": map[string]string{
 			"authorization": "Bearer test-token",
+		},
+		"indexing_config": map[string]any{
+			"object_id":              "test-123",
+			"access_check_object":    "project:test-123",
+			"access_check_relation":  "viewer",
+			"history_check_object":   "project:test-123",
+			"history_check_relation": "viewer",
 		},
 	}
 	data, _ := json.Marshal(testData)
