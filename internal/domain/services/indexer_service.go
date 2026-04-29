@@ -1219,6 +1219,7 @@ func (s *IndexerService) buildTransactionBodyFromIndexingConfig(
 		Data:       data,
 		ObjectID:   config.ObjectID,
 		ObjectRef:  fmt.Sprintf("%s:%s", transaction.ObjectType, config.ObjectID),
+		V1Data:     transaction.V1Data,
 	}
 
 	// Set latest flag (server-side field)
