@@ -530,7 +530,7 @@ func (s *IndexerService) EnrichTransaction(ctx context.Context, transaction *con
 		logging.LogError(logger, "Transaction enrichment failed: object type validation", err,
 			"transaction_id", transactionID,
 			"step", "validate_object_type")
-		return fmt.Errorf("%s: %w", constants.ErrInvalidObjectType, err)
+		return err
 	}
 	logger.Debug("Object type validation completed", "transaction_id", transactionID)
 
