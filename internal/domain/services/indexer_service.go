@@ -561,6 +561,18 @@ func (s *IndexerService) EnrichTransaction(ctx context.Context, transaction *con
 	}
 	logger.Debug("Data parsing completed", "transaction_id", transactionID)
 
+	// For create/update actions, indexing_config is required before we do principal work
+	canonicalAction := s.GetCanonicalAction(transaction)
+	if canonicalAction == constants.ActionCreated || canonicalAction == constants.ActionUpdated {
+		if transaction.IndexingConfig == nil {
+			err := fmt.Errorf("indexing_config is required for object_type %q", transaction.ObjectType)
+			logging.LogError(logger, "Enrichment failed: missing indexing_config", err,
+				"transaction_id", transactionID,
+				"object_type", transaction.ObjectType)
+			return err
+		}
+	}
+
 	// Parse principals based on transaction version
 	principals, err := s.parsePrincipals(ctx, transaction)
 	if err != nil {
