@@ -264,7 +264,7 @@ sequenceDiagram
     JWT-->>AR: Principal{Principal, Email}
     AR-->>IS: []Principal with delegation support
 
-    %% Data Enrichment & Validation
+    %% Validation & Body Generation
     IS->>IS: EnrichTransaction()<br/>ValidateObjectType()<br/>GenerateTransactionBody()
 
     %% Document Indexing
