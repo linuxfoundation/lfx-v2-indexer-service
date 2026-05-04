@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
-	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/enrichers"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/types"
@@ -31,9 +30,6 @@ type IndexerService struct {
 	storageRepo   contracts.StorageRepository
 	messagingRepo contracts.MessagingRepository
 	logger        *slog.Logger
-
-	// Enrichment registry for extensible object-specific enrichment
-	enricherRegistry *enrichers.Registry
 
 	// Configuration
 	timeout time.Duration
@@ -75,50 +71,12 @@ func NewIndexerService(
 	messagingRepo contracts.MessagingRepository,
 	logger *slog.Logger,
 ) *IndexerService {
-	// Initialize enricher registry with project enricher
-	registry := enrichers.NewRegistry()
-	for _, enricher := range []enrichers.Enricher{
-		enrichers.NewProjectEnricher(),
-		enrichers.NewProjectSettingsEnricher(),
-		enrichers.NewCommitteeEnricher(),
-		enrichers.NewCommitteeSettingsEnricher(),
-		enrichers.NewCommitteeMemberEnricher(),
-		enrichers.NewMeetingEnricher(),
-		enrichers.NewMeetingSettingsEnricher(),
-		enrichers.NewMeetingRegistrantEnricher(),
-		enrichers.NewMeetingRSVPEnricher(),
-		enrichers.NewMeetingAttachmentEnricher(),
-		enrichers.NewPastMeetingEnricher(),
-		enrichers.NewPastMeetingAttachmentEnricher(),
-		enrichers.NewPastMeetingParticipantEnricher(),
-		enrichers.NewPastMeetingRecordingEnricher(),
-		enrichers.NewPastMeetingTranscriptEnricher(),
-		enrichers.NewPastMeetingSummaryEnricher(),
-		enrichers.NewGroupsIOServiceEnricher(),
-		enrichers.NewGroupsIOServiceSettingsEnricher(),
-		enrichers.NewGroupsIOMailingListEnricher(),
-		enrichers.NewGroupsIOMailingListSettingsEnricher(),
-		enrichers.NewGroupsIOMemberEnricher(),
-		// V1 Meeting enrichers
-		enrichers.NewV1MeetingEnricher(),
-		enrichers.NewV1PastMeetingEnricher(),
-		enrichers.NewV1MeetingRegistrantEnricher(),
-		enrichers.NewV1MeetingRSVPEnricher(),
-		enrichers.NewV1PastMeetingParticipantEnricher(),
-		enrichers.NewV1PastMeetingRecordingEnricher(),
-		enrichers.NewV1PastMeetingTranscriptEnricher(),
-		enrichers.NewV1PastMeetingSummaryEnricher(),
-	} {
-		registry.Register(enricher)
-	}
-
 	return &IndexerService{
-		storageRepo:      storageRepo,
-		messagingRepo:    messagingRepo,
-		logger:           logging.WithComponent(logger, constants.Component),
-		enricherRegistry: registry,
-		timeout:          constants.HealthCheckTimeout,
-		cacheDuration:    constants.CacheDuration,
+		storageRepo:   storageRepo,
+		messagingRepo: messagingRepo,
+		logger:        logging.WithComponent(logger, constants.Component),
+		timeout:       constants.HealthCheckTimeout,
+		cacheDuration: constants.CacheDuration,
 	}
 }
 
@@ -416,30 +374,36 @@ func (s *IndexerService) validateV2Headers(transaction *contracts.LFXTransaction
 	return nil
 }
 
-// ValidateObjectType validates object type using the enricher registry
+// ValidateObjectType validates that the transaction has a non-empty object_type.
+// The indexer is data-agnostic — any non-empty object_type is accepted.
 func (s *IndexerService) ValidateObjectType(transaction *contracts.LFXTransaction) error {
-	logger := s.logger
-	transactionID := s.generateTransactionID(transaction)
-
-	logger.Debug("Validating object type",
-		"transaction_id", transactionID,
-		"object_type", transaction.ObjectType)
-
-	// Check if we have an enricher registered for this object type
-	enricher, exists := s.enricherRegistry.GetEnricher(transaction.ObjectType)
-	if !exists {
-		err := fmt.Errorf("no enricher found for object type: %s", transaction.ObjectType)
-		logging.LogError(logger, "Object type validation failed: no enricher found", err,
-			"transaction_id", transactionID,
-			"validation_step", "enricher_lookup",
+	if transaction.ObjectType == "" {
+		err := fmt.Errorf("object_type is required")
+		logging.LogError(s.logger, "Object type validation failed: empty object_type", err,
+			"validation_step", "object_type_check")
+		return err
+	}
+	// Reject characters that are invalid in a NATS subject token — dots, wildcards,
+	// and whitespace would corrupt the outbound event subject lfx.{object_type}.{action}
+	// and could collide with the service's own inbound subscriptions.
+	for _, r := range transaction.ObjectType {
+		if r == '.' || r == '*' || r == '>' || r <= ' ' {
+			err := fmt.Errorf("object_type %q contains invalid character for a NATS subject token", transaction.ObjectType)
+			logging.LogError(s.logger, "Object type validation failed: invalid character", err,
+				"validation_step", "object_type_check",
+				"object_type", transaction.ObjectType)
+			return err
+		}
+	}
+	// Reject "index" — publishing lfx.index.{action} would match the service's own
+	// inbound subscription lfx.index.> and create a self-triggering processing loop.
+	if transaction.ObjectType == "index" {
+		err := fmt.Errorf("object_type %q is reserved and cannot be used", transaction.ObjectType)
+		logging.LogError(s.logger, "Object type validation failed: reserved value", err,
+			"validation_step", "object_type_check",
 			"object_type", transaction.ObjectType)
 		return err
 	}
-
-	logger.Debug("Object type validation passed",
-		"transaction_id", transactionID,
-		"object_type", transaction.ObjectType,
-		"enricher_type", fmt.Sprintf("%T", enricher))
 	return nil
 }
 
@@ -583,16 +547,13 @@ func (s *IndexerService) EnrichTransaction(ctx context.Context, transaction *con
 	}
 	logger.Debug("Action validation completed", "transaction_id", transactionID)
 
-	if transaction.IndexingConfig == nil {
-		// Validate object type using enricher registry
-		if err := s.ValidateObjectType(transaction); err != nil {
-			logging.LogError(logger, "Transaction enrichment failed: object type validation", err,
-				"transaction_id", transactionID,
-				"step", "validate_object_type")
-			return fmt.Errorf("%s: %w", constants.ErrInvalidObjectType, err)
-		}
-		logger.Debug("Object type validation completed", "transaction_id", transactionID)
+	if err := s.ValidateObjectType(transaction); err != nil {
+		logging.LogError(logger, "Transaction enrichment failed: object type validation", err,
+			"transaction_id", transactionID,
+			"step", "validate_object_type")
+		return err
 	}
+	logger.Debug("Object type validation completed", "transaction_id", transactionID)
 
 	// Validate transaction data
 	if err := s.ValidateTransactionData(transaction); err != nil {
@@ -620,6 +581,18 @@ func (s *IndexerService) EnrichTransaction(ctx context.Context, transaction *con
 		return fmt.Errorf("%s: %w", constants.ErrParseTransaction, err)
 	}
 	logger.Debug("Data parsing completed", "transaction_id", transactionID)
+
+	// For create/update actions, indexing_config is required before we do principal work
+	canonicalAction := s.GetCanonicalAction(transaction)
+	if canonicalAction == constants.ActionCreated || canonicalAction == constants.ActionUpdated {
+		if transaction.IndexingConfig == nil {
+			err := fmt.Errorf("indexing_config is required for object_type %q", transaction.ObjectType)
+			logging.LogError(logger, "Enrichment failed: missing indexing_config", err,
+				"transaction_id", transactionID,
+				"object_type", transaction.ObjectType)
+			return err
+		}
+	}
 
 	// Parse principals based on transaction version
 	principals, err := s.parsePrincipals(ctx, transaction)
@@ -1207,59 +1180,37 @@ func (s *IndexerService) parseTransactionData(transaction *contracts.LFXTransact
 	return nil
 }
 
-// enrichTransactionData enriches transaction data using the enricher registry
+// enrichTransactionData builds the transaction body from the publisher-supplied indexing_config.
+// All create/update messages must include an indexing_config; the indexer is data-agnostic
+// and does not perform resource-specific enrichment.
 func (s *IndexerService) enrichTransactionData(body *contracts.TransactionBody, transaction *contracts.LFXTransaction) error {
 	logger := s.logger
 	transactionID := s.generateTransactionID(transaction)
 
-	logger.Debug("Starting transaction data enrichment",
-		"transaction_id", transactionID,
-		"object_type", transaction.ObjectType,
-		"action", transaction.Action)
-
-	if transaction.IndexingConfig != nil {
-		// Use the indexing config instead of the data enrichers if it is present
-		transactionData, ok := transaction.Data.(map[string]any)
-		if !ok {
-			logging.LogError(logger, "Failed to extract data from transaction", fmt.Errorf("data is not a map[string]any"),
-				"transaction_id", transactionID)
-			return fmt.Errorf("data is not a map[string]any")
-		}
-		newBody, err := s.buildTransactionBodyFromIndexingConfig(transactionData, transaction.IndexingConfig, transaction)
-		if err != nil {
-			logging.LogError(logger, "Failed to build transaction body from indexing config", err,
-				"transaction_id", transactionID)
-			return err
-		}
-		*body = *newBody
-	} else {
-		// Use the registry to find the appropriate enricher for the object type
-		enricher, exists := s.enricherRegistry.GetEnricher(transaction.ObjectType)
-		if !exists {
-			err := fmt.Errorf("no enricher found for object type: %s", transaction.ObjectType)
-			logging.LogError(logger, "Enrichment failed: no enricher found", err,
-				"transaction_id", transactionID,
-				"object_type", transaction.ObjectType,
-				"enrichment_step", "enricher_lookup")
-			return err
-		}
-
-		logger.Debug("Found enricher for object type",
+	if transaction.IndexingConfig == nil {
+		err := fmt.Errorf("indexing_config is required for object_type %q", transaction.ObjectType)
+		logging.LogError(logger, "Enrichment failed: missing indexing_config", err,
 			"transaction_id", transactionID,
-			"object_type", transaction.ObjectType,
-			"enricher_type", fmt.Sprintf("%T", enricher))
-
-		// Delegate to the specific enricher
-		if err := enricher.EnrichData(body, transaction); err != nil {
-			logging.LogError(logger, "Enrichment failed during data processing", err,
-				"transaction_id", transactionID,
-				"object_type", transaction.ObjectType,
-				"enrichment_step", "data_processing")
-			return err
-		}
+			"object_type", transaction.ObjectType)
+		return err
 	}
 
-	logger.Info("Transaction data enrichment completed successfully",
+	transactionData, ok := transaction.Data.(map[string]any)
+	if !ok {
+		logging.LogError(logger, "Failed to extract data from transaction", fmt.Errorf("data is not a map[string]any"),
+			"transaction_id", transactionID)
+		return fmt.Errorf("data is not a map[string]any")
+	}
+
+	newBody, err := s.buildTransactionBodyFromIndexingConfig(transactionData, transaction.IndexingConfig, transaction)
+	if err != nil {
+		logging.LogError(logger, "Failed to build transaction body from indexing config", err,
+			"transaction_id", transactionID)
+		return err
+	}
+	*body = *newBody
+
+	logger.Debug("Transaction body built from indexing_config",
 		"transaction_id", transactionID,
 		"object_type", transaction.ObjectType)
 
@@ -1301,6 +1252,7 @@ func (s *IndexerService) buildTransactionBodyFromIndexingConfig(
 		Data:       data,
 		ObjectID:   config.ObjectID,
 		ObjectRef:  fmt.Sprintf("%s:%s", transaction.ObjectType, config.ObjectID),
+		V1Data:     transaction.V1Data,
 	}
 
 	// Set latest flag (server-side field)
@@ -1326,7 +1278,7 @@ func (s *IndexerService) buildTransactionBodyFromIndexingConfig(
 	body.SortName = config.SortName
 	body.NameAndAliases = config.NameAndAliases
 	body.ParentRefs = config.ParentRefs
-	body.Tags = config.Tags
+	body.Tags = append(transaction.Tags, config.Tags...)
 	body.Fulltext = config.Fulltext
 	body.Contacts = config.Contacts
 

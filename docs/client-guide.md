@@ -26,7 +26,7 @@ type IndexerMessageEnvelope struct {
     Headers        map[string]string      // Authentication headers
     Data           any                    // Resource data (map or string for deletes)
     Tags           []string               // Optional: fields to index as tags
-    IndexingConfig *IndexingConfig        // Optional: pre-computed indexing metadata
+    IndexingConfig *IndexingConfig        // Required for create/update; omit for delete
 }
 ```
 
@@ -38,7 +38,7 @@ Publish to NATS subjects:
 
 ## Using indexing_config
 
-All messages should include the `indexing_config` field to provide complete indexing metadata. This gives you full control over how your resources are indexed and ensures proper access control.
+Create and update messages must include the `indexing_config` field to provide complete indexing metadata. Delete messages omit `indexing_config` — the indexer only needs the object ID to remove the document. `indexing_config` gives you full control over how your resources are indexed and ensures proper access control.
 
 **Benefits:**
 
@@ -222,16 +222,16 @@ Templates use double curly braces: `{{ field_name }}`
 | `headers` | object | Authentication headers (must include `authorization` for V2) |
 | `data` | object/string | Resource data (object for create/update, string ID for delete) |
 
-### Optional Top-Level Fields
+### Top-Level Fields
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `tags` | array | Field names from `data` to index as searchable tags |
-| `indexing_config` | object | Pre-computed indexing metadata (see below) |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `tags` | array | No | Field names from `data` to index as searchable tags |
+| `indexing_config` | object | Yes (create/update) | Indexing metadata controlling access control, search, and sort behavior. Not required for delete. |
 
 ### IndexingConfig Fields
 
-#### Required (when using `indexing_config`)
+#### Required `indexing_config` Fields
 
 | Field | Type | Description | Example |
 |-------|------|-------------|---------|
@@ -241,7 +241,7 @@ Templates use double curly braces: `{{ field_name }}`
 | `history_check_object` | string | FGA object for history checks | `"project:proj-123"` |
 | `history_check_relation` | string | FGA relation for history checks | `"historian"` |
 
-#### Optional (when using `indexing_config`)
+#### Optional `indexing_config` Fields
 
 | Field | Type | Description | Example |
 |-------|------|-------------|---------|
@@ -486,8 +486,7 @@ Common errors:
    - Average overhead: ~500-1000 bytes
    - Consider compression for high-volume scenarios
 
-2. **Processing Speed**: `indexing_config` bypasses enrichers
-   - Faster processing (no enricher lookup/execution)
+2. **Processing Speed**: `indexing_config` is required and drives all indexing decisions
    - Reduced server CPU usage
 
 3. **Batch Operations**: Use NATS queue groups for load balancing
@@ -539,16 +538,13 @@ nc.Publish("lfx.index.project", data)
 
 **Problem**: `latest`, `created_at`, or principal fields are missing in OpenSearch.
 
-**Solution**: This was a bug fixed in recent versions. Ensure you're using the latest indexer service version. These fields are always set by the server, regardless of whether you use `indexing_config`.
+**Solution**: This was a bug fixed in recent versions. Ensure you're using the latest indexer service version. These fields are always set by the server automatically.
 
-### Issue: "No enricher found" error
+### Issue: "indexing_config is required" error
 
-**Problem**: Sending messages without `indexing_config` for unsupported object types.
+**Problem**: Sending create/update messages without an `indexing_config` block.
 
-**Solution**: Either:
-
-1. Add `indexing_config` to your message
-2. Request a server-side enricher implementation for your object type
+**Solution**: Add `indexing_config` to your message. The indexer is data-agnostic and requires clients to provide complete indexing metadata.
 
 ### Issue: Access control not working
 
