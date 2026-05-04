@@ -453,6 +453,11 @@ func TestAuthRepository_HelperMethods(t *testing.T) {
 		result = repo.safePrincipalLog("user@example.com")
 		assert.Equal(t, "user@***", result)
 
+		// Test machine user principal (should be logged in full)
+		machineUserPrincipal := "test-machine" + constants.MachineUserSuffix
+		result = repo.safePrincipalLog(machineUserPrincipal)
+		assert.Equal(t, machineUserPrincipal, result)
+
 		// Test non-email principal
 		result = repo.safePrincipalLog("machine-user-123")
 		assert.Equal(t, "machine-user-123", result)
@@ -460,7 +465,7 @@ func TestAuthRepository_HelperMethods(t *testing.T) {
 
 	t.Run("isMachineUser", func(t *testing.T) {
 		// Test machine user
-		result := repo.isMachineUser(constants.MachineUserPrefix + "test-machine")
+		result := repo.isMachineUser("test-machine" + constants.MachineUserSuffix)
 		assert.True(t, result)
 
 		// Test regular user
