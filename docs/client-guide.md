@@ -38,7 +38,7 @@ Publish to NATS subjects:
 
 ## Using indexing_config
 
-All messages should include the `indexing_config` field to provide complete indexing metadata. This gives you full control over how your resources are indexed and ensures proper access control.
+Create and update messages must include the `indexing_config` field to provide complete indexing metadata. Delete messages omit `indexing_config` — the indexer only needs the object ID to remove the document. `indexing_config` gives you full control over how your resources are indexed and ensures proper access control.
 
 **Benefits:**
 

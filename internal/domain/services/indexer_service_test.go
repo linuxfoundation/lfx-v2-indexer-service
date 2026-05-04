@@ -310,6 +310,11 @@ func TestIndexerService_ValidateObjectType(t *testing.T) {
 	err := service.ValidateObjectType(&contracts.LFXTransaction{ObjectType: ""})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "object_type is required")
+
+	// "index" is reserved — publishing lfx.index.{action} would match the inbound subscription
+	err = service.ValidateObjectType(&contracts.LFXTransaction{ObjectType: "index"})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "reserved")
 }
 
 func TestIndexerService_parseIndexingConfig(t *testing.T) {

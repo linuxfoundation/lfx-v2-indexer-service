@@ -395,6 +395,15 @@ func (s *IndexerService) ValidateObjectType(transaction *contracts.LFXTransactio
 			return err
 		}
 	}
+	// Reject "index" — publishing lfx.index.{action} would match the service's own
+	// inbound subscription lfx.index.> and create a self-triggering processing loop.
+	if transaction.ObjectType == "index" {
+		err := fmt.Errorf("object_type %q is reserved and cannot be used", transaction.ObjectType)
+		logging.LogError(s.logger, "Object type validation failed: reserved value", err,
+			"validation_step", "object_type_check",
+			"object_type", transaction.ObjectType)
+		return err
+	}
 	return nil
 }
 
