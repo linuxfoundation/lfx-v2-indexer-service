@@ -11,10 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
-	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
 )
 
 // Test constants
@@ -566,8 +567,65 @@ func TestAuthRepository_EdgeCases(t *testing.T) {
 		assert.Error(t, err)
 		assert.Empty(t, principal)
 		assert.Empty(t, email)
-		// It will fail with token parsing error, not "empty token"
-		assert.Contains(t, err.Error(), "could not parse the token")
+		// "Bearer " (length 7) triggers the prefix strip, leaving an empty string
+		assert.Contains(t, err.Error(), "empty token")
+	})
+}
+
+// Test service identity token handling (non-JWT tokens from upstream services)
+func TestAuthRepository_ServiceIdentityTokens(t *testing.T) {
+	logger := setupTestLogger()
+	repo, err := NewAuthRepository(
+		testIssuer,
+		[]string{testAudience},
+		testJWKSURL,
+		time.Minute,
+		logger,
+	)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	t.Run("parsePrincipalAndEmail_service_identity", func(t *testing.T) {
+		// Upstream services send "Bearer lfx-v2-meeting-service" style tokens
+		principal, email, err := repo.parsePrincipalAndEmail(ctx, "Bearer lfx-v2-meeting-service")
+
+		assert.Error(t, err)
+		assert.Empty(t, principal)
+		assert.Empty(t, email)
+		assert.Contains(t, err.Error(), "token is not a JWT")
+	})
+
+	t.Run("parsePrincipalAndEmail_mailing_list_service", func(t *testing.T) {
+		principal, email, err := repo.parsePrincipalAndEmail(ctx, "Bearer mailing-list-service")
+
+		assert.Error(t, err)
+		assert.Empty(t, principal)
+		assert.Empty(t, email)
+		assert.Contains(t, err.Error(), "token is not a JWT")
+	})
+
+	t.Run("ParsePrincipals_service_identity_authorization", func(t *testing.T) {
+		headers := map[string]string{
+			constants.AuthorizationHeader: "Bearer lfx-v2-meeting-service",
+		}
+
+		// Should not return error and should produce no principals (service identity, no JWT)
+		principals, err := repo.ParsePrincipals(ctx, headers)
+
+		assert.NoError(t, err)
+		assert.Empty(t, principals)
+	})
+
+	t.Run("ParsePrincipals_service_identity_on_behalf_of", func(t *testing.T) {
+		headers := map[string]string{
+			constants.OnBehalfOfHeader: "lfx-v2-meeting-service,lfx-v2-committee-service",
+		}
+
+		principals, err := repo.ParsePrincipals(ctx, headers)
+
+		assert.NoError(t, err)
+		assert.Empty(t, principals)
 	})
 }
 

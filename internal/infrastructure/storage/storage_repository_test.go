@@ -9,10 +9,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
-	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
 	"github.com/opensearch-project/opensearch-go/v2"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
 )
 
 // Helper function to create a test logger

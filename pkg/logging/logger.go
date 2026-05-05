@@ -11,13 +11,16 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+
+	slogotel "github.com/remychantenay/slog-otel"
 )
 
 type contextKey string
 
 const (
-	requestLoggerKey contextKey = "request_logger"
-	requestIDKey     contextKey = "request_id"
+	requestLoggerKey  contextKey = "request_logger"
+	requestIDKey      contextKey = "request_id"
+	refreshWaitForKey contextKey = "refresh_wait_for"
 )
 
 // NewRequestID generates a simple 16-character request ID
@@ -53,7 +56,10 @@ func NewLogger(debug ...bool) *slog.Logger {
 		handler = slog.NewTextHandler(os.Stdout, opts)
 	}
 
-	logger := slog.New(handler)
+	// Wrap with slog-otel handler to add trace_id and span_id from context
+	otelHandler := slogotel.OtelHandler{Next: handler}
+
+	logger := slog.New(otelHandler)
 	slog.SetDefault(logger) // Set as default for any slog.Default() calls
 	return logger
 }
@@ -115,6 +121,19 @@ func FromContext(ctx context.Context, fallback *slog.Logger) *slog.Logger {
 // WithComponent adds component field to logger
 func WithComponent(logger *slog.Logger, component string) *slog.Logger {
 	return logger.With("component", component)
+}
+
+// WithRefreshWaitFor marks the context to indicate the caller is waiting for
+// an ACK (NATS reply subject present). Storage operations should use
+// refresh=wait_for so the document is immediately searchable on reply.
+func WithRefreshWaitFor(ctx context.Context) context.Context {
+	return context.WithValue(ctx, refreshWaitForKey, true)
+}
+
+// NeedsRefreshWaitFor reports whether the context was marked by WithRefreshWaitFor.
+func NeedsRefreshWaitFor(ctx context.Context) bool {
+	v, _ := ctx.Value(refreshWaitForKey).(bool)
+	return v
 }
 
 // WithOperation adds operation field to logger

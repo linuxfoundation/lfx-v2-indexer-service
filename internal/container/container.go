@@ -15,6 +15,7 @@ import (
 
 	natsgo "github.com/nats-io/nats.go"
 	opensearchgo "github.com/opensearch-project/opensearch-go/v2"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/application"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
@@ -100,6 +101,21 @@ func NewContainer(logger *slog.Logger, cliConfig *config.CLIConfig) (*Container,
 		// Note: bind address is handled at HTTP server level, not in config
 		if cliConfig.Bind != "*" && cliConfig.Bind != "" {
 			logger.Info("Bind address set by CLI flag", "bind", cliConfig.Bind)
+		}
+
+		if cliConfig.NATSPendingMsgLimit != 0 {
+			config.NATS.PendingMsgLimit = cliConfig.NATSPendingMsgLimit
+			logger.Info("NATS pending message limit overridden by CLI flag", "pending_msg_limit", cliConfig.NATSPendingMsgLimit)
+		}
+
+		if cliConfig.NATSPendingBytesLimit != 0 {
+			config.NATS.PendingBytesLimit = cliConfig.NATSPendingBytesLimit
+			logger.Info("NATS pending bytes limit overridden by CLI flag", "pending_bytes_limit", cliConfig.NATSPendingBytesLimit)
+		}
+
+		if cliConfig.NATSWorkerCount != 0 {
+			config.NATS.WorkerCount = cliConfig.NATSWorkerCount
+			logger.Info("NATS worker count overridden by CLI flag", "worker_count", cliConfig.NATSWorkerCount)
 		}
 	}
 
@@ -202,6 +218,7 @@ func (c *Container) initializeInfrastructure() error {
 
 	opensearchConfig := opensearchgo.Config{
 		Addresses: []string{c.Config.OpenSearch.URL},
+		Transport: otelhttp.NewTransport(nil),
 	}
 	opensearchClient, err := opensearchgo.NewClient(opensearchConfig)
 	if err != nil {
@@ -241,6 +258,9 @@ func (c *Container) initializeRepositories() error {
 		c.AuthRepository,
 		c.Logger,
 		c.Config.NATS.DrainTimeout,
+		c.Config.NATS.PendingMsgLimit,
+		c.Config.NATS.PendingBytesLimit,
+		c.Config.NATS.WorkerCount,
 	)
 
 	// Initialize cleanup repository (background operations)

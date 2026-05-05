@@ -11,6 +11,8 @@ import (
 	"os"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/container"
 )
 
@@ -19,6 +21,15 @@ func createHTTPServer(container *container.Container, bind string) *http.Server 
 	// Setup minimal HTTP server for Kubernetes health checks only
 	mux := http.NewServeMux()
 	container.HealthHandler.RegisterRoutes(mux)
+
+	// Wrap the handler with OpenTelemetry instrumentation
+	var handler http.Handler = mux
+	handler = otelhttp.NewHandler(handler, "indexer-service",
+		otelhttp.WithFilter(func(r *http.Request) bool {
+			p := r.URL.Path
+			return p != "/healthz" && p != "/livez" && p != "/readyz"
+		}),
+	)
 
 	// Create HTTP server with CLI overrides
 	var addr string
@@ -30,7 +41,7 @@ func createHTTPServer(container *container.Container, bind string) *http.Server 
 
 	return &http.Server{
 		Addr:              addr,
-		Handler:           mux,
+		Handler:           handler,
 		ReadTimeout:       container.Config.Server.ReadTimeout,
 		WriteTimeout:      container.Config.Server.WriteTimeout,
 		ReadHeaderTimeout: 3 * time.Second, // Security: prevent slowloris attacks
