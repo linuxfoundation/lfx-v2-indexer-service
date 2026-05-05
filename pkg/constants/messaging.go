@@ -55,45 +55,36 @@ const (
 	HeaderXEmail    = "x-email"    // V1 email header
 )
 
-// Object types (centralized)
-const (
-	ObjectTypeProject                     = "project"
-	ObjectTypeProjectSettings             = "project_settings"
-	ObjectTypeCommittee                   = "committee"
-	ObjectTypeCommitteeSettings           = "committee_settings"
-	ObjectTypeCommitteeMember             = "committee_member"
-	ObjectTypeMeeting                     = "meeting"
-	ObjectTypeMeetingSettings             = "meeting_settings"
-	ObjectTypeMeetingRegistrant           = "meeting_registrant"
-	ObjectTypeMeetingRSVP                 = "meeting_rsvp"
-	ObjectTypeMeetingAttachment           = "meeting_attachment"
-	ObjectTypePastMeeting                 = "past_meeting"
-	ObjectTypePastMeetingAttachment       = "past_meeting_attachment"
-	ObjectTypePastMeetingParticipant      = "past_meeting_participant"
-	ObjectTypePastMeetingRecording        = "past_meeting_recording"
-	ObjectTypePastMeetingTranscript       = "past_meeting_transcript"
-	ObjectTypePastMeetingSummary          = "past_meeting_summary"
-	ObjectTypeGroupsIOService             = "groupsio_service"
-	ObjectTypeGroupsIOServiceSettings     = "groupsio_service_settings"
-	ObjectTypeGroupsIOMailingList         = "groupsio_mailing_list"
-	ObjectTypeGroupsIOMailingListSettings = "groupsio_mailing_list_settings"
-	ObjectTypeGroupsIOMember              = "groupsio_member"
-
-	// V1 Meeting object types
-	ObjectTypeV1Meeting                = "v1_meeting"
-	ObjectTypeV1PastMeeting            = "v1_past_meeting"
-	ObjectTypeV1MeetingRegistrant      = "v1_meeting_registrant"
-	ObjectTypeV1MeetingRSVP            = "v1_meeting_rsvp"
-	ObjectTypeV1PastMeetingParticipant = "v1_past_meeting_participant"
-	ObjectTypeV1PastMeetingRecording   = "v1_past_meeting_recording"
-	ObjectTypeV1PastMeetingTranscript  = "v1_past_meeting_transcript"
-	ObjectTypeV1PastMeetingSummary     = "v1_past_meeting_summary"
-)
-
 // Message processing constants
 const (
 	DefaultQueue = "lfx.indexer.queue"
-	RefreshTrue  = "true"  // OpenSearch refresh parameter
-	RefreshFalse = "false" // OpenSearch refresh parameter
-	ReplyTimeout = 5 * time.Second
+	RefreshTrue  = "true" // OpenSearch refresh parameter — forces immediate segment refresh; use sparingly (high write latency)
+	// RefreshFalse defers refresh to the next scheduled interval (default 1s).
+	// Documents written with this setting are not immediately searchable — a
+	// subsequent read within ~1s may not return the new document. This is the
+	// preferred setting for high-throughput writes where eventual consistency
+	// within 1s is acceptable.
+	RefreshFalse = "false"
+	// RefreshWaitFor blocks until the next refresh cycle completes before
+	// returning, making the document immediately searchable without forcing an
+	// extra segment flush. Used when the caller is waiting for an ACK (i.e.
+	// when a NATS reply subject is present).
+	RefreshWaitFor = "wait_for"
+	ReplyTimeout   = 5 * time.Second
+)
+
+// NATS pending buffer and concurrency defaults.
+//
+// These pending limits are per subscription, not process-wide. In deployments
+// with multiple subscriptions in the same process (for example, V1 and V2
+// consumers together), the allowed in-memory backlog grows proportionally
+// across each subscription during downstream slowness.
+//
+// Treat these values as upper bounds that should be tuned to the memory
+// capacity and throughput characteristics of each deployment rather than as
+// universally safe defaults.
+const (
+	DefaultPendingMsgLimit   = 1_000_000         // Maximum pending messages per subscription; tune down for memory-constrained deployments.
+	DefaultPendingBytesLimit = 512 * 1024 * 1024 // Maximum pending bytes per subscription (512 MiB); tune based on aggregate process memory budget.
+	DefaultWorkerCount       = 100               // concurrent message handlers
 )
