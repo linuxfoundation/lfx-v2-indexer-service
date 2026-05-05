@@ -17,11 +17,11 @@ func TestBuildEventSubject(t *testing.T) {
 		action     constants.MessageAction
 		expected   string
 	}{
-		{constants.ObjectTypeProject, constants.ActionCreated, "lfx.project.created"},
-		{constants.ObjectTypeProject, constants.ActionUpdated, "lfx.project.updated"},
-		{constants.ObjectTypeProject, constants.ActionDeleted, "lfx.project.deleted"},
-		{constants.ObjectTypeCommittee, constants.ActionCreated, "lfx.committee.created"},
-		{constants.ObjectTypeMeeting, constants.ActionDeleted, "lfx.meeting.deleted"},
+		{"project", constants.ActionCreated, "lfx.project.created"},
+		{"project", constants.ActionUpdated, "lfx.project.updated"},
+		{"project", constants.ActionDeleted, "lfx.project.deleted"},
+		{"committee", constants.ActionCreated, "lfx.committee.created"},
+		{"meeting", constants.ActionDeleted, "lfx.meeting.deleted"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.expected, func(t *testing.T) {
