@@ -24,7 +24,12 @@ func createHTTPServer(container *container.Container, bind string) *http.Server 
 
 	// Wrap the handler with OpenTelemetry instrumentation
 	var handler http.Handler = mux
-	handler = otelhttp.NewHandler(handler, "indexer-service")
+	handler = otelhttp.NewHandler(handler, "indexer-service",
+		otelhttp.WithFilter(func(r *http.Request) bool {
+			p := r.URL.Path
+			return p != "/healthz" && p != "/livez" && p != "/readyz"
+		}),
+	)
 
 	// Create HTTP server with CLI overrides
 	var addr string
