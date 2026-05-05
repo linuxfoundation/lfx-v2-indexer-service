@@ -11,38 +11,51 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nats-io/nats.go"
+
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
-	"github.com/nats-io/nats.go"
 )
 
 // MessagingRepository implements the MessagingRepository interface for NATS operations
 type MessagingRepository struct {
-	conn           *nats.Conn
-	authRepo       contracts.AuthRepository
-	logger         *slog.Logger
-	subscriptions  []*nats.Subscription
-	mu             sync.RWMutex
-	drainTimeout   time.Duration
-	isShuttingDown bool
+	conn              *nats.Conn
+	authRepo          contracts.AuthRepository
+	logger            *slog.Logger
+	subscriptions     []*nats.Subscription
+	mu                sync.RWMutex
+	wg                sync.WaitGroup
+	drainTimeout      time.Duration
+	isShuttingDown    bool
+	pendingMsgLimit   int
+	pendingBytesLimit int
+	sem               chan struct{}
 }
 
 // NewMessagingRepository creates a new NATS messaging repository with auth delegation
-func NewMessagingRepository(conn *nats.Conn, authRepo contracts.AuthRepository, logger *slog.Logger, drainTimeout time.Duration) *MessagingRepository {
+func NewMessagingRepository(conn *nats.Conn, authRepo contracts.AuthRepository, logger *slog.Logger, drainTimeout time.Duration, pendingMsgLimit int, pendingBytesLimit int, workerCount int) *MessagingRepository {
 	msgLogger := logging.WithComponent(logger, constants.ComponentNATS)
 
+	if workerCount <= 0 {
+		msgLogger.Warn("Invalid workerCount, falling back to default", "provided", workerCount, "default", constants.DefaultWorkerCount)
+		workerCount = constants.DefaultWorkerCount
+	}
+
 	repo := &MessagingRepository{
-		conn:           conn,
-		authRepo:       authRepo,
-		logger:         msgLogger,
-		subscriptions:  make([]*nats.Subscription, 0),
-		drainTimeout:   drainTimeout,
-		isShuttingDown: false,
+		conn:              conn,
+		authRepo:          authRepo,
+		logger:            msgLogger,
+		subscriptions:     make([]*nats.Subscription, 0),
+		drainTimeout:      drainTimeout,
+		isShuttingDown:    false,
+		pendingMsgLimit:   pendingMsgLimit,
+		pendingBytesLimit: pendingBytesLimit,
+		sem:               make(chan struct{}, workerCount),
 	}
 
 	// Log initialization
-	msgLogger.Info("NATS messaging repository initialized", "drain_timeout", drainTimeout, "auth_repo_configured", authRepo != nil)
+	msgLogger.Info("NATS messaging repository initialized", "drain_timeout", drainTimeout, "worker_count", workerCount, "auth_repo_configured", authRepo != nil)
 
 	return repo
 }
@@ -56,19 +69,35 @@ func (r *MessagingRepository) Subscribe(ctx context.Context, subject string, han
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	if r.isShuttingDown {
+		return fmt.Errorf("cannot subscribe to %s: repository is shutting down", subject)
+	}
+
+	if !r.IsConnected() {
+		return fmt.Errorf("cannot subscribe to %s: NATS connection not available", subject)
+	}
+
 	r.logger.InfoContext(ctx, "Creating NATS subscription", "subject", subject)
 
 	// Create the NATS message handler
 	natsHandler := func(msg *nats.Msg) {
-		// Generate request_id at NATS entry point
-		ctx, logger := logging.WithRequestID(context.Background(), r.logger)
+		data := append([]byte(nil), msg.Data...)
+		msgSubject := msg.Subject
+		r.wg.Add(1)
+		r.sem <- struct{}{}
+		go func() {
+			defer func() {
+				<-r.sem
+				r.wg.Done()
+			}()
 
-		logger.Debug("NATS message received", "subject", msg.Subject, "size", len(msg.Data))
+			ctx, logger := logging.WithRequestID(context.Background(), r.logger)
+			logger.Debug("NATS message received", "subject", msgSubject, "size", len(data))
 
-		// Handle the message
-		if err := handler.Handle(ctx, msg.Data, msg.Subject); err != nil {
-			logger.Error("Message handler failed", "error", err.Error())
-		}
+			if err := handler.Handle(ctx, data, msgSubject); err != nil {
+				logger.Error("Message handler failed", "error", err.Error())
+			}
+		}()
 	}
 
 	// Subscribe to the subject
@@ -76,6 +105,11 @@ func (r *MessagingRepository) Subscribe(ctx context.Context, subject string, han
 	if err != nil {
 		r.logger.Error("Failed to subscribe to NATS", "subject", subject, "error", err.Error())
 		return fmt.Errorf("failed to subscribe to subject %s: %w", subject, err)
+	}
+
+	if err := sub.SetPendingLimits(r.pendingMsgLimit, r.pendingBytesLimit); err != nil {
+		_ = sub.Unsubscribe()
+		return fmt.Errorf("failed to set pending limits on subscription %s: %w", subject, err)
 	}
 
 	// Store the subscription for cleanup
@@ -90,19 +124,36 @@ func (r *MessagingRepository) QueueSubscribe(ctx context.Context, subject string
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	if r.isShuttingDown {
+		return fmt.Errorf("cannot queue subscribe to %s: repository is shutting down", subject)
+	}
+
+	if !r.IsConnected() {
+		return fmt.Errorf("cannot queue subscribe to %s: NATS connection not available", subject)
+	}
+
 	r.logger.InfoContext(ctx, "Creating NATS queue subscription", "subject", subject, "queue", queue)
 
 	// Create the NATS message handler
 	natsHandler := func(msg *nats.Msg) {
-		// Generate request_id at NATS entry point
-		ctx, logger := logging.WithRequestID(context.Background(), r.logger)
+		// Deep-copy message data before handing off to goroutine
+		data := append([]byte(nil), msg.Data...)
+		msgSubject := msg.Subject
+		r.wg.Add(1)
+		r.sem <- struct{}{}
+		go func() {
+			defer func() {
+				<-r.sem
+				r.wg.Done()
+			}()
 
-		logger.Debug("NATS queue message received", "subject", msg.Subject, "queue", queue, "size", len(msg.Data))
+			ctx, logger := logging.WithRequestID(context.Background(), r.logger)
+			logger.Debug("NATS queue message received", "subject", msgSubject, "queue", queue, "size", len(data))
 
-		// Handle the message
-		if err := handler.Handle(ctx, msg.Data, msg.Subject); err != nil {
-			logger.Error("Queue message handler failed", "queue", queue, "error", err.Error())
-		}
+			if err := handler.Handle(ctx, data, msgSubject); err != nil {
+				logger.Error("Queue message handler failed", "queue", queue, "error", err.Error())
+			}
+		}()
 	}
 
 	// Subscribe to the subject with queue group
@@ -110,6 +161,11 @@ func (r *MessagingRepository) QueueSubscribe(ctx context.Context, subject string
 	if err != nil {
 		r.logger.Error("Failed to queue subscribe to NATS", "subject", subject, "queue", queue, "error", err.Error())
 		return fmt.Errorf("failed to queue subscribe to subject %s with queue %s: %w", subject, queue, err)
+	}
+
+	if err := sub.SetPendingLimits(r.pendingMsgLimit, r.pendingBytesLimit); err != nil {
+		_ = sub.Unsubscribe()
+		return fmt.Errorf("failed to set pending limits on subscription %s: %w", subject, err)
 	}
 
 	// Store the subscription for cleanup
@@ -124,33 +180,50 @@ func (r *MessagingRepository) QueueSubscribeWithReply(ctx context.Context, subje
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	if r.isShuttingDown {
+		return fmt.Errorf("cannot queue subscribe with reply to %s: repository is shutting down", subject)
+	}
+
+	if !r.IsConnected() {
+		return fmt.Errorf("cannot queue subscribe with reply to %s: NATS connection not available", subject)
+	}
+
 	r.logger.InfoContext(ctx, "Creating NATS queue subscription with reply", "subject", subject, "queue", queue)
 
 	// Create the NATS message handler with reply support
 	natsHandler := func(msg *nats.Msg) {
-		// Generate request_id at NATS entry point
-		ctx, logger := logging.WithRequestID(context.Background(), r.logger)
+		// Deep-copy fields before msg may be reused after callback returns
+		data := append([]byte(nil), msg.Data...)
+		msgSubject := msg.Subject
+		replySubject := msg.Reply
 
-		logger.Debug("NATS queue message with reply received", "subject", msg.Subject, "queue", queue, "has_reply", msg.Reply != "")
+		r.wg.Add(1)
+		r.sem <- struct{}{}
+		go func() {
+			defer func() {
+				<-r.sem
+				r.wg.Done()
+			}()
 
-		// Create reply function if message has reply subject
-		var replyFunc func([]byte) error
-		if msg.Reply != "" {
-			replyFunc = func(data []byte) error {
-				logger.Debug("Sending reply to NATS message", "reply_subject", msg.Reply, "reply_size", len(data))
+			ctx, logger := logging.WithRequestID(context.Background(), r.logger)
+			logger.Debug("NATS queue message with reply received", "subject", msgSubject, "queue", queue, "has_reply", replySubject != "")
 
-				err := msg.Respond(data)
-				if err != nil {
-					logger.Error("Failed to send reply", "reply_subject", msg.Reply, "error", err.Error())
+			var replyFunc func([]byte) error
+			if replySubject != "" {
+				replyFunc = func(replyData []byte) error {
+					logger.Debug("Sending reply to NATS message", "reply_subject", replySubject, "reply_size", len(replyData))
+					if err := r.conn.Publish(replySubject, replyData); err != nil {
+						logger.Error("Failed to send reply", "reply_subject", replySubject, "error", err.Error())
+						return err
+					}
+					return nil
 				}
-				return err
 			}
-		}
 
-		// Handle the message with reply support
-		if err := handler.HandleWithReply(ctx, msg.Data, msg.Subject, replyFunc); err != nil {
-			logger.Error("Queue message with reply handler failed", "queue", queue, "error", err.Error())
-		}
+			if err := handler.HandleWithReply(ctx, data, msgSubject, replyFunc); err != nil {
+				logger.Error("Queue message with reply handler failed", "queue", queue, "error", err.Error())
+			}
+		}()
 	}
 
 	// Subscribe to the subject with queue group
@@ -158,6 +231,11 @@ func (r *MessagingRepository) QueueSubscribeWithReply(ctx context.Context, subje
 	if err != nil {
 		r.logger.Error("Failed to queue subscribe with reply to NATS", "subject", subject, "queue", queue, "error", err.Error())
 		return fmt.Errorf("failed to queue subscribe with reply to subject %s with queue %s: %w", subject, queue, err)
+	}
+
+	if err := sub.SetPendingLimits(r.pendingMsgLimit, r.pendingBytesLimit); err != nil {
+		_ = sub.Unsubscribe()
+		return fmt.Errorf("failed to set pending limits on subscription %s: %w", subject, err)
 	}
 
 	// Store the subscription for cleanup
@@ -188,6 +266,28 @@ func (r *MessagingRepository) Publish(ctx context.Context, subject string, data 
 	return nil
 }
 
+// waitForHandlers waits for in-flight message handler goroutines to finish,
+// bounded by the provided timeout so shutdown cannot hang indefinitely.
+// Returns true if the wait timed out, false if all handlers finished in time.
+func (r *MessagingRepository) waitForHandlers(timeout time.Duration) bool {
+	if timeout <= 0 {
+		r.logger.Warn("No time remaining to wait for in-flight NATS handlers")
+		return false
+	}
+	done := make(chan struct{})
+	go func() {
+		r.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return false
+	case <-time.After(timeout):
+		r.logger.Warn("Timed out waiting for in-flight NATS handlers", "timeout", timeout)
+		return true
+	}
+}
+
 // DrainWithTimeout performs graceful NATS connection drain with timeout
 func (r *MessagingRepository) DrainWithTimeout() error {
 	r.mu.Lock()
@@ -197,18 +297,40 @@ func (r *MessagingRepository) DrainWithTimeout() error {
 
 	r.logger.Info("Starting NATS graceful drain sequence", "timeout", r.drainTimeout, "subscriptions", totalSubscriptions)
 
+	// Record the deadline so we can compute remaining time for wg.Wait().
+	deadline := time.Now().Add(r.drainTimeout)
+
 	if r.conn == nil {
 		r.logger.Warn("NATS connection is nil, skipping drain")
+		r.waitForHandlers(r.drainTimeout)
 		return nil
 	}
 
 	if r.conn.IsClosed() {
 		r.logger.Info("NATS connection already closed, no drain needed")
+		r.waitForHandlers(r.drainTimeout)
 		return nil
 	}
 
 	if r.conn.IsDraining() {
 		r.logger.Info("NATS connection already draining, waiting for completion")
+		// Callbacks can still fire until the connection is fully closed, so
+		// wait for IsClosed before calling wg.Wait() to avoid a concurrent
+		// Add/Wait panic.
+		drainDone := make(chan struct{})
+		go func() {
+			for !r.conn.IsClosed() {
+				time.Sleep(100 * time.Millisecond)
+			}
+			close(drainDone)
+		}()
+		select {
+		case <-drainDone:
+		case <-time.After(r.drainTimeout):
+			r.logger.Warn("Timed out waiting for ongoing NATS drain", "timeout", r.drainTimeout)
+			return fmt.Errorf("timed out waiting for ongoing NATS drain after %s", r.drainTimeout)
+		}
+		r.waitForHandlers(time.Until(deadline))
 		return nil
 	}
 
@@ -221,8 +343,10 @@ func (r *MessagingRepository) DrainWithTimeout() error {
 	}
 
 	// Wait for drain to complete
+	drainTimedOut := false
 	select {
 	case <-time.After(r.drainTimeout):
+		drainTimedOut = true
 		r.logger.Warn("NATS drain timeout reached", "timeout", r.drainTimeout)
 	case <-func() <-chan struct{} {
 		done := make(chan struct{})
@@ -234,7 +358,24 @@ func (r *MessagingRepository) DrainWithTimeout() error {
 		}()
 		return done
 	}():
-		// Drain completed successfully
+		// Drain completed before timeout
+	}
+
+	// Wait for all in-flight handler goroutines to finish, bounded by the
+	// remaining drain budget. Conn.Drain() only waits for callbacks to return,
+	// not for goroutines spawned inside them, so we track them with a WaitGroup.
+	handlersTimedOut := r.waitForHandlers(time.Until(deadline))
+
+	if drainTimedOut || handlersTimedOut {
+		r.logger.Warn("NATS drain did not complete cleanly", "drain_timed_out", drainTimedOut, "handlers_timed_out", handlersTimedOut, "subscriptions_processed", totalSubscriptions)
+		switch {
+		case drainTimedOut && handlersTimedOut:
+			return fmt.Errorf("NATS drain and in-flight handler wait both timed out after %s", r.drainTimeout)
+		case drainTimedOut:
+			return fmt.Errorf("NATS drain timed out after %s", r.drainTimeout)
+		default: // handlersTimedOut only
+			return fmt.Errorf("NATS drain completed but timed out waiting for in-flight handlers to finish")
+		}
 	}
 
 	r.logger.Info("NATS drain completed successfully", "subscriptions_processed", totalSubscriptions)
@@ -461,6 +602,9 @@ func (r *MessagingRepository) GetMetrics() map[string]interface{} {
 		connected = r.conn.IsConnected()
 	}
 
+	workerCapacity := cap(r.sem)
+	workersInFlight := len(r.sem)
+
 	return map[string]interface{}{
 		"connection_status":    connectionStatus,
 		"connected":            connected,
@@ -470,6 +614,8 @@ func (r *MessagingRepository) GetMetrics() map[string]interface{} {
 		"is_shutting_down":     r.isShuttingDown,
 		"drain_timeout":        r.drainTimeout,
 		"auth_repo_configured": r.authRepo != nil,
+		"worker_capacity":      workerCapacity,
+		"workers_in_flight":    workersInFlight,
 	}
 }
 

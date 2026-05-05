@@ -193,13 +193,19 @@ func TestMessageProcessor_ProcessIndexingMessage_Success(t *testing.T) {
 	testData := map[string]any{
 		"action": "created",
 		"data": map[string]any{
-			"id":     "test-123",
-			"name":   "Test Project",
-			"public": true, // Required field for project enricher
+			"id":   "test-123",
+			"name": "Test Project",
 		},
 		"headers": map[string]string{
 			"x-trace-id":    "trace-123",
 			"authorization": "Bearer test-token",
+		},
+		"indexing_config": map[string]any{
+			"object_id":              "test-123",
+			"access_check_object":    "project:test-123",
+			"access_check_relation":  "viewer",
+			"history_check_object":   "project:test-123",
+			"history_check_relation": "viewer",
 		},
 	}
 	data, err := json.Marshal(testData)
@@ -268,12 +274,18 @@ func TestMessageProcessor_ProcessIndexingMessage_ProcessingError(t *testing.T) {
 	testData := map[string]any{
 		"action": "created",
 		"data": map[string]any{
-			"id":     "test-123",
-			"name":   "Test Project",
-			"public": true, // Required field for project enricher
+			"id":   "test-123",
+			"name": "Test Project",
 		},
 		"headers": map[string]string{
 			"authorization": "Bearer test-token",
+		},
+		"indexing_config": map[string]any{
+			"object_id":              "test-123",
+			"access_check_object":    "project:test-123",
+			"access_check_relation":  "viewer",
+			"history_check_object":   "project:test-123",
+			"history_check_relation": "viewer",
 		},
 	}
 	data, _ := json.Marshal(testData)
@@ -326,15 +338,21 @@ func TestMessageProcessor_ProcessV1IndexingMessage_Success(t *testing.T) {
 	testData := map[string]any{
 		"action": "create",
 		"data": map[string]any{
-			"id":     "test-123",
-			"name":   "Test Project",
-			"public": true, // Required field for project enricher
+			"id":   "test-123",
+			"name": "Test Project",
 		},
 		"v1_data": map[string]any{
 			"legacy_field": "legacy_value",
 		},
 		"headers": map[string]string{
 			"x-trace-id": "trace-123",
+		},
+		"indexing_config": map[string]any{
+			"object_id":              "test-123",
+			"access_check_object":    "project:test-123",
+			"access_check_relation":  "viewer",
+			"history_check_object":   "project:test-123",
+			"history_check_relation": "viewer",
 		},
 	}
 	data, _ := json.Marshal(testData)
@@ -434,12 +452,18 @@ func TestIndexingHandler_HandleWithReply_V2Message(t *testing.T) {
 	testData := map[string]any{
 		"action": "created",
 		"data": map[string]any{
-			"id":     "test-123",
-			"name":   "Test Project",
-			"public": true, // Required field for project enricher
+			"id":   "test-123",
+			"name": "Test Project",
 		},
 		"headers": map[string]string{
 			"authorization": "Bearer test-token",
+		},
+		"indexing_config": map[string]any{
+			"object_id":              "test-123",
+			"access_check_object":    "project:test-123",
+			"access_check_relation":  "viewer",
+			"history_check_object":   "project:test-123",
+			"history_check_relation": "viewer",
 		},
 	}
 	data, _ := json.Marshal(testData)
@@ -480,12 +504,18 @@ func TestIndexingHandler_HandleWithReply_V1Message(t *testing.T) {
 	testData := map[string]any{
 		"action": "create",
 		"data": map[string]any{
-			"id":     "test-123",
-			"name":   "Test Project",
-			"public": true, // Required field for project enricher
+			"id":   "test-123",
+			"name": "Test Project",
 		},
 		"v1_data": map[string]any{
 			"legacy_field": "legacy_value",
+		},
+		"indexing_config": map[string]any{
+			"object_id":              "test-123",
+			"access_check_object":    "project:test-123",
+			"access_check_relation":  "viewer",
+			"history_check_object":   "project:test-123",
+			"history_check_relation": "viewer",
 		},
 	}
 	data, _ := json.Marshal(testData)
@@ -524,12 +554,18 @@ func TestIndexingHandler_HandleWithReply_ProcessingError(t *testing.T) {
 	testData := map[string]any{
 		"action": "created",
 		"data": map[string]any{
-			"id":     "test-123",
-			"name":   "Test Project",
-			"public": true, // Required field for project enricher
+			"id":   "test-123",
+			"name": "Test Project",
 		},
 		"headers": map[string]string{
 			"authorization": "Bearer test-token",
+		},
+		"indexing_config": map[string]any{
+			"object_id":              "test-123",
+			"access_check_object":    "project:test-123",
+			"access_check_relation":  "viewer",
+			"history_check_object":   "project:test-123",
+			"history_check_relation": "viewer",
 		},
 	}
 	data, _ := json.Marshal(testData)
@@ -568,12 +604,18 @@ func TestIndexingHandler_HandleWithReply_NoReply(t *testing.T) {
 	testData := map[string]any{
 		"action": "created",
 		"data": map[string]any{
-			"id":     "test-123",
-			"name":   "Test Project",
-			"public": true, // Required field for project enricher
+			"id":   "test-123",
+			"name": "Test Project",
 		},
 		"headers": map[string]string{
 			"authorization": "Bearer test-token",
+		},
+		"indexing_config": map[string]any{
+			"object_id":              "test-123",
+			"access_check_object":    "project:test-123",
+			"access_check_relation":  "viewer",
+			"history_check_object":   "project:test-123",
+			"history_check_relation": "viewer",
 		},
 	}
 	data, _ := json.Marshal(testData)
@@ -593,6 +635,92 @@ func TestIndexingHandler_HandleWithReply_NoReply(t *testing.T) {
 	err := handler.HandleWithReply(ctx, data, subject, nil)
 
 	// Assertions
+	assert.NoError(t, err)
+	mockStorageRepo.AssertExpectations(t)
+	mockMessagingRepo.AssertExpectations(t)
+}
+
+// Test that HandleWithReply sets refresh=wait_for in context when reply is provided
+func TestIndexingHandler_HandleWithReply_SetsRefreshWaitFor_WithReply(t *testing.T) {
+	mp, mockMessagingRepo, mockStorageRepo := setupTestMessageProcessor()
+	ctx := context.Background()
+
+	testData := map[string]any{
+		"action": "created",
+		"data": map[string]any{
+			"id":     "test-123",
+			"name":   "Test Project",
+			"public": true,
+		},
+		"headers": map[string]string{
+			"authorization": "Bearer test-token",
+		},
+		"indexing_config": map[string]any{
+			"object_id":              "test-123",
+			"access_check_object":    "project:test-123",
+			"access_check_relation":  "viewer",
+			"history_check_object":   "project:test-123",
+			"history_check_relation": "viewer",
+		},
+	}
+	data, _ := json.Marshal(testData)
+	subject := "lfx.index.project"
+
+	replyFunc := func(_ []byte) error { return nil }
+
+	// Index must be called with a context that has NeedsRefreshWaitFor=true
+	mockStorageRepo.On("Index", mock.MatchedBy(func(c context.Context) bool {
+		return logging.NeedsRefreshWaitFor(c)
+	}), mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockMessagingRepo.On("ParsePrincipals", mock.Anything, mock.Anything).Return([]contracts.Principal{}, nil)
+	mockMessagingRepo.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	handler := &indexingHandler{useCase: mp}
+	err := handler.HandleWithReply(ctx, data, subject, replyFunc)
+
+	assert.NoError(t, err)
+	mockStorageRepo.AssertExpectations(t)
+	mockMessagingRepo.AssertExpectations(t)
+}
+
+// Test that HandleWithReply does NOT set refresh=wait_for when no reply
+func TestIndexingHandler_HandleWithReply_NoRefreshWaitFor_WithoutReply(t *testing.T) {
+	mp, mockMessagingRepo, mockStorageRepo := setupTestMessageProcessor()
+	ctx := context.Background()
+
+	testData := map[string]any{
+		"action": "created",
+		"data": map[string]any{
+			"id":     "test-123",
+			"name":   "Test Project",
+			"public": true,
+		},
+		"headers": map[string]string{
+			"authorization": "Bearer test-token",
+		},
+		"indexing_config": map[string]any{
+			"object_id":              "test-123",
+			"access_check_object":    "project:test-123",
+			"access_check_relation":  "viewer",
+			"history_check_object":   "project:test-123",
+			"history_check_relation": "viewer",
+		},
+	}
+	data, _ := json.Marshal(testData)
+	subject := "lfx.index.project"
+
+	// Index must be called with a context that does NOT have NeedsRefreshWaitFor=true
+	mockStorageRepo.On("Index", mock.MatchedBy(func(c context.Context) bool {
+		return !logging.NeedsRefreshWaitFor(c)
+	}), mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockMessagingRepo.On("ParsePrincipals", mock.Anything, mock.Anything).Return([]contracts.Principal{
+		{Principal: "test-user", Email: "test@example.com"},
+	}, nil)
+	mockMessagingRepo.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	handler := &indexingHandler{useCase: mp}
+	err := handler.HandleWithReply(ctx, data, subject, nil)
+
 	assert.NoError(t, err)
 	mockStorageRepo.AssertExpectations(t)
 	mockMessagingRepo.AssertExpectations(t)
@@ -698,12 +826,18 @@ func TestMessageProcessor_IntegrationWorkflow(t *testing.T) {
 	testData := map[string]any{
 		"action": "created",
 		"data": map[string]any{
-			"id":     "test-123",
-			"name":   "Test Project",
-			"public": true, // Required field for project enricher
+			"id":   "test-123",
+			"name": "Test Project",
 		},
 		"headers": map[string]string{
 			"authorization": "Bearer test-token",
+		},
+		"indexing_config": map[string]any{
+			"object_id":              "test-123",
+			"access_check_object":    "project:test-123",
+			"access_check_relation":  "viewer",
+			"history_check_object":   "project:test-123",
+			"history_check_relation": "viewer",
 		},
 	}
 	data, _ := json.Marshal(testData)
@@ -714,12 +848,18 @@ func TestMessageProcessor_IntegrationWorkflow(t *testing.T) {
 	testDataV1 := map[string]any{
 		"action": "create",
 		"data": map[string]any{
-			"id":     "test-456",
-			"name":   "Test Project V1",
-			"public": true, // Required field for project enricher
+			"id":   "test-456",
+			"name": "Test Project V1",
 		},
 		"v1_data": map[string]any{
 			"legacy_field": "legacy_value",
+		},
+		"indexing_config": map[string]any{
+			"object_id":              "test-456",
+			"access_check_object":    "project:test-456",
+			"access_check_relation":  "viewer",
+			"history_check_object":   "project:test-456",
+			"history_check_relation": "viewer",
 		},
 	}
 	dataV1, _ := json.Marshal(testDataV1)

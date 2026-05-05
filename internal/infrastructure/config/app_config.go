@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 )
 
 // AppConfig represents the application configuration
@@ -43,6 +45,9 @@ type NATSConfig struct {
 	V1IndexingSubject string        `json:"v1_indexing_subject"`
 	Queue             string        `json:"queue"`
 	DrainTimeout      time.Duration `json:"drain_timeout"`
+	PendingMsgLimit   int           `json:"pending_msg_limit"`
+	PendingBytesLimit int           `json:"pending_bytes_limit"`
+	WorkerCount       int           `json:"worker_count"`
 }
 
 // OpenSearchConfig contains OpenSearch configuration
@@ -106,6 +111,9 @@ func LoadConfig() (*AppConfig, error) {
 			V1IndexingSubject: getEnvStringWithLogging("NATS_V1_INDEXING_SUBJECT", "lfx.v1.index.>", envVarsUsed, defaultsUsed, logger),
 			Queue:             getEnvStringWithLogging("NATS_QUEUE", "lfx.indexer.queue", envVarsUsed, defaultsUsed, logger),
 			DrainTimeout:      getEnvDurationWithLogging("NATS_DRAIN_TIMEOUT", 55*time.Second, envVarsUsed, defaultsUsed, logger),
+			PendingMsgLimit:   getEnvIntWithLogging("NATS_PENDING_MSG_LIMIT", constants.DefaultPendingMsgLimit, envVarsUsed, defaultsUsed, logger),
+			PendingBytesLimit: getEnvIntWithLogging("NATS_PENDING_BYTES_LIMIT", constants.DefaultPendingBytesLimit, envVarsUsed, defaultsUsed, logger),
+			WorkerCount:       getEnvIntWithLogging("NATS_WORKER_COUNT", constants.DefaultWorkerCount, envVarsUsed, defaultsUsed, logger),
 		},
 		OpenSearch: OpenSearchConfig{
 			URL:   getEnvStringWithLogging("OPENSEARCH_URL", "http://localhost:9200", envVarsUsed, defaultsUsed, logger),
@@ -236,6 +244,18 @@ func (c *AppConfig) validateNATS() error {
 
 	if c.NATS.ConnectionTimeout <= 0 {
 		return fmt.Errorf("NATS connection timeout must be positive, got: %v", c.NATS.ConnectionTimeout)
+	}
+
+	if c.NATS.PendingMsgLimit <= 0 {
+		return fmt.Errorf("NATS pending message limit must be positive, got: %d", c.NATS.PendingMsgLimit)
+	}
+
+	if c.NATS.PendingBytesLimit <= 0 {
+		return fmt.Errorf("NATS pending bytes limit must be positive, got: %d", c.NATS.PendingBytesLimit)
+	}
+
+	if c.NATS.WorkerCount <= 0 {
+		return fmt.Errorf("NATS worker count must be positive, got: %d", c.NATS.WorkerCount)
 	}
 
 	return nil

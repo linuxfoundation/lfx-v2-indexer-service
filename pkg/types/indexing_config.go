@@ -9,11 +9,8 @@ import (
 )
 
 // IndexingConfig represents the strongly-typed indexing configuration for resource messages.
-// This struct ensures type safety when clients provide pre-computed enrichment values,
-// bypassing the server-side enricher system.
-//
-// Clients can include this in their message payloads on object-specific NATS subjects
-// (e.g., lfx.index.project, lfx.index.committee) to provide indexing metadata and bypass enrichers.
+// Clients must include this in their create/update message payloads on object-specific NATS subjects
+// (e.g., lfx.index.project, lfx.index.committee) to provide the indexing metadata the server needs.
 type IndexingConfig struct {
 	// ObjectID is the unique identifier for the resource (required)
 	ObjectID string `json:"object_id"`
@@ -89,8 +86,8 @@ type IndexerMessageEnvelope struct {
 	// These are separate from IndexingConfig.Tags which are additional static tags for the document.
 	Tags []string `json:"tags,omitempty"`
 
-	// IndexingConfig (optional) provides pre-computed indexing metadata.
-	// When provided, it bypasses server-side enrichers and uses the supplied configuration directly.
-	// This is useful when clients want full control over how their resources are indexed.
+	// IndexingConfig provides indexing metadata required for create/update actions.
+	// The server uses this to determine access control, search fields, and document identity.
+	// Not required for delete actions.
 	IndexingConfig *IndexingConfig `json:"indexing_config,omitempty"`
 }
