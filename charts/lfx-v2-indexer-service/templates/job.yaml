@@ -66,7 +66,7 @@ spec:
               {{- end }}
 
               # Check if index already exists
-              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" {{ if .Values.opensearch.auth.enabled }}${AUTH_OPTS} {{ end }}-X HEAD "${OPENSEARCH_URL}/${INDEX_NAME}")
+              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" {{ if .Values.opensearch.auth.enabled }}${AUTH_OPTS} {{ end }}--head "${OPENSEARCH_URL}/${INDEX_NAME}")
 
               if [ "$HTTP_CODE" = "200" ]; then
                 echo "Index '${INDEX_NAME}' already exists, skipping creation"
