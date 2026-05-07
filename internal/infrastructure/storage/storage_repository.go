@@ -431,13 +431,13 @@ func (r *StorageRepository) HealthCheck(ctx context.Context) error {
 
 	res, err := req.Do(ctx, r.client)
 	if err != nil {
-		logger.Error("Failed to execute health check request", "error", err.Error())
+		logger.Warn("OpenSearch health check failed", "error", err.Error())
 		return fmt.Errorf("%s: %w", constants.ErrHealthCheck, err)
 	}
 	defer res.Body.Close()
 
 	if res.IsError() {
-		logger.Error("Health check request failed", "status", res.Status())
+		logger.Warn("OpenSearch health check returned error status", "status", res.Status())
 		return fmt.Errorf("%s: %s", constants.ErrHealthCheck, res.Status())
 	}
 

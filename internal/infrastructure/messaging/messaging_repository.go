@@ -461,20 +461,20 @@ func (r *MessagingRepository) HealthCheck(ctx context.Context) error {
 
 	// Check basic connection state
 	if r.conn == nil {
-		r.logger.Error("NATS health check failed: connection is nil")
+		r.logger.Warn("NATS health check failed: connection is nil")
 		return fmt.Errorf("%s: NATS connection is nil", constants.ErrHealthCheck)
 	}
 
 	r.logger.Debug("NATS connection diagnostics", "status", r.conn.Status().String(), "connected", r.conn.IsConnected())
 
 	if !r.conn.IsConnected() {
-		r.logger.Error("NATS health check failed: connection not connected", "status", r.conn.Status().String())
+		r.logger.Warn("NATS health check failed: connection not connected", "status", r.conn.Status().String())
 		return fmt.Errorf("%s: NATS connection is not connected", constants.ErrHealthCheck)
 	}
 
 	// Check if we can get server info
 	if r.conn.Status() != nats.CONNECTED {
-		r.logger.Error("NATS health check failed: connection status not connected",
+		r.logger.Warn("NATS health check failed: connection status not connected",
 			"status", r.conn.Status().String(),
 			"expected", nats.CONNECTED.String())
 		return fmt.Errorf("%s: NATS connection status is not connected: %s", constants.ErrHealthCheck, r.conn.Status())
