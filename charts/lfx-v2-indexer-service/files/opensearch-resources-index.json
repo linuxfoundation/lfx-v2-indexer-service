@@ -9,8 +9,22 @@
       "name_and_aliases": { "type": "search_as_you_type" },
       "tags": { "type": "keyword" },
       "public": { "type": "boolean" },
-      "access_check_query": { "type": "keyword" },
-      "history_check_query": { "type": "keyword" },
+      "access_check_query": {
+        "type": "text",
+        "fields": {
+          "keyword": { "type": "keyword", "ignore_above": 256 }
+        }
+      },
+      "access_check_object": { "type": "keyword" },
+      "access_check_relation": { "type": "keyword" },
+      "history_check_query": {
+        "type": "text",
+        "fields": {
+          "keyword": { "type": "keyword", "ignore_above": 256 }
+        }
+      },
+      "history_check_object": { "type": "keyword" },
+      "history_check_relation": { "type": "keyword" },
       "latest": { "type": "boolean" },
       "created_at": { "type": "date" },
       "created_by": { "type": "keyword" },
@@ -24,6 +38,8 @@
       "deleted_by": { "type": "keyword" },
       "deleted_by_principals": { "type": "keyword" },
       "deleted_by_emails": { "type": "keyword" },
+      "scheduled_start_time": { "type": "date" },
+      "scheduled_end_time": { "type": "date" },
       "data": {
         "type": "flat_object"
       },
