@@ -8,6 +8,10 @@ kind: Job
 metadata:
   name: {{ .Release.Name }}-opensearch-index-setup
   namespace: {{ .Release.Namespace }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-weight": "1"
 spec:
   ttlSecondsAfterFinished: {{ $job.ttlSecondsAfterFinished }}
   backoffLimit: {{ $job.backoffLimit }}
@@ -50,6 +54,8 @@ spec:
               value: {{ .Values.opensearch.auth.password | quote }}
               {{- end }}
           {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
           volumeMounts:
             - name: index-config
               mountPath: /config
@@ -61,19 +67,16 @@ spec:
               set -e
               OPENSEARCH_URL="{{ .Values.opensearch.url | trimSuffix "/" }}"
               INDEX_NAME="{{ .Values.opensearch.index }}"
-              {{- if .Values.opensearch.auth.enabled }}
-              AUTH_OPTS="-u ${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}"
-              {{- end }}
 
               # Check if index already exists
-              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" {{ if .Values.opensearch.auth.enabled }}${AUTH_OPTS} {{ end }}--head "${OPENSEARCH_URL}/${INDEX_NAME}")
+              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" {{ if .Values.opensearch.auth.enabled }}-u "${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}" {{ end }}--head "${OPENSEARCH_URL}/${INDEX_NAME}")
 
               if [ "$HTTP_CODE" = "200" ]; then
                 echo "Index '${INDEX_NAME}' already exists, skipping creation"
                 exit 0
               elif [ "$HTTP_CODE" = "404" ]; then
                 echo "Index '${INDEX_NAME}' does not exist, creating..."
-                curl -f {{ if .Values.opensearch.auth.enabled }}${AUTH_OPTS} {{ end }}-X PUT "${OPENSEARCH_URL}/${INDEX_NAME}" \
+                curl -f {{ if .Values.opensearch.auth.enabled }}-u "${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}" {{ end }}-X PUT "${OPENSEARCH_URL}/${INDEX_NAME}" \
                   -H 'Content-Type: application/json' \
                   -d @/config/resources-index.json
                 echo "Index '${INDEX_NAME}' created successfully"
