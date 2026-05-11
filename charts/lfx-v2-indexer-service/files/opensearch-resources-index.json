@@ -1,0 +1,64 @@
+{
+  "mappings": {
+    "properties": {
+      "object_ref": { "type": "keyword" },
+      "object_type": { "type": "keyword" },
+      "object_id": { "type": "keyword" },
+      "parent_refs": { "type": "keyword" },
+      "sort_name": { "type": "keyword" },
+      "name_and_aliases": { "type": "search_as_you_type" },
+      "tags": { "type": "keyword" },
+      "public": { "type": "boolean" },
+      "access_check_query": {
+        "type": "text",
+        "fields": {
+          "keyword": { "type": "keyword", "ignore_above": 256 }
+        }
+      },
+      "access_check_object": { "type": "keyword" },
+      "access_check_relation": { "type": "keyword" },
+      "history_check_query": {
+        "type": "text",
+        "fields": {
+          "keyword": { "type": "keyword", "ignore_above": 256 }
+        }
+      },
+      "history_check_object": { "type": "keyword" },
+      "history_check_relation": { "type": "keyword" },
+      "latest": { "type": "boolean" },
+      "created_at": { "type": "date" },
+      "created_by": { "type": "keyword" },
+      "created_by_principals": { "type": "keyword" },
+      "created_by_emails": { "type": "keyword" },
+      "updated_at": { "type": "date" },
+      "updated_by": { "type": "keyword" },
+      "updated_by_principals": { "type": "keyword" },
+      "updated_by_emails": { "type": "keyword" },
+      "deleted_at": { "type": "date" },
+      "deleted_by": { "type": "keyword" },
+      "deleted_by_principals": { "type": "keyword" },
+      "deleted_by_emails": { "type": "keyword" },
+      "scheduled_start_time": { "type": "date" },
+      "scheduled_end_time": { "type": "date" },
+      "data": {
+        "type": "flat_object"
+      },
+      "fulltext": {
+        "type": "match_only_text"
+      },
+      "contacts": {
+        "type": "nested",
+        "properties": {
+          "lfx_principal": { "type": "search_as_you_type" },
+          "name": { "type": "search_as_you_type" },
+          "emails": { "type": "search_as_you_type" },
+          "bot": { "type": "boolean" },
+          "profile": { "type": "flat_object" }
+        }
+      },
+      "v1_data": {
+        "type": "flat_object"
+      }
+    }
+  }
+}
