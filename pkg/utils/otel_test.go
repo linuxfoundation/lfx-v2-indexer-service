@@ -381,7 +381,15 @@ func TestNewSampler_ParentHonored(t *testing.T) {
 	s := newSampler(cfg) // default = parentbased_traceidratio
 
 	// With a sampled parent, child should also be sampled
-	sampledParent := oteltrace.SpanContext{}.WithTraceFlags(oteltrace.FlagsSampled)
+	sampledParent := oteltrace.NewSpanContext(oteltrace.SpanContextConfig{
+		TraceID:    oteltrace.TraceID{1},
+		SpanID:     oteltrace.SpanID{1},
+		TraceFlags: oteltrace.FlagsSampled,
+		Remote:     true,
+	})
+	if !sampledParent.IsValid() {
+		t.Fatal("expected sampled parent span context to be valid")
+	}
 	parentCtx := oteltrace.ContextWithRemoteSpanContext(context.Background(), sampledParent)
 	result := s.ShouldSample(trace.SamplingParameters{ParentContext: parentCtx})
 	if result.Decision != trace.RecordAndSample {
