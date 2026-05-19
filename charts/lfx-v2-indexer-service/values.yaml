@@ -89,10 +89,6 @@ app:
     # tracesExporter specifies the traces exporter: "otlp" or "none"
     # (default: "none")
     tracesExporter: "none"
-    # tracesSampleRatio specifies the default sampling ratio for ratio-based samplers
-    # (0.0 to 1.0). Used when OTEL_TRACES_SAMPLER_ARG is unset or invalid.
-    # (default: 1.0)
-    tracesSampleRatio: 1.0
     # tracesSampler specifies the OTEL_TRACES_SAMPLER type. Supported values:
     # "always_on", "always_off", "traceidratio", "parentbased_always_on",
     # "parentbased_always_off", "parentbased_traceidratio".
@@ -101,7 +97,7 @@ app:
     # tracesSamplerArg specifies the argument for the OTEL_TRACES_SAMPLER.
     # Used for sampler types that accept arguments (e.g., traceidratio, parentbased_traceidratio).
     # For ratio-based samplers, provide a decimal value between 0.0 and 1.0.
-    # When unset or invalid, falls back to tracesSampleRatio.
+    # When unset or invalid, falls back to 1.0.
     tracesSamplerArg: ""
     # metricsExporter specifies the metrics exporter: "otlp" or "none"
     # (default: "none")
