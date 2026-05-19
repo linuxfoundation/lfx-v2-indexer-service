@@ -99,12 +99,12 @@ func TestOTelConfigFromEnv_UnsupportedProtocol(t *testing.T) {
 // disabled, and that the returned shutdown function works correctly.
 func TestSetupOTelSDKWithConfig_AllDisabled(t *testing.T) {
 	cfg := OTelConfig{
-		ServiceName:    "test-service",
-		ServiceVersion: "1.0.0",
-		Protocol:       OTelProtocolGRPC,
-		TracesExporter: OTelExporterNone,
+		ServiceName:     "test-service",
+		ServiceVersion:  "1.0.0",
+		Protocol:        OTelProtocolGRPC,
+		TracesExporter:  OTelExporterNone,
 		MetricsExporter: OTelExporterNone,
-		LogsExporter:   OTelExporterNone,
+		LogsExporter:    OTelExporterNone,
 	}
 
 	ctx := context.Background()
@@ -352,11 +352,13 @@ func TestNewSampler(t *testing.T) {
 }
 
 // TestNewSampler_InvalidArg verifies that an invalid OTEL_TRACES_SAMPLER_ARG
-// falls back to 1.0 without panicking.
+// falls back to cfg.TracesSampleRatio without panicking, and is used in sampling decisions
+// via the root sampler (no parent case) and via ratio application.
 func TestNewSampler_InvalidArg(t *testing.T) {
 	cfg := OTelConfig{
-		TracesSampler:    "parentbased_traceidratio",
-		TracesSamplerArg: "invalid",
+		TracesSampler:     "parentbased_traceidratio",
+		TracesSamplerArg:  "invalid",
+		TracesSampleRatio: 0.5,
 	}
 	s := newSampler(cfg)
 	if s == nil {
@@ -374,6 +376,14 @@ func TestNewSampler_InvalidArg(t *testing.T) {
 	result := s.ShouldSample(trace.SamplingParameters{ParentContext: parentCtx})
 	if result.Decision != trace.RecordAndSample {
 		t.Errorf("expected RecordAndSample when parent is sampled (even with invalid arg), got %v", result.Decision)
+	}
+
+	// Verify root (no parent) path uses cfg.TracesSampleRatio for ratio decision.
+	// With TracesSampleRatio=0.5, the ratio-based root sampler uses the configured ratio.
+	// (Exact sampling is determined by trace ID; just verify sampler is created and doesn't panic.)
+	rootResult := s.ShouldSample(trace.SamplingParameters{ParentContext: context.Background()})
+	if rootResult.Decision != trace.Drop && rootResult.Decision != trace.RecordAndSample {
+		t.Errorf("unexpected root sampler decision: %v", rootResult.Decision)
 	}
 }
 

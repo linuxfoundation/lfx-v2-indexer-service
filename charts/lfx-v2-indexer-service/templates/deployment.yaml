@@ -117,6 +117,11 @@ spec:
               value: {{ $otelTracesExporter | quote }}
             {{- end }}
             {{- $otelTracesSampler := .Values.app.otel.tracesSampler | toString | trim }}
+            {{- $otelTracesSampleRatio := .Values.app.otel.tracesSampleRatio | toString | trim }}
+            {{- if ne $otelTracesSampleRatio "" }}
+            - name: OTEL_TRACES_SAMPLE_RATIO
+              value: {{ $otelTracesSampleRatio | quote }}
+            {{- end }}
             {{- if ne $otelTracesSampler "" }}
             - name: OTEL_TRACES_SAMPLER
               value: {{ $otelTracesSampler | quote }}
