@@ -318,11 +318,17 @@ func newSampler(cfg OTelConfig) trace.Sampler {
 	parseRatio := func() float64 {
 		if cfg.TracesSamplerArg != "" {
 			r, err := strconv.ParseFloat(cfg.TracesSamplerArg, 64)
-			if err == nil && r >= 0.0 && r <= 1.0 {
-				return r
+			if err != nil {
+				slog.Warn("failed to parse OTEL_TRACES_SAMPLER_ARG, using TracesSampleRatio",
+					"provided-value", cfg.TracesSamplerArg, "error", err)
+				return cfg.TracesSampleRatio
 			}
-			slog.Warn("invalid OTEL_TRACES_SAMPLER_ARG, using TracesSampleRatio",
-				"provided-value", cfg.TracesSamplerArg, "error", err)
+			if r < 0.0 || r > 1.0 {
+				slog.Warn("OTEL_TRACES_SAMPLER_ARG out of range [0.0, 1.0], using TracesSampleRatio",
+					"provided-value", cfg.TracesSamplerArg, "parsed-value", r)
+				return cfg.TracesSampleRatio
+			}
+			return r
 		}
 		return cfg.TracesSampleRatio
 	}

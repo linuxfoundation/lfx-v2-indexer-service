@@ -361,7 +361,8 @@ func TestNewSampler(t *testing.T) {
 }
 
 // TestNewSampler_InvalidArg verifies that an invalid OTEL_TRACES_SAMPLER_ARG
-// falls back to cfg.TracesSampleRatio without panicking.
+// falls back to cfg.TracesSampleRatio without panicking and correctly uses
+// the fallback ratio in sampling decisions.
 func TestNewSampler_InvalidArg(t *testing.T) {
 	cfg := OTelConfig{
 		TracesSampleRatio: 0.5,
@@ -372,15 +373,29 @@ func TestNewSampler_InvalidArg(t *testing.T) {
 	if s == nil {
 		t.Fatal("newSampler returned nil for invalid OTEL_TRACES_SAMPLER_ARG")
 	}
+
+	// Verify the sampler respects fallback ratio with a sampled parent
+	sampledParent := oteltrace.NewSpanContext(oteltrace.SpanContextConfig{
+		TraceID:    oteltrace.TraceID{1},
+		SpanID:     oteltrace.SpanID{1},
+		TraceFlags: oteltrace.FlagsSampled,
+		Remote:     true,
+	})
+	parentCtx := oteltrace.ContextWithRemoteSpanContext(context.Background(), sampledParent)
+	result := s.ShouldSample(trace.SamplingParameters{ParentContext: parentCtx})
+	if result.Decision != trace.RecordAndSample {
+		t.Errorf("expected RecordAndSample when parent is sampled (even with invalid arg), got %v", result.Decision)
+	}
 }
 
 // TestNewSampler_ParentHonored verifies that parent-based samplers
-// correctly honor parent span sampling decisions.
+// correctly honor parent span sampling decisions for both sampled and
+// unsampled parents.
 func TestNewSampler_ParentHonored(t *testing.T) {
 	cfg := OTelConfig{TracesSampleRatio: 1.0}
 	s := newSampler(cfg) // default = parentbased_traceidratio
 
-	// With a sampled parent, child should also be sampled
+	// Case 1: With a sampled parent, child should also be sampled
 	sampledParent := oteltrace.NewSpanContext(oteltrace.SpanContextConfig{
 		TraceID:    oteltrace.TraceID{1},
 		SpanID:     oteltrace.SpanID{1},
@@ -394,5 +409,22 @@ func TestNewSampler_ParentHonored(t *testing.T) {
 	result := s.ShouldSample(trace.SamplingParameters{ParentContext: parentCtx})
 	if result.Decision != trace.RecordAndSample {
 		t.Errorf("expected RecordAndSample with sampled parent, got %v", result.Decision)
+	}
+
+	// Case 2: With an unsampled parent, child should NOT be sampled
+	// even though tracesSampleRatio is 1.0 (proving parent decision takes precedence)
+	unsampledParent := oteltrace.NewSpanContext(oteltrace.SpanContextConfig{
+		TraceID:    oteltrace.TraceID{2},
+		SpanID:     oteltrace.SpanID{2},
+		TraceFlags: oteltrace.TraceFlags(0), // not sampled
+		Remote:     true,
+	})
+	if !unsampledParent.IsValid() {
+		t.Fatal("expected unsampled parent span context to be valid")
+	}
+	unsampledParentCtx := oteltrace.ContextWithRemoteSpanContext(context.Background(), unsampledParent)
+	result = s.ShouldSample(trace.SamplingParameters{ParentContext: unsampledParentCtx})
+	if result.Decision != trace.Drop {
+		t.Errorf("expected Drop with unsampled parent, got %v", result.Decision)
 	}
 }
