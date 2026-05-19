@@ -295,15 +295,22 @@ func endpointURL(raw string, insecure bool) string {
 // defaulting to parentbased_traceidratio for consistency with W3C TraceContext.
 func newSampler(cfg OTelConfig) trace.Sampler {
 	parseRatio := func() float64 {
-		if cfg.TracesSamplerArg != "" {
-			r, err := strconv.ParseFloat(cfg.TracesSamplerArg, 64)
-			if err == nil && r >= 0.0 && r <= 1.0 {
-				return r
-			}
-			slog.Warn("invalid OTEL_TRACES_SAMPLER_ARG, falling back to 1.0",
-				"provided-value", cfg.TracesSamplerArg, "error", err)
+		arg := strings.TrimSpace(cfg.TracesSamplerArg)
+		if arg == "" {
+			return 1.0
 		}
-		return 1.0
+		r, err := strconv.ParseFloat(arg, 64)
+		if err != nil {
+			slog.Warn("failed to parse OTEL_TRACES_SAMPLER_ARG",
+				"provided-value", arg, "error", err)
+			return 1.0
+		}
+		if r < 0.0 || r > 1.0 {
+			slog.Warn("OTEL_TRACES_SAMPLER_ARG out of range [0.0, 1.0]",
+				"provided-value", arg, "parsed-value", r)
+			return 1.0
+		}
+		return r
 	}
 
 	switch cfg.TracesSampler {
@@ -324,7 +331,8 @@ func newSampler(cfg OTelConfig) trace.Sampler {
 			slog.Warn("unknown OTEL_TRACES_SAMPLER, falling back to parentbased_traceidratio",
 				"provided-value", cfg.TracesSampler)
 		}
-		return trace.ParentBased(trace.TraceIDRatioBased(parseRatio()))
+		ratio := parseRatio()
+		return trace.ParentBased(trace.TraceIDRatioBased(ratio))
 	}
 }
 

@@ -116,17 +116,19 @@ spec:
             - name: OTEL_TRACES_EXPORTER
               value: {{ $otelTracesExporter | quote }}
             {{- end }}
-            {{- $otelTracesSampler := .Values.app.otel.tracesSampler | toString | trim }}
+            {{- $otelTracesSampler := .Values.app.otel.tracesSampler | toString | trim | lower }}
+            {{- $otelTracesSamplerArg := .Values.app.otel.tracesSamplerArg | toString | trim }}
+            {{- $effectiveSampler := $otelTracesSampler }}
+            {{- if eq $effectiveSampler "" }}
+            {{- $effectiveSampler = "parentbased_traceidratio" }}
+            {{- end }}
             {{- if ne $otelTracesSampler "" }}
             - name: OTEL_TRACES_SAMPLER
               value: {{ $otelTracesSampler | quote }}
-            {{- $otelTracesSamplerArg := .Values.app.otel.tracesSamplerArg | toString | trim }}
-            {{- if or (eq $otelTracesSampler "traceidratio") (eq $otelTracesSampler "parentbased_traceidratio") }}
-            {{- if ne $otelTracesSamplerArg "" }}
+            {{- end }}
+            {{- if and (ne $otelTracesSamplerArg "") (or (eq $effectiveSampler "traceidratio") (eq $effectiveSampler "parentbased_traceidratio")) }}
             - name: OTEL_TRACES_SAMPLER_ARG
               value: {{ $otelTracesSamplerArg | quote }}
-            {{- end }}
-            {{- end }}
             {{- end }}
             {{- $otelMetricsExporter := .Values.app.otel.metricsExporter | toString | trim }}
             {{- if ne $otelMetricsExporter "" }}

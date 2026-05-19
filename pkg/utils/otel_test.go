@@ -355,34 +355,94 @@ func TestNewSampler(t *testing.T) {
 // falls back to 1.0 without panicking, and is used in sampling decisions
 // via the root sampler (no parent case) and via ratio application.
 func TestNewSampler_InvalidArg(t *testing.T) {
-	cfg := OTelConfig{
-		TracesSampler:    "parentbased_traceidratio",
-		TracesSamplerArg: "invalid",
-	}
-	s := newSampler(cfg)
-	if s == nil {
-		t.Fatal("newSampler returned nil for invalid OTEL_TRACES_SAMPLER_ARG")
+	tests := []struct {
+		name      string
+		arg       string
+		wantRatio float64
+	}{
+		{"invalid_string", "invalid", 1.0},
+		{"out_of_range_high", "1.5", 1.0},
+		{"out_of_range_low", "-0.5", 1.0},
+		{"whitespace_padding", "  0.5  ", 0.5},
+		{"empty_string", "", 1.0},
 	}
 
-	// Verify the sampler respects fallback ratio with a sampled parent
-	sampledParent := oteltrace.NewSpanContext(oteltrace.SpanContextConfig{
-		TraceID:    oteltrace.TraceID{1},
-		SpanID:     oteltrace.SpanID{1},
-		TraceFlags: oteltrace.FlagsSampled,
-		Remote:     true,
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := OTelConfig{
+				TracesSampler:    "traceidratio",
+				TracesSamplerArg: tt.arg,
+			}
+			s := newSampler(cfg)
+			if s == nil {
+				t.Fatal("newSampler returned nil for invalid OTEL_TRACES_SAMPLER_ARG")
+			}
+
+			// Verify root (no parent) path uses the fallback ratio deterministically.
+			// With ratio 0.0, every trace should be dropped; with 1.0, every trace recorded.
+			// We test by exercising the same trace ID multiple times to verify consistency.
+			traceID := oteltrace.TraceID{0, 0, 0, 0, 0, 0, 0, 1}
+
+			params := trace.SamplingParameters{
+				ParentContext: context.Background(),
+				TraceID:       traceID,
+				Name:          "test",
+				Kind:          0,
+				Attributes:    nil,
+				Links:         nil,
+			}
+			result := s.ShouldSample(params)
+
+			// If ratio is 1.0, all traces sampled; if 0.0, all dropped.
+			if tt.wantRatio == 1.0 {
+				if result.Decision != trace.RecordAndSample {
+					t.Errorf("with ratio 1.0, expected RecordAndSample, got %v", result.Decision)
+				}
+			} else if tt.wantRatio == 0.0 {
+				if result.Decision != trace.Drop {
+					t.Errorf("with ratio 0.0, expected Drop, got %v", result.Decision)
+				}
+			}
+		})
+	}
+
+	// Also test that parent-based sampler honors parent decision despite invalid arg
+	t.Run("parent_honored_despite_invalid_arg", func(t *testing.T) {
+		cfg := OTelConfig{
+			TracesSampler:    "parentbased_traceidratio",
+			TracesSamplerArg: "invalid",
+		}
+		s := newSampler(cfg)
+		if s == nil {
+			t.Fatal("newSampler returned nil")
+		}
+
+		// With a sampled parent, child should be sampled (parent decision takes precedence)
+		sampledParent := oteltrace.NewSpanContext(oteltrace.SpanContextConfig{
+			TraceID:    oteltrace.TraceID{1},
+			SpanID:     oteltrace.SpanID{1},
+			TraceFlags: oteltrace.FlagsSampled,
+			Remote:     true,
+		})
+		parentCtx := oteltrace.ContextWithRemoteSpanContext(context.Background(), sampledParent)
+		result := s.ShouldSample(trace.SamplingParameters{ParentContext: parentCtx})
+		if result.Decision != trace.RecordAndSample {
+			t.Errorf("expected RecordAndSample when parent is sampled (even with invalid arg), got %v", result.Decision)
+		}
+
+		// With unsampled parent, child should be dropped (parent decision takes precedence)
+		unsampledParent := oteltrace.NewSpanContext(oteltrace.SpanContextConfig{
+			TraceID:    oteltrace.TraceID{2},
+			SpanID:     oteltrace.SpanID{2},
+			TraceFlags: oteltrace.TraceFlags(0),
+			Remote:     true,
+		})
+		unsampledParentCtx := oteltrace.ContextWithRemoteSpanContext(context.Background(), unsampledParent)
+		result = s.ShouldSample(trace.SamplingParameters{ParentContext: unsampledParentCtx})
+		if result.Decision != trace.Drop {
+			t.Errorf("expected Drop when parent is unsampled (despite invalid arg), got %v", result.Decision)
+		}
 	})
-	parentCtx := oteltrace.ContextWithRemoteSpanContext(context.Background(), sampledParent)
-	result := s.ShouldSample(trace.SamplingParameters{ParentContext: parentCtx})
-	if result.Decision != trace.RecordAndSample {
-		t.Errorf("expected RecordAndSample when parent is sampled (even with invalid arg), got %v", result.Decision)
-	}
-
-	// Verify root (no parent) path falls back to 1.0 ratio for ratio decision.
-	// (Exact sampling is determined by trace ID; just verify sampler is created and doesn't panic.)
-	rootResult := s.ShouldSample(trace.SamplingParameters{ParentContext: context.Background()})
-	if rootResult.Decision != trace.Drop && rootResult.Decision != trace.RecordAndSample {
-		t.Errorf("unexpected root sampler decision: %v", rootResult.Decision)
-	}
 }
 
 // TestNewSampler_ParentHonored verifies that parent-based samplers
