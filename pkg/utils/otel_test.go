@@ -363,7 +363,7 @@ func TestNewSampler_InvalidArg(t *testing.T) {
 		{"invalid_string", "invalid", 1.0},
 		{"out_of_range_high", "1.5", 1.0},
 		{"out_of_range_low", "-0.5", 1.0},
-		{"whitespace_padding", "  0.5  ", 0.5},
+		{"whitespace_padding", "  0.0  ", 0.0},
 		{"empty_string", "", 1.0},
 	}
 
@@ -380,7 +380,6 @@ func TestNewSampler_InvalidArg(t *testing.T) {
 
 			// Verify root (no parent) path uses the fallback ratio deterministically.
 			// With ratio 0.0, every trace should be dropped; with 1.0, every trace recorded.
-			// We test by exercising the same trace ID multiple times to verify consistency.
 			traceID := oteltrace.TraceID{0, 0, 0, 0, 0, 0, 0, 1}
 
 			params := trace.SamplingParameters{
