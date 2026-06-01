@@ -272,7 +272,7 @@ sequenceDiagram
     IS->>IS: EnrichTransaction()<br/>ValidateObjectType()<br/>GenerateTransactionBody()
 
     %% Document Indexing
-    IS->>SR: Index(ctx, index, docID, body)
+    IS->>SR: Index(ctx, index, object_ref, body)
     SR->>OS: POST /resources/_doc/{object_ref}
 
     alt Successful Index

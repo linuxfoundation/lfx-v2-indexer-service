@@ -26,8 +26,9 @@ subjects and the queue group are overridable via `NATS_INDEXING_SUBJECT`,
 
 ## Reply and outbound events
 
-- Reply: `"OK"` on success, `"ERROR: <details>"` on failure. Replies are required
-  even for fire-and-forget publishers so they can detect handler failure.
+- Reply: `"OK"` on success, `"ERROR: <details>"` on failure, sent only when the
+  message includes a reply subject (request/reply). A plain `Publish` with no reply
+  inbox receives no reply, so use request/reply to detect handler failure.
 - After every successful OpenSearch write the service publishes a domain event
   on `lfx.{object_type}.{action}` (e.g. `lfx.project.created`). Publish errors
   are non-blocking. See `internal/domain/contracts/events.go` for the
