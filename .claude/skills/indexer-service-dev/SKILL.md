@@ -60,7 +60,7 @@ Rules:
 - Subscribe via the repo's `MessagingRepository` interface (`internal/infrastructure/messaging/`). Do not call the raw NATS client from handlers or services.
 - Both V2 (`lfx.index.>`) and V1 (`lfx.v1.index.>`) subjects bind to the same queue group `lfx.indexer.queue` so only one replica processes each message when scaled horizontally.
 - Subject prefix selects the version. Route on prefix in the handler, not on payload sniffing.
-- Reply on every message: `"OK"` on success, `"ERROR: <details>"` on failure. Reply is mandatory even for fire-and-forget publishers so they can detect handler failure.
+- Reply only when the incoming message includes a reply subject (request/reply): `"OK"` on success, `"ERROR: <details>"` on failure. A plain `Publish` with no reply inbox receives no reply. The handler builds a reply func only when `msg.Reply` is non-empty (see `internal/infrastructure/messaging/messaging_repository.go`).
 - Drain NATS connections during graceful shutdown through the existing shutdown path in `cmd/lfx-indexer/main.go`. Do not bypass it.
 - Subject strings live in `pkg/constants/` or runtime config. Never hardcode `lfx.index.>`, `lfx.v1.index.>`, or `lfx.{object_type}.{action}` at call sites.
 
