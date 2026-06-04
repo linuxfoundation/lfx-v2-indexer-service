@@ -12,6 +12,10 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
@@ -81,6 +85,8 @@ func (r *MessagingRepository) Subscribe(ctx context.Context, subject string, han
 
 	// Create the NATS message handler
 	natsHandler := func(msg *nats.Msg) {
+		// Extract trace context from incoming message headers.
+		msgCtx := otel.GetTextMapPropagator().Extract(context.Background(), natsHeaderCarrier(msg.Header))
 		data := append([]byte(nil), msg.Data...)
 		msgSubject := msg.Subject
 		r.wg.Add(1)
@@ -91,11 +97,25 @@ func (r *MessagingRepository) Subscribe(ctx context.Context, subject string, han
 				r.wg.Done()
 			}()
 
-			ctx, logger := logging.WithRequestID(context.Background(), r.logger)
+			spanCtx, span := tracer.Start(msgCtx, "nats.process",
+				trace.WithSpanKind(trace.SpanKindConsumer),
+				trace.WithAttributes(
+					attribute.String("messaging.system", "nats"),
+					attribute.String("messaging.destination.name", msgSubject),
+					attribute.Int("messaging.message.body.size", len(data)),
+				),
+			)
+			defer span.End()
+
+			spanCtx, logger := logging.WithRequestID(spanCtx, r.logger)
 			logger.Debug("NATS message received", "subject", msgSubject, "size", len(data))
 
-			if err := handler.Handle(ctx, data, msgSubject); err != nil {
+			if err := handler.Handle(spanCtx, data, msgSubject); err != nil {
+				span.RecordError(err)
+				span.SetStatus(codes.Error, err.Error())
 				logger.Error("Message handler failed", "error", err.Error())
+			} else {
+				span.SetStatus(codes.Ok, "")
 			}
 		}()
 	}
@@ -136,6 +156,8 @@ func (r *MessagingRepository) QueueSubscribe(ctx context.Context, subject string
 
 	// Create the NATS message handler
 	natsHandler := func(msg *nats.Msg) {
+		// Extract trace context from incoming message headers.
+		msgCtx := otel.GetTextMapPropagator().Extract(context.Background(), natsHeaderCarrier(msg.Header))
 		// Deep-copy message data before handing off to goroutine
 		data := append([]byte(nil), msg.Data...)
 		msgSubject := msg.Subject
@@ -147,11 +169,25 @@ func (r *MessagingRepository) QueueSubscribe(ctx context.Context, subject string
 				r.wg.Done()
 			}()
 
-			ctx, logger := logging.WithRequestID(context.Background(), r.logger)
+			spanCtx, span := tracer.Start(msgCtx, "nats.process",
+				trace.WithSpanKind(trace.SpanKindConsumer),
+				trace.WithAttributes(
+					attribute.String("messaging.system", "nats"),
+					attribute.String("messaging.destination.name", msgSubject),
+					attribute.Int("messaging.message.body.size", len(data)),
+				),
+			)
+			defer span.End()
+
+			spanCtx, logger := logging.WithRequestID(spanCtx, r.logger)
 			logger.Debug("NATS queue message received", "subject", msgSubject, "queue", queue, "size", len(data))
 
-			if err := handler.Handle(ctx, data, msgSubject); err != nil {
+			if err := handler.Handle(spanCtx, data, msgSubject); err != nil {
+				span.RecordError(err)
+				span.SetStatus(codes.Error, err.Error())
 				logger.Error("Queue message handler failed", "queue", queue, "error", err.Error())
+			} else {
+				span.SetStatus(codes.Ok, "")
 			}
 		}()
 	}
@@ -192,6 +228,8 @@ func (r *MessagingRepository) QueueSubscribeWithReply(ctx context.Context, subje
 
 	// Create the NATS message handler with reply support
 	natsHandler := func(msg *nats.Msg) {
+		// Extract trace context from incoming message headers.
+		msgCtx := otel.GetTextMapPropagator().Extract(context.Background(), natsHeaderCarrier(msg.Header))
 		// Deep-copy fields before msg may be reused after callback returns
 		data := append([]byte(nil), msg.Data...)
 		msgSubject := msg.Subject
@@ -205,7 +243,17 @@ func (r *MessagingRepository) QueueSubscribeWithReply(ctx context.Context, subje
 				r.wg.Done()
 			}()
 
-			ctx, logger := logging.WithRequestID(context.Background(), r.logger)
+			spanCtx, span := tracer.Start(msgCtx, "nats.process",
+				trace.WithSpanKind(trace.SpanKindConsumer),
+				trace.WithAttributes(
+					attribute.String("messaging.system", "nats"),
+					attribute.String("messaging.destination.name", msgSubject),
+					attribute.Int("messaging.message.body.size", len(data)),
+				),
+			)
+			defer span.End()
+
+			spanCtx, logger := logging.WithRequestID(spanCtx, r.logger)
 			logger.Debug("NATS queue message with reply received", "subject", msgSubject, "queue", queue, "has_reply", replySubject != "")
 
 			var replyFunc func([]byte) error
@@ -220,8 +268,12 @@ func (r *MessagingRepository) QueueSubscribeWithReply(ctx context.Context, subje
 				}
 			}
 
-			if err := handler.HandleWithReply(ctx, data, msgSubject, replyFunc); err != nil {
+			if err := handler.HandleWithReply(spanCtx, data, msgSubject, replyFunc); err != nil {
+				span.RecordError(err)
+				span.SetStatus(codes.Error, err.Error())
 				logger.Error("Queue message with reply handler failed", "queue", queue, "error", err.Error())
+			} else {
+				span.SetStatus(codes.Ok, "")
 			}
 		}()
 	}
@@ -257,11 +309,28 @@ func (r *MessagingRepository) Publish(ctx context.Context, subject string, data 
 		return fmt.Errorf("NATS connection not available for publishing to subject %s", subject)
 	}
 
-	if err := r.conn.Publish(subject, data); err != nil {
+	ctx, span := tracer.Start(ctx, "nats.publish",
+		trace.WithSpanKind(trace.SpanKindProducer),
+		trace.WithAttributes(
+			attribute.String("messaging.system", "nats"),
+			attribute.String("messaging.destination.name", subject),
+			attribute.Int("messaging.message.body.size", len(data)),
+		),
+	)
+	defer span.End()
+
+	msg := nats.NewMsg(subject)
+	msg.Data = data
+	otel.GetTextMapPropagator().Inject(ctx, natsHeaderCarrier(msg.Header))
+
+	if err := r.conn.PublishMsg(msg); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		logger.Error("Failed to publish message to NATS", "subject", subject, "error", err.Error())
 		return fmt.Errorf("failed to publish message to subject %s: %w", subject, err)
 	}
 
+	span.SetStatus(codes.Ok, "")
 	logger.Debug("Message published to NATS successfully", "subject", subject, "size", len(data))
 	return nil
 }
