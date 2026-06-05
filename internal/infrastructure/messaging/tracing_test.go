@@ -47,9 +47,9 @@ func TestNatsHeaderCarrier(t *testing.T) {
 
 	t.Run("keys", func(t *testing.T) {
 		header := nats.Header{
-			"X-Trace-ID":  []string{"trace-123"},
-			"X-Span-ID":   []string{"span-456"},
-			"X-User-ID":   []string{"user-789"},
+			"X-Trace-ID": []string{"trace-123"},
+			"X-Span-ID":  []string{"span-456"},
+			"X-User-ID":  []string{"user-789"},
 		}
 		carrier := natsHeaderCarrier(header)
 		keys := carrier.Keys()
