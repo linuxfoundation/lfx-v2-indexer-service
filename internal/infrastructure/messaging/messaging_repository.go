@@ -85,8 +85,8 @@ func (r *MessagingRepository) Subscribe(ctx context.Context, subject string, han
 
 	// Create the NATS message handler
 	natsHandler := func(msg *nats.Msg) {
-		// Extract trace context from incoming message headers.
-		msgCtx := otel.GetTextMapPropagator().Extract(context.Background(), natsHeaderCarrier(msg.Header))
+		// Extract trace context from incoming message headers, preserving cancellation/deadline from ctx.
+		msgCtx := otel.GetTextMapPropagator().Extract(ctx, natsHeaderCarrier(msg.Header))
 		data := append([]byte(nil), msg.Data...)
 		msgSubject := msg.Subject
 		r.wg.Add(1)
@@ -156,8 +156,8 @@ func (r *MessagingRepository) QueueSubscribe(ctx context.Context, subject string
 
 	// Create the NATS message handler
 	natsHandler := func(msg *nats.Msg) {
-		// Extract trace context from incoming message headers.
-		msgCtx := otel.GetTextMapPropagator().Extract(context.Background(), natsHeaderCarrier(msg.Header))
+		// Extract trace context from incoming message headers, preserving cancellation/deadline from ctx.
+		msgCtx := otel.GetTextMapPropagator().Extract(ctx, natsHeaderCarrier(msg.Header))
 		// Deep-copy message data before handing off to goroutine
 		data := append([]byte(nil), msg.Data...)
 		msgSubject := msg.Subject
@@ -228,8 +228,8 @@ func (r *MessagingRepository) QueueSubscribeWithReply(ctx context.Context, subje
 
 	// Create the NATS message handler with reply support
 	natsHandler := func(msg *nats.Msg) {
-		// Extract trace context from incoming message headers.
-		msgCtx := otel.GetTextMapPropagator().Extract(context.Background(), natsHeaderCarrier(msg.Header))
+		// Extract trace context from incoming message headers, preserving cancellation/deadline from ctx.
+		msgCtx := otel.GetTextMapPropagator().Extract(ctx, natsHeaderCarrier(msg.Header))
 		// Deep-copy fields before msg may be reused after callback returns
 		data := append([]byte(nil), msg.Data...)
 		msgSubject := msg.Subject
@@ -260,10 +260,29 @@ func (r *MessagingRepository) QueueSubscribeWithReply(ctx context.Context, subje
 			if replySubject != "" {
 				replyFunc = func(replyData []byte) error {
 					logger.Debug("Sending reply to NATS message", "reply_subject", replySubject, "reply_size", len(replyData))
-					if err := r.conn.Publish(replySubject, replyData); err != nil {
+					// Create a Producer span for the reply and inject trace context into headers
+					_, replySpan := tracer.Start(spanCtx, "nats.reply.publish",
+						trace.WithSpanKind(trace.SpanKindProducer),
+						trace.WithAttributes(
+							attribute.String("messaging.system", "nats"),
+							attribute.String("messaging.destination.name", replySubject),
+							attribute.Int("messaging.message.body.size", len(replyData)),
+						),
+					)
+					defer replySpan.End()
+
+					replyMsg := nats.NewMsg(replySubject)
+					replyMsg.Header = make(nats.Header)
+					replyMsg.Data = replyData
+					otel.GetTextMapPropagator().Inject(spanCtx, natsHeaderCarrier(replyMsg.Header))
+
+					if err := r.conn.PublishMsg(replyMsg); err != nil {
+						replySpan.RecordError(err)
+						replySpan.SetStatus(codes.Error, err.Error())
 						logger.Error("Failed to send reply", "reply_subject", replySubject, "error", err.Error())
 						return err
 					}
+					replySpan.SetStatus(codes.Ok, "")
 					return nil
 				}
 			}
