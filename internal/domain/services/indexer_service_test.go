@@ -11,13 +11,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/mocks"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/types"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestIndexerService_ProcessTransaction_Success(t *testing.T) {
@@ -30,14 +31,20 @@ func TestIndexerService_ProcessTransaction_Success(t *testing.T) {
 	// Test data
 	transaction := &contracts.LFXTransaction{
 		Action:     constants.ActionCreated,
-		ObjectType: constants.ObjectTypeProject,
+		ObjectType: "project",
 		Headers: map[string]string{
 			"authorization": "Bearer valid-token",
 		},
 		Data: map[string]any{
-			"id":     "test-project",
-			"name":   "Test Project",
-			"public": true, // Required for access control
+			"id":   "test-project",
+			"name": "Test Project",
+		},
+		IndexingConfig: &types.IndexingConfig{
+			ObjectID:             "test-project",
+			AccessCheckObject:    "project:test-project",
+			AccessCheckRelation:  "viewer",
+			HistoryCheckObject:   "project:test-project",
+			HistoryCheckRelation: "viewer",
 		},
 		Timestamp: time.Now(),
 		ParsedPrincipals: []contracts.Principal{
@@ -74,14 +81,20 @@ func TestIndexerService_ProcessTransaction_EnrichmentSuccess(t *testing.T) {
 	// Test data - transaction without parsed principals
 	transaction := &contracts.LFXTransaction{
 		Action:     constants.ActionUpdated,
-		ObjectType: constants.ObjectTypeProject,
+		ObjectType: "project",
 		Headers: map[string]string{
 			"authorization": "Bearer valid-token",
 		},
 		Data: map[string]any{
-			"id":     "test-project",
-			"name":   "Test Project Updated",
-			"public": false, // Required for access control
+			"id":   "test-project",
+			"name": "Test Project Updated",
+		},
+		IndexingConfig: &types.IndexingConfig{
+			ObjectID:             "test-project",
+			AccessCheckObject:    "project:test-project",
+			AccessCheckRelation:  "viewer",
+			HistoryCheckObject:   "project:test-project",
+			HistoryCheckRelation: "viewer",
 		},
 		Timestamp: time.Now(),
 		// No ParsedPrincipals - should be enriched via auth
@@ -111,7 +124,7 @@ func TestIndexerService_ProcessTransaction_InvalidAction(t *testing.T) {
 	// Test data with invalid action
 	transaction := &contracts.LFXTransaction{
 		Action:     "invalid-action",
-		ObjectType: constants.ObjectTypeProject,
+		ObjectType: "project",
 		Data: map[string]any{
 			"id": "test-project",
 		},
@@ -129,32 +142,26 @@ func TestIndexerService_ProcessTransaction_InvalidAction(t *testing.T) {
 	assert.Len(t, mockStorageRepo.IndexCalls, 0) // Should not have indexed
 }
 
-func TestIndexerService_ProcessTransaction_InvalidObjectType(t *testing.T) {
-	// Setup
+func TestIndexerService_ProcessTransaction_EmptyObjectType(t *testing.T) {
 	mockStorageRepo := mocks.NewMockStorageRepository()
 	mockMessagingRepo := mocks.NewMockMessagingRepository()
 	logger, _ := logging.TestLogger(t)
 	service := NewIndexerService(mockStorageRepo, mockMessagingRepo, logger)
 
-	// Test data with invalid object type
 	transaction := &contracts.LFXTransaction{
 		Action:     constants.ActionCreated,
-		ObjectType: "invalid-type",
-		Data: map[string]any{
-			"id": "test-object",
-		},
-		Timestamp: time.Now(),
+		ObjectType: "", // empty — always invalid
+		Data:       map[string]any{"id": "test-object"},
+		Timestamp:  time.Now(),
 	}
 
-	// Execute
 	result, err := service.ProcessTransaction(context.Background(), transaction, "test-index")
 
-	// Verify
 	assert.Error(t, err)
 	assert.NotNil(t, result)
 	assert.False(t, result.Success)
-	assert.Contains(t, err.Error(), "unsupported object type")
-	assert.Len(t, mockStorageRepo.IndexCalls, 0) // Should not have indexed
+	assert.Contains(t, err.Error(), constants.ErrInvalidObjectType)
+	assert.Len(t, mockStorageRepo.IndexCalls, 0)
 }
 
 func TestIndexerService_ProcessTransaction_BasicValidation(t *testing.T) {
@@ -167,14 +174,20 @@ func TestIndexerService_ProcessTransaction_BasicValidation(t *testing.T) {
 	// Test that basic processing works and mocks are functional
 	transaction := &contracts.LFXTransaction{
 		Action:     constants.ActionCreated,
-		ObjectType: constants.ObjectTypeProject,
+		ObjectType: "project",
 		Headers: map[string]string{
 			"authorization": "Bearer valid-token",
 		},
 		Data: map[string]any{
-			"id":     "test-project",
-			"name":   "Test Project",
-			"public": true, // Required for access control
+			"id":   "test-project",
+			"name": "Test Project",
+		},
+		IndexingConfig: &types.IndexingConfig{
+			ObjectID:             "test-project",
+			AccessCheckObject:    "project:test-project",
+			AccessCheckRelation:  "viewer",
+			HistoryCheckObject:   "project:test-project",
+			HistoryCheckRelation: "viewer",
 		},
 		Timestamp: time.Now(),
 		ParsedPrincipals: []contracts.Principal{
@@ -281,35 +294,27 @@ func TestIndexerService_GeneralHealthCheck(t *testing.T) {
 	assert.NotZero(t, status.Timestamp)
 }
 
-func TestIndexerService_ValidateObjectType_RegistryBased(t *testing.T) {
-	// Setup
+func TestIndexerService_ValidateObjectType(t *testing.T) {
 	mockStorageRepo := mocks.NewMockStorageRepository()
 	mockMessagingRepo := mocks.NewMockMessagingRepository()
 	logger, _ := logging.TestLogger(t)
 	service := NewIndexerService(mockStorageRepo, mockMessagingRepo, logger)
 
-	// Test valid object type (project is registered in the enricher registry)
-	validTransaction := &contracts.LFXTransaction{
-		ObjectType: constants.ObjectTypeProject,
+	// Any non-empty object_type is valid — the indexer is data-agnostic
+	for _, objectType := range []string{"project", "committee", "any_custom_type", "v1_meeting"} {
+		err := service.ValidateObjectType(&contracts.LFXTransaction{ObjectType: objectType})
+		assert.NoError(t, err, "object_type %q should be valid", objectType)
 	}
-	err := service.ValidateObjectType(validTransaction)
-	assert.NoError(t, err, "Project object type should be valid")
 
-	// Test invalid object type (committee is not registered in the enricher registry)
-	invalidTransaction := &contracts.LFXTransaction{
-		ObjectType: "invalid_type",
-	}
-	err = service.ValidateObjectType(invalidTransaction)
-	assert.Error(t, err, "Committee object type should be invalid (not registered)")
-	assert.Contains(t, err.Error(), "no enricher found for object type: invalid_type")
+	// Empty object_type is always rejected
+	err := service.ValidateObjectType(&contracts.LFXTransaction{ObjectType: ""})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "object_type is required")
 
-	// Test completely unknown object type
-	unknownTransaction := &contracts.LFXTransaction{
-		ObjectType: "unknown-type",
-	}
-	err = service.ValidateObjectType(unknownTransaction)
-	assert.Error(t, err, "Unknown object type should be invalid")
-	assert.Contains(t, err.Error(), "no enricher found for object type: unknown-type")
+	// "index" is reserved — publishing lfx.index.{action} would match the inbound subscription
+	err = service.ValidateObjectType(&contracts.LFXTransaction{ObjectType: "index"})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "reserved")
 }
 
 func TestIndexerService_parseIndexingConfig(t *testing.T) {
@@ -492,7 +497,7 @@ func TestIndexerService_parseIndexingConfig(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Pass empty transaction data for backward compatibility tests
-			config, err := service.parseIndexingConfig(tt.input, map[string]any{})
+			config, err := service.parseIndexingConfig(tt.input, map[string]any{}, "test_object")
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -654,7 +659,26 @@ func TestIndexerService_parseIndexingConfig_TemplateExpansion(t *testing.T) {
 				"uid": "proj-123",
 			},
 			wantErr:     true,
-			errContains: "template field 'missing_field' not found in data",
+			errContains: "object_id is required and must be a non-empty string",
+		},
+		{
+			name: "missing template field in optional embedded string should succeed",
+			indexingConfig: map[string]any{
+				"object_id":              "{{ uid }}",
+				"access_check_object":    "project:{{ uid }}",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:{{ uid }}",
+				"history_check_relation": "historian",
+				"fulltext":               "{{ name }} - {{ missing_field }}",
+			},
+			transactionData: map[string]any{
+				"uid":  "proj-123",
+				"name": "Test Project",
+			},
+			wantErr: false,
+			validate: func(t *testing.T, config *types.IndexingConfig) {
+				assert.Equal(t, "Test Project - ", config.Fulltext)
+			},
 		},
 		{
 			name: "invalid nested field path should error",
@@ -837,7 +861,7 @@ func TestIndexerService_parseIndexingConfig_TemplateExpansion(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config, err := service.parseIndexingConfig(tt.indexingConfig, tt.transactionData)
+			config, err := service.parseIndexingConfig(tt.indexingConfig, tt.transactionData, "test_object")
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -1055,7 +1079,7 @@ func TestIndexerService_enrichTransactionData(t *testing.T) {
 		validate    func(t *testing.T, body *contracts.TransactionBody)
 	}{
 		{
-			name: "with indexing_config - bypass enrichers",
+			name: "with indexing_config",
 			transaction: &contracts.LFXTransaction{
 				Action:     constants.ActionCreated,
 				ObjectType: "project",
@@ -1097,37 +1121,17 @@ func TestIndexerService_enrichTransactionData(t *testing.T) {
 			},
 		},
 		{
-			name: "without indexing_config - use enricher registry",
+			name: "without indexing_config returns error",
 			transaction: &contracts.LFXTransaction{
-				Action:     constants.ActionCreated,
-				ObjectType: constants.ObjectTypeProject,
-				Data: map[string]any{
-					"uid":    "proj-456",
-					"name":   "Test Project via Enricher",
-					"public": true, // Required by project enricher
-				},
-				ParsedData: map[string]any{
-					"uid":    "proj-456",
-					"name":   "Test Project via Enricher",
-					"public": true, // Required by project enricher
-				},
-				IndexingConfig: nil, // No config, should use enricher
+				Action:         constants.ActionCreated,
+				ObjectType:     "project",
+				Data:           map[string]any{"id": "proj-456"},
+				IndexingConfig: nil,
 				Timestamp:      time.Now(),
 			},
-			body: &contracts.TransactionBody{
-				ObjectType: constants.ObjectTypeProject, // Pre-populated by GenerateTransactionBody
-			},
-			wantErr: false,
-			validate: func(t *testing.T, body *contracts.TransactionBody) {
-				// Verify the body was populated via enricher
-				assert.Equal(t, constants.ObjectTypeProject, body.ObjectType)
-				assert.Equal(t, "proj-456", body.ObjectID)
-				// Note: ObjectRef is set by GenerateTransactionBody after enrichTransactionData returns
-				assert.True(t, body.Public)
-				// Enricher should have set these
-				assert.NotEmpty(t, body.AccessCheckQuery)
-				assert.NotEmpty(t, body.HistoryCheckQuery)
-			},
+			body:        &contracts.TransactionBody{},
+			wantErr:     true,
+			errContains: "indexing_config is required",
 		},
 		{
 			name: "with indexing_config but invalid data type",
@@ -1149,17 +1153,17 @@ func TestIndexerService_enrichTransactionData(t *testing.T) {
 			errContains: "data is not a map[string]any",
 		},
 		{
-			name: "without indexing_config and invalid object type",
+			name: "without indexing_config and any object type returns error",
 			transaction: &contracts.LFXTransaction{
 				Action:         constants.ActionCreated,
-				ObjectType:     "invalid-object-type",
+				ObjectType:     "any-object-type",
 				Data:           map[string]any{"id": "test-123"},
 				IndexingConfig: nil,
 				Timestamp:      time.Now(),
 			},
 			body:        &contracts.TransactionBody{},
 			wantErr:     true,
-			errContains: "no enricher found for object type",
+			errContains: "indexing_config is required",
 		},
 	}
 
@@ -1192,12 +1196,18 @@ func TestIndexerService_ProcessTransaction_PublishesIndexingEvent(t *testing.T) 
 
 	transaction := &contracts.LFXTransaction{
 		Action:     constants.ActionCreated,
-		ObjectType: constants.ObjectTypeProject,
+		ObjectType: "project",
 		Headers:    map[string]string{"authorization": "Bearer valid-token"},
 		Data: map[string]any{
-			"id":     "test-project",
-			"name":   "Test Project",
-			"public": true,
+			"id":   "test-project",
+			"name": "Test Project",
+		},
+		IndexingConfig: &types.IndexingConfig{
+			ObjectID:             "test-project",
+			AccessCheckObject:    "project:test-project",
+			AccessCheckRelation:  "viewer",
+			HistoryCheckObject:   "project:test-project",
+			HistoryCheckRelation: "viewer",
 		},
 		Timestamp: time.Now(),
 		ParsedPrincipals: []contracts.Principal{
@@ -1220,10 +1230,10 @@ func TestIndexerService_ProcessTransaction_PublishesIndexingEvent(t *testing.T) 
 	assert.NoError(t, json.Unmarshal(publishCall.Data, &event))
 	assert.Equal(t, "project:test-project", event.DocumentID)
 	assert.Equal(t, "test-project", event.ObjectID)
-	assert.Equal(t, constants.ObjectTypeProject, event.ObjectType)
+	assert.Equal(t, "project", event.ObjectType)
 	assert.Equal(t, constants.ActionCreated, event.Action)
 	assert.NotNil(t, event.Body)
-	assert.Equal(t, constants.ObjectTypeProject, event.Body.ObjectType)
+	assert.Equal(t, "project", event.Body.ObjectType)
 	assert.False(t, event.Timestamp.IsZero())
 }
 
@@ -1236,12 +1246,18 @@ func TestIndexerService_ProcessTransaction_PublishFailureIsNonBlocking(t *testin
 
 	transaction := &contracts.LFXTransaction{
 		Action:     constants.ActionUpdated,
-		ObjectType: constants.ObjectTypeProject,
+		ObjectType: "project",
 		Headers:    map[string]string{"authorization": "Bearer valid-token"},
 		Data: map[string]any{
-			"id":     "test-project",
-			"name":   "Test Project",
-			"public": true,
+			"id":   "test-project",
+			"name": "Test Project",
+		},
+		IndexingConfig: &types.IndexingConfig{
+			ObjectID:             "test-project",
+			AccessCheckObject:    "project:test-project",
+			AccessCheckRelation:  "viewer",
+			HistoryCheckObject:   "project:test-project",
+			HistoryCheckRelation: "viewer",
 		},
 		Timestamp: time.Now(),
 		ParsedPrincipals: []contracts.Principal{
@@ -1268,12 +1284,18 @@ func TestIndexerService_ProcessTransaction_NoEventPublishedOnIndexFailure(t *tes
 
 	transaction := &contracts.LFXTransaction{
 		Action:     constants.ActionCreated,
-		ObjectType: constants.ObjectTypeProject,
+		ObjectType: "project",
 		Headers:    map[string]string{"authorization": "Bearer valid-token"},
 		Data: map[string]any{
-			"id":     "test-project",
-			"name":   "Test Project",
-			"public": true,
+			"id":   "test-project",
+			"name": "Test Project",
+		},
+		IndexingConfig: &types.IndexingConfig{
+			ObjectID:             "test-project",
+			AccessCheckObject:    "project:test-project",
+			AccessCheckRelation:  "viewer",
+			HistoryCheckObject:   "project:test-project",
+			HistoryCheckRelation: "viewer",
 		},
 		Timestamp: time.Now(),
 		ParsedPrincipals: []contracts.Principal{
@@ -1298,13 +1320,19 @@ func TestIndexerService_ProcessTransaction_V1ActionCanonicalizedInEvent(t *testi
 	// V1 uses present-tense "create" instead of past-tense "created"
 	transaction := &contracts.LFXTransaction{
 		Action:     constants.ActionCreate,
-		ObjectType: constants.ObjectTypeProject,
+		ObjectType: "project",
 		IsV1:       true,
 		Headers:    map[string]string{"x-username": "admin", "x-email": "admin@example.com"},
 		Data: map[string]any{
-			"id":     "v1-project",
-			"name":   "V1 Project",
-			"public": true,
+			"id":   "v1-project",
+			"name": "V1 Project",
+		},
+		IndexingConfig: &types.IndexingConfig{
+			ObjectID:             "v1-project",
+			AccessCheckObject:    "project:v1-project",
+			AccessCheckRelation:  "viewer",
+			HistoryCheckObject:   "project:v1-project",
+			HistoryCheckRelation: "viewer",
 		},
 		Timestamp: time.Now(),
 		ParsedPrincipals: []contracts.Principal{
@@ -1443,4 +1471,86 @@ func TestDecodeTransactionData(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestIsValidObjectID(t *testing.T) {
+	tests := []struct {
+		name  string
+		id    string
+		valid bool
+	}{
+		{name: "uuid", id: "550e8400-e29b-41d4-a716-446655440000", valid: true},
+		{name: "numeric string", id: "123456789", valid: true},
+		{name: "alphanumeric", id: "abc123", valid: true},
+		{name: "printable ASCII with symbols", id: "foo_bar.baz", valid: true},
+		{name: "empty string", id: "", valid: false},
+		{name: "space character", id: "hello world", valid: false},
+		{name: "binary byte 0x00", id: "\x00", valid: false},
+		{name: "binary byte 0x01", id: "\x01abc", valid: false},
+		{name: "high byte 0x80", id: "\x80abc", valid: false},
+		{name: "non-ASCII unicode", id: "abc\u05cfdef", valid: false},
+		{name: "replacement char (invalid UTF-8 proxy)", id: "\uFFFD", valid: false},
+		{name: "tab character", id: "abc\tdef", valid: false},
+		{name: "newline character", id: "abc\ndef", valid: false},
+		// The exact pattern from LFXV2-1464: Hebrew letter + high bytes
+		{name: "corrupted member id from ticket", id: "\u05cfz\ufffd\ufffd|", valid: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isValidObjectID(tt.id)
+			if got != tt.valid {
+				t.Errorf("isValidObjectID(%q) = %v, want %v", tt.id, got, tt.valid)
+			}
+		})
+	}
+}
+
+func TestIndexerService_GenerateTransactionBody_InvalidObjectID_Delete(t *testing.T) {
+	logger, _ := logging.TestLogger(t)
+	s := NewIndexerService(
+		mocks.NewMockStorageRepository(),
+		mocks.NewMockMessagingRepository(),
+		logger,
+	)
+
+	transaction := &contracts.LFXTransaction{
+		ObjectType:       "groupsio_member",
+		Action:           constants.ActionDeleted,
+		ParsedObjectID:   "\u05cfz\ufffd\ufffd|", // corrupted binary member ID from LFXV2-1464
+		ParsedPrincipals: []contracts.Principal{},
+		Timestamp:        time.Now(),
+	}
+
+	body, err := s.GenerateTransactionBody(context.Background(), transaction)
+	require.Error(t, err)
+	assert.Nil(t, body)
+	assert.Contains(t, err.Error(), constants.ErrInvalidObjectID)
+}
+
+func TestIndexerService_ProcessTransaction_InvalidObjectID_Delete(t *testing.T) {
+	mockStorageRepo := mocks.NewMockStorageRepository()
+	logger, _ := logging.TestLogger(t)
+	s := NewIndexerService(
+		mockStorageRepo,
+		mocks.NewMockMessagingRepository(),
+		logger,
+	)
+
+	// Use IsV1=true (no auth headers required).
+	// For delete actions, Data must be a string — it is parsed into ParsedObjectID by
+	// parseTransactionData, ensuring the full enrichment pipeline is exercised.
+	transaction := &contracts.LFXTransaction{
+		ObjectType: "project",
+		Action:     constants.ActionDelete, // V1 uses present-tense; canonicalized to ActionDeleted internally
+		IsV1:       true,
+		Headers:    map[string]string{},
+		Data:       "\u05cfz\ufffd\ufffd|", // corrupted binary member ID from LFXV2-1464
+		Timestamp:  time.Now(),
+	}
+
+	_, err := s.ProcessTransaction(context.Background(), transaction, "test-index")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), constants.ErrInvalidObjectID)
+	assert.Empty(t, mockStorageRepo.IndexCalls, "expected no writes to OpenSearch for corrupted object_id")
 }
