@@ -479,6 +479,10 @@ func TestAuthRepository_HelperMethods(t *testing.T) {
 		// Test empty principal
 		result = repo.isMachineUser("")
 		assert.False(t, result)
+
+		// Test bare suffix with no client_id (e.g. "@clients" alone is not a valid machine user).
+		result = repo.isMachineUser(constants.MachineUserSuffix)
+		assert.False(t, result)
 	})
 }
 

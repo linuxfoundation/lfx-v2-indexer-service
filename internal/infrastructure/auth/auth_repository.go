@@ -189,7 +189,7 @@ func (r *AuthRepository) ParsePrincipals(ctx context.Context, headers map[string
 			}
 			authorizedPrincipals = append(authorizedPrincipals, principalEntity)
 
-			if strings.HasSuffix(principal, constants.MachineUserSuffix) {
+			if r.isMachineUser(principal) {
 				isMachineUser = true
 				r.logger.Info("Machine user detected in authorization header",
 					"auth_id", authID,
@@ -531,5 +531,5 @@ func (r *AuthRepository) safePrincipalLog(principal string) string {
 
 // isMachineUser checks if a principal is a machine user
 func (r *AuthRepository) isMachineUser(principal string) bool {
-	return strings.HasSuffix(principal, constants.MachineUserSuffix)
+	return len(principal) > len(constants.MachineUserSuffix) && strings.HasSuffix(principal, constants.MachineUserSuffix)
 }
