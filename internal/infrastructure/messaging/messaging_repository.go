@@ -261,7 +261,7 @@ func (r *MessagingRepository) QueueSubscribeWithReply(ctx context.Context, subje
 				replyFunc = func(replyData []byte) error {
 					logger.Debug("Sending reply to NATS message", "reply_subject", replySubject, "reply_size", len(replyData))
 					// Create a Producer span for the reply and inject trace context into headers
-					_, replySpan := tracer.Start(spanCtx, "nats.reply.publish",
+					replyCtx, replySpan := tracer.Start(spanCtx, "nats.reply.publish",
 						trace.WithSpanKind(trace.SpanKindProducer),
 						trace.WithAttributes(
 							attribute.String("messaging.system", "nats"),
@@ -274,7 +274,7 @@ func (r *MessagingRepository) QueueSubscribeWithReply(ctx context.Context, subje
 					replyMsg := nats.NewMsg(replySubject)
 					replyMsg.Header = make(nats.Header)
 					replyMsg.Data = replyData
-					otel.GetTextMapPropagator().Inject(spanCtx, natsHeaderCarrier(replyMsg.Header))
+					otel.GetTextMapPropagator().Inject(replyCtx, natsHeaderCarrier(replyMsg.Header))
 
 					if err := r.conn.PublishMsg(replyMsg); err != nil {
 						replySpan.RecordError(err)

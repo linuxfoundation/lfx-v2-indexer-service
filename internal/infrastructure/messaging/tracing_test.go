@@ -94,6 +94,9 @@ func TestTraceContextInjection(t *testing.T) {
 		err := repo.Publish(ctx, subject, data)
 		require.NoError(t, err)
 
+		// Flush the batch processor to ensure spans are exported
+		tp.ForceFlush(context.Background())
+
 		// Verify that a span was created
 		spans := exporter.GetSpans()
 		require.Greater(t, len(spans), 0)
@@ -295,8 +298,9 @@ func TestReplyPublishTraceContext(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 
 		// Create a request-reply subscription to receive the reply
+		replyInbox := nats.NewInbox()
 		replyChan := make(chan *nats.Msg, 1)
-		_, err = conn.Subscribe(nats.NewInbox(), func(msg *nats.Msg) {
+		_, err = conn.Subscribe(replyInbox, func(msg *nats.Msg) {
 			replyChan <- msg
 		})
 		require.NoError(t, err)
@@ -304,7 +308,6 @@ func TestReplyPublishTraceContext(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 
 		// Publish a request-reply message
-		replyInbox := nats.NewInbox()
 		requestMsg := nats.NewMsg(requestSubject)
 		requestMsg.Header = make(nats.Header)
 		requestMsg.Data = testData
@@ -317,6 +320,9 @@ func TestReplyPublishTraceContext(t *testing.T) {
 		select {
 		case <-replyReceived:
 			time.Sleep(100 * time.Millisecond) // Allow spans to be exported
+
+			// Flush the batch processor to ensure spans are exported
+			tp.ForceFlush(context.Background())
 
 			// Verify that reply.publish span was created
 			spans := exporter.GetSpans()
