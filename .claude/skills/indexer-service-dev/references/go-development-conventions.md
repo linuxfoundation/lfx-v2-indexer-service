@@ -26,7 +26,7 @@ Quick checklist form. The narrative lives in `../SKILL.md`. Use this file in a c
 
 ## NATS handler
 
-- [ ] Replies `"OK"` on success, `"ERROR: <details>"` on failure for every message.
+- [ ] Replies `"OK"` on success, `"ERROR: <details>"` on failure when the message carries a reply subject; no reply is sent for a plain publish.
 - [ ] Routes on subject prefix to pick V2 vs V1, not on payload sniffing.
 - [ ] V2 and V1 subscriptions both bind to `lfx.indexer.queue`.
 - [ ] Connection drain runs through the existing shutdown path; no ad-hoc `nc.Close()`.
