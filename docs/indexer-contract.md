@@ -105,10 +105,12 @@ type IndexingConfig struct {
 | Subject suffix empty (`lfx.index.` with no type) | Rejected (must have a non-empty resource type) |
 | Subject suffix contains `.`, `*`, `>`, whitespace, or equals `index` | Rejected (invalid or reserved object type) |
 
-When a reply subject is provided (request/reply), handlers reply `OK` on success or
-`ERROR: <details>` on failure. Plain `Publish` without a reply inbox receives no reply.
-Publishers should use request/reply to confirm processing during writes that require
-acknowledgement.
+When a reply subject is provided (request/reply), handlers reply `OK` on success or an
+`ERROR: ...` string on failure. The error reply is a generic NACK (currently
+`ERROR: error processing indexing message`), not a detailed error description; callers
+must treat replies strictly as ACK/NACK signals and use the indexer logs for failure
+diagnostics. Plain `Publish` without a reply inbox receives no reply. Publishers should
+use request/reply to confirm processing during writes that require acknowledgement.
 
 ### Choosing search fields
 

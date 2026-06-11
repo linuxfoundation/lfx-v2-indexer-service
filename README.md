@@ -273,7 +273,7 @@ sequenceDiagram
 
     %% Document Indexing
     IS->>SR: Index(ctx, index, object_ref, body)
-    SR->>OS: POST /resources/_doc/{object_ref}
+    SR->>OS: PUT /resources/_doc/{object_ref}
 
     alt Successful Index
         OS-->>SR: 201 Created
@@ -297,8 +297,8 @@ sequenceDiagram
         UH->>UH: reply([]byte("OK"))
         Note over UH: Log success metrics
     else Error
-        UH->>UH: reply([]byte("ERROR: details"))
-        Note over UH: Log error with context
+        UH->>UH: reply([]byte("ERROR: ..."))
+        Note over UH: Generic NACK reply<br/>Log error details with context
     end
 
     UH-->>MR: Acknowledge message
