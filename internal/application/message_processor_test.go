@@ -182,6 +182,19 @@ func TestNewMessageProcessor(t *testing.T) {
 	assert.NotNil(t, mp.logger)
 	assert.Equal(t, constants.DefaultIndex, mp.index)
 	assert.Equal(t, constants.DefaultQueue, mp.queue)
+	assert.Equal(t, constants.AllSubjects, mp.indexingSubject)
+	assert.Equal(t, constants.AllV1Subjects, mp.v1IndexingSubject)
+}
+
+func TestMessageProcessor_Configure(t *testing.T) {
+	mp, _, _ := setupTestMessageProcessor()
+
+	mp.Configure("custom-index", "custom-queue", "custom.index.>", "custom.v1.index.>")
+
+	assert.Equal(t, "custom-index", mp.index)
+	assert.Equal(t, "custom-queue", mp.queue)
+	assert.Equal(t, "custom.index.>", mp.indexingSubject)
+	assert.Equal(t, "custom.v1.index.>", mp.v1IndexingSubject)
 }
 
 // Test ProcessIndexingMessage success case
@@ -221,6 +234,42 @@ func TestMessageProcessor_ProcessIndexingMessage_Success(t *testing.T) {
 	err = mp.ProcessIndexingMessage(ctx, data, subject)
 
 	// Assertions
+	assert.NoError(t, err)
+	mockStorageRepo.AssertExpectations(t)
+	mockMessagingRepo.AssertExpectations(t)
+}
+
+func TestMessageProcessor_ProcessIndexingMessage_UsesConfiguredIndex(t *testing.T) {
+	mp, mockMessagingRepo, mockStorageRepo := setupTestMessageProcessor()
+	mp.Configure("configured-index", "", "", "")
+	ctx := context.Background()
+
+	testData := map[string]any{
+		"action": "created",
+		"data": map[string]any{
+			"id":   "test-123",
+			"name": "Test Project",
+		},
+		"headers": map[string]string{
+			"authorization": "Bearer test-token",
+		},
+		"indexing_config": map[string]any{
+			"object_id":              "test-123",
+			"access_check_object":    "project:test-123",
+			"access_check_relation":  "viewer",
+			"history_check_object":   "project:test-123",
+			"history_check_relation": "viewer",
+		},
+	}
+	data, err := json.Marshal(testData)
+	require.NoError(t, err)
+
+	mockStorageRepo.On("Index", mock.Anything, "configured-index", "project:test-123", mock.Anything).Return(nil)
+	mockMessagingRepo.On("ParsePrincipals", mock.Anything, mock.Anything).Return([]contracts.Principal{}, nil)
+	mockMessagingRepo.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	err = mp.ProcessIndexingMessage(ctx, data, "lfx.index.project")
+
 	assert.NoError(t, err)
 	mockStorageRepo.AssertExpectations(t)
 	mockMessagingRepo.AssertExpectations(t)
@@ -395,10 +444,11 @@ func TestMessageProcessor_ProcessV1IndexingMessage_InvalidSubject(t *testing.T) 
 func TestMessageProcessor_StartSubscriptions_Success(t *testing.T) {
 	mp, mockMessagingRepo, _ := setupTestMessageProcessor()
 	ctx := context.Background()
+	mp.Configure("", "custom-queue", "custom.index.>", "custom.v1.index.>")
 
 	// Mock expectations
-	mockMessagingRepo.On("QueueSubscribeWithReply", mock.Anything, constants.AllSubjects, constants.DefaultQueue, mock.Anything).Return(nil)
-	mockMessagingRepo.On("QueueSubscribeWithReply", mock.Anything, constants.AllV1Subjects, constants.DefaultQueue, mock.Anything).Return(nil)
+	mockMessagingRepo.On("QueueSubscribeWithReply", mock.Anything, "custom.index.>", "custom-queue", mock.Anything).Return(nil)
+	mockMessagingRepo.On("QueueSubscribeWithReply", mock.Anything, "custom.v1.index.>", "custom-queue", mock.Anything).Return(nil)
 
 	// Execute
 	err := mp.StartSubscriptions(ctx)

@@ -2,13 +2,18 @@
 
 A high-performance, indexer service for the LFX V2 platform that processes resource transactions into OpenSearch with comprehensive NATS message processing and queue group load balancing.
 
+> Agents working in this repo should start with [`CLAUDE.md`](CLAUDE.md).
+> The authoritative generic indexer event contract lives in
+> [`docs/indexer-contract.md`](docs/indexer-contract.md). Caller examples live
+> in [`docs/client-guide.md`](docs/client-guide.md).
+
 ## 📋 Overview
 
 The LFX V2 Indexer Service is responsible for:
 
 - **Message Processing**: NATS stream processing with queue group load balancing across multiple instances
 - **Transaction Enrichment**: JWT authentication, data validation, and principal parsing with delegation support
-- **Search Indexing**: OpenSearch document indexing with optimistic concurrency control  
+- **Search Indexing**: OpenSearch document writes under the `object_ref` document ID
 - **Data Consistency**: Event-driven janitor service for conflict resolution
 - **Dual Format Support**: Both LFX v2 (past-tense actions) and legacy v1 (present-tense actions) message formats
 - **Health Monitoring**: Kubernetes-ready health check endpoints
@@ -99,7 +104,6 @@ curl http://localhost:8080/health   # General health
 ├─────────────────────────────────────────────────────────────────┤
 │  Presentation Layer (NATS Protocol + Health Checks)            │
 │  ├─ IndexingMessageHandler - Unified V2/V1 message processing │
-│  ├─ BaseMessageHandler - Shared NATS response logic          │
 │  └─ HealthHandler - Kubernetes health probes                  │
 ├─────────────────────────────────────────────────────────────────┤
 │  Application Layer (Orchestration)                             │
@@ -136,8 +140,8 @@ graph TB
 
     %% NATS Infrastructure
     NATS_SERVER["NATS Server<br/>nats://nats:4222"]
-    V2_SUBJECT["V2 Subject: lfx.index.*<br/>(lfx.index.project, lfx.index.organization)"]
-    V1_SUBJECT["V1 Subject: lfx.v1.index.*<br/>(lfx.v1.index.project)"]
+    V2_SUBJECT["V2 Subject: lfx.index.><br/>(lfx.index.project, lfx.index.organization)"]
+    V1_SUBJECT["V1 Subject: lfx.v1.index.><br/>(lfx.v1.index.project)"]
     QUEUE_GROUP["Queue Group: lfx.indexer.queue<br/>(Load Balancing)"]
 
     %% Service Instances
@@ -268,8 +272,8 @@ sequenceDiagram
     IS->>IS: EnrichTransaction()<br/>ValidateObjectType()<br/>GenerateTransactionBody()
 
     %% Document Indexing
-    IS->>SR: Index(ctx, index, docID, body)
-    SR->>OS: POST /resources/_doc/{docID}<br/>with optimistic concurrency
+    IS->>SR: Index(ctx, index, object_ref, body)
+    SR->>OS: PUT /resources/_doc/{object_ref}
 
     alt Successful Index
         OS-->>SR: 201 Created
@@ -293,8 +297,8 @@ sequenceDiagram
         UH->>UH: reply([]byte("OK"))
         Note over UH: Log success metrics
     else Error
-        UH->>UH: reply([]byte("ERROR: details"))
-        Note over UH: Log error with context
+        UH->>UH: reply([]byte("ERROR: ..."))
+        Note over UH: Generic NACK reply<br/>Log error details with context
     end
 
     UH-->>MR: Acknowledge message
@@ -340,8 +344,8 @@ JANITOR_ENABLED=true                         # Enable cleanup service (default: 
 
 | Subject Pattern | Purpose | Example | Load Balancing |
 |----------------|---------|---------|----------------|
-| `lfx.index.*` | V2 resource indexing | `lfx.index.project`, `lfx.index.organization` | Queue group distribution |
-| `lfx.v1.index.*` | V1 legacy support | `lfx.v1.index.project` | Queue group distribution |
+| `lfx.index.>` | V2 resource indexing | `lfx.index.project`, `lfx.index.organization` | Queue group distribution |
+| `lfx.v1.index.>` | V1 legacy support | `lfx.v1.index.project` | Queue group distribution |
 
 **Queue Group**: `lfx.indexer.queue`
 
@@ -409,8 +413,8 @@ JANITOR_ENABLED=true                         # Enable cleanup service (default: 
 │       ├── logger.go             # Logger implementation
 │       ├── logger_test.go        # Logger tests
 │       └── testing.go            # Test logging utilities
-├── deployment/                   # Deployment configurations
-│   └── deployment.yaml          # Kubernetes deployment
+├── charts/                       # Helm chart for Kubernetes deployment
+│   └── lfx-v2-indexer-service/   # Chart templates and values
 ├── Dockerfile                    # Container definition
 ├── Makefile                      # Build automation
 ├── go.mod                        # Go module definition
@@ -504,33 +508,53 @@ make coverage                      # Generate coverage report
 ### Testing Message Processing
 
 ```bash
-# Test V2 message format
-nats pub lfx.index.project '{
+# Test V2 message format and wait for OK/ERROR reply
+nats request lfx.index.project '{
   "action": "created",
-  "headers": {"Authorization": "Bearer token"},
+  "headers": {"authorization": "Bearer <valid JWT>"},
   "data": {
     "id": "test-project-123",
     "uid": "test-project-123",
     "name": "Test Project",
     "slug": "test-project",
     "public": true
+  },
+  "indexing_config": {
+    "object_id": "test-project-123",
+    "public": true,
+    "access_check_object": "project:test-project-123",
+    "access_check_relation": "viewer",
+    "history_check_object": "project:test-project-123",
+    "history_check_relation": "historian",
+    "sort_name": "test project",
+    "name_and_aliases": ["Test Project"],
+    "tags": ["slug:test-project"]
   }
 }' --server nats://your-nats-server:4222
 
 # Test V1 message format
-nats pub lfx.v1.index.project '{
+nats request lfx.v1.index.project '{
   "action": "create",
   "data": {
     "id": "test-project-456",
     "name": "Legacy Project"
+  },
+  "indexing_config": {
+    "object_id": "test-project-456",
+    "access_check_object": "project:test-project-456",
+    "access_check_relation": "viewer",
+    "history_check_object": "project:test-project-456",
+    "history_check_relation": "historian",
+    "sort_name": "legacy project",
+    "name_and_aliases": ["Legacy Project"]
   },
   "v1_data": {
     "legacy_field": "legacy_value"
   }
 }' --server nats://your-nats-server:4222
 
-# Monitor processing
-nats sub "lfx.index.>" --server nats://your-nats-server:4222
+# Monitor emitted post-index events for this resource type
+nats sub "lfx.project.*" --server nats://your-nats-server:4222
 ```
 
 ## 🚨 Troubleshooting
@@ -601,7 +625,7 @@ LOG_LEVEL=debug make run
 
 - **Heimdall Integration**: All messages validated against JWT service
 - **Multiple Audiences**: Configurable audience validation
-- **Principal Parsing**: Authorization header and X-On-Behalf-Of delegation support
+- **Principal Parsing**: `authorization` header and `x-on-behalf-of` delegation support
 - **Machine User Detection**: `clients@` prefix identification
 
 **Input Validation:**

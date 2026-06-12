@@ -293,6 +293,12 @@ func (c *Container) initializeApplication() error {
 		c.CleanupRepository,
 		c.Logger,
 	)
+	c.MessageProcessor.Configure(
+		c.Config.OpenSearch.Index,
+		c.Config.NATS.Queue,
+		c.Config.NATS.IndexingSubject,
+		c.Config.NATS.V1IndexingSubject,
+	)
 
 	return nil
 }
