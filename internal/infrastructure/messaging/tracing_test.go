@@ -167,6 +167,9 @@ func TestTraceContextExtraction(t *testing.T) {
 			// Handler was called, now verify spans
 			time.Sleep(100 * time.Millisecond) // Allow spans to be exported
 
+			// Flush the batch processor to ensure spans are exported before asserting.
+			tp.ForceFlush(context.Background())
+
 			// Check that both publish and process spans exist
 			spans := exporter.GetSpans()
 			processSpanFound := false
@@ -235,9 +238,16 @@ func TestTraceContextPreservation(t *testing.T) {
 		// Wait for the handler to be called
 		select {
 		case handlerCtx := <-contextReceived:
-			// Verify that the handler context has trace information
-			// (Extract adds trace span context while preserving the original context)
+			// Verify that the handler context is non-nil.
 			assert.NotNil(t, handlerCtx)
+
+			// Verify that the handler context preserves the deadline from the Subscribe ctx.
+			expectedDeadline, expectedHasDeadline := ctxWithDeadline.Deadline()
+			actualDeadline, actualHasDeadline := handlerCtx.Deadline()
+			assert.Equal(t, expectedHasDeadline, actualHasDeadline, "deadline presence should be preserved")
+			if expectedHasDeadline && actualHasDeadline {
+				assert.Equal(t, expectedDeadline, actualDeadline, "deadline should be preserved in handler context")
+			}
 
 		case <-time.After(2 * time.Second):
 			t.Fatal("Handler not called within timeout")
