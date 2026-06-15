@@ -1,6 +1,9 @@
 # Client Guide: Indexing Resources in LFX
 
 This guide explains how to send messages to the LFX Indexer Service to index your resources in OpenSearch.
+It is a caller-facing walkthrough. The authoritative generic envelope,
+`IndexingConfig`, OpenSearch document fields, event semantics, and schema
+evolution policy live in [`docs/indexer-contract.md`](indexer-contract.md).
 
 ## Table of Contents
 
@@ -25,7 +28,7 @@ type IndexerMessageEnvelope struct {
     Action         string                 // "created", "updated", or "deleted"
     Headers        map[string]string      // Authentication headers
     Data           any                    // Resource data (map or string for deletes)
-    Tags           []string               // Optional: fields to index as tags
+    Tags           []string               // Optional exact tags merged with indexing_config.tags
     IndexingConfig *IndexingConfig        // Required for create/update; omit for delete
 }
 ```
@@ -61,7 +64,6 @@ Create and update messages must include the `indexing_config` field to provide c
     "slug": "my-project",
     "description": "A sample project"
   },
-  "tags": ["uid", "slug"],
   "indexing_config": {
     "object_id": "proj-123",
     "public": true,
@@ -72,7 +74,7 @@ Create and update messages must include the `indexing_config` field to provide c
     "sort_name": "my project",
     "name_and_aliases": ["My Project", "my-project"],
     "parent_refs": ["org:org-456"],
-    "tags": ["featured", "active"],
+    "tags": ["uid:proj-123", "slug:my-project", "featured", "active"],
     "fulltext": "My Project - A sample project for demonstration"
   }
 }
@@ -127,7 +129,6 @@ Templates use double curly braces: `{{ field_name }}`
       }
     }
   },
-  "tags": ["uid", "slug"],
   "indexing_config": {
     "object_id": "{{ uid }}",
     "public": true,
@@ -138,6 +139,7 @@ Templates use double curly braces: `{{ field_name }}`
     "sort_name": "{{ name }}",
     "name_and_aliases": ["{{ name }}", "{{ slug }}"],
     "parent_refs": ["org:{{ parent_id }}", "org:{{ metadata.organization.id }}"],
+    "tags": ["uid:{{ uid }}", "slug:{{ slug }}"],
     "fulltext": "{{ name }} - Project in organization {{ metadata.organization.id }}"
   }
 }
@@ -162,7 +164,6 @@ Templates use double curly braces: `{{ field_name }}`
       }
     }
   },
-  "tags": ["uid", "slug"],
   "indexing_config": {
     "object_id": "proj-123",
     "public": true,
@@ -173,6 +174,7 @@ Templates use double curly braces: `{{ field_name }}`
     "sort_name": "My Project",
     "name_and_aliases": ["My Project", "my-project"],
     "parent_refs": ["org:org-456", "org:org-789"],
+    "tags": ["uid:proj-123", "slug:my-project"],
     "fulltext": "My Project - Project in organization org-789"
   }
 }
@@ -184,7 +186,10 @@ Templates use double curly braces: `{{ field_name }}`
 2. **Nested Access**: Use dot notation (e.g., `{{ parent.id }}`) for nested objects
 3. **Type Preservation**: Simple templates (`"{{ field }}"`) preserve the original type
 4. **String Conversion**: Embedded templates convert values to strings
-5. **Error Handling**: Missing fields return an error during processing
+5. **Error Handling**: Missing fields in required whole-value templates become empty
+   and then fail required-field validation; missing fields in optional or embedded
+   templates are skipped with a warning and blank substitution. Traversing through
+   a non-object still fails processing.
 6. **Escaping**: Use `\{{ }}` to include literal curly braces in values
 7. **Whitespace**: Whitespace inside templates is trimmed (e.g., `{{  uid  }}` → `uid`)
 
@@ -226,7 +231,7 @@ Templates use double curly braces: `{{ field_name }}`
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `tags` | array | No | Field names from `data` to index as searchable tags |
+| `tags` | array | No | Optional exact tags merged with `indexing_config.tags`. Prefer `indexing_config.tags` for new publishers. |
 | `indexing_config` | object | Yes (create/update) | Indexing metadata controlling access control, search, and sort behavior. Not required for delete. |
 
 ### IndexingConfig Fields
@@ -249,7 +254,7 @@ Templates use double curly braces: `{{ field_name }}`
 | `sort_name` | string | Normalized name for sorting | `"my project"` |
 | `name_and_aliases` | array | Names and aliases for search | `["My Project", "MP"]` |
 | `parent_refs` | array | References to parent resources | `["org:org-456"]` |
-| `tags` | array | Additional static tags for the document | `["featured", "active"]` |
+| `tags` | array | Exact-match tags for filtering | `["uid:proj-123", "status:active"]` |
 | `fulltext` | string | Full-text search content | `"searchable content"` |
 | `contacts` | array | Contact information for the resource (see Contact structure below) | See example below |
 
@@ -349,7 +354,6 @@ These fields are **always set by the server** and should **not** be included in 
     "slug": "my-project",
     "parent_id": "org-456"
   },
-  "tags": ["uid", "slug"],
   "indexing_config": {
     "object_id": "proj-123",
     "public": true,
@@ -360,7 +364,7 @@ These fields are **always set by the server** and should **not** be included in 
     "sort_name": "my project",
     "name_and_aliases": ["My Project", "my-project"],
     "parent_refs": ["org:org-456"],
-    "tags": ["featured"],
+    "tags": ["uid:proj-123", "slug:my-project", "featured"],
     "fulltext": "My Project - A sample project"
   }
 }
@@ -445,7 +449,7 @@ Note: For delete operations, `indexing_config` is not needed. The server only re
 4. **tags**: Add categorical tags
    - Keep tags concise
    - Use consistent naming conventions
-   - Example: `["featured", "active", "verified"]`
+   - Example: `["uid:proj-123", "status:active", "featured"]`
 
 5. **fulltext**: Construct comprehensive search text
    - Include name, description, and other searchable content
@@ -499,8 +503,8 @@ For Go services, use the public types package:
 
 ```go
 import (
-    "github.com/linuxfoundation/lfx-v2-indexer-service/pkg/types"
     "github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
+    "github.com/linuxfoundation/lfx-v2-indexer-service/pkg/types"
 )
 
 // Create message with indexing config
@@ -508,7 +512,7 @@ publicFlag := true
 envelope := &types.IndexerMessageEnvelope{
     Action: constants.ActionCreated,
     Headers: map[string]string{
-        "authorization": "Bearer " + token,
+        constants.AuthorizationHeader: "Bearer " + token,
     },
     Data: map[string]any{
         "id":   "proj-123",
@@ -523,7 +527,7 @@ envelope := &types.IndexerMessageEnvelope{
         HistoryCheckRelation: "historian",
         SortName:             "my project",
         NameAndAliases:       []string{"My Project"},
-        Tags:                 []string{"featured"},
+        Tags:                 []string{"uid:proj-123", "featured"},
     },
 }
 
@@ -536,9 +540,12 @@ nc.Publish("lfx.index.project", data)
 
 ### Issue: Document missing server-side fields
 
-**Problem**: `latest`, `created_at`, or principal fields are missing in OpenSearch.
+**Problem**: `latest`, timestamp, or principal fields are missing in OpenSearch.
 
-**Solution**: This was a bug fixed in recent versions. Ensure you're using the latest indexer service version. These fields are always set by the server automatically.
+**Solution**: Confirm the write went through indexer-service and returned `OK`.
+Create/update documents get `created_at` or `updated_at`; delete documents get
+`deleted_at`. Principal fields require a valid lower-case `authorization` header
+on V2 messages or `x-username` / `x-email` on V1 messages.
 
 ### Issue: "indexing_config is required" error
 
