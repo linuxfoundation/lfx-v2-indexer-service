@@ -626,7 +626,7 @@ LOG_LEVEL=debug make run
 - **Heimdall Integration**: All messages validated against JWT service
 - **Multiple Audiences**: Configurable audience validation
 - **Principal Parsing**: `authorization` header and `x-on-behalf-of` delegation support
-- **Machine User Detection**: `clients@` prefix identification
+- **Machine User Detection**: `@clients` suffix identification
 
 **Input Validation:**
 

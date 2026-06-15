@@ -189,12 +189,12 @@ func (r *AuthRepository) ParsePrincipals(ctx context.Context, headers map[string
 			}
 			authorizedPrincipals = append(authorizedPrincipals, principalEntity)
 
-			if strings.HasPrefix(principal, constants.MachineUserPrefix) {
+			if r.isMachineUser(principal) {
 				isMachineUser = true
 				r.logger.Info("Machine user detected in authorization header",
 					"auth_id", authID,
 					"principal", r.safePrincipalLog(principal),
-					"machine_user_prefix", constants.MachineUserPrefix)
+					"machine_user_suffix", constants.MachineUserSuffix)
 			}
 
 			r.logger.Debug("Authorization principal parsed successfully",
@@ -515,7 +515,11 @@ func (r *AuthRepository) safePrincipalLog(principal string) string {
 	if principal == "" {
 		return "<empty>"
 	}
-	// Don't log full email addresses for privacy
+	// Machine users are not personal information and should be logged in full for debugging.
+	if r.isMachineUser(principal) {
+		return principal
+	}
+	// Don't log full email addresses for privacy.
 	if strings.Contains(principal, "@") {
 		parts := strings.Split(principal, "@")
 		if len(parts) == 2 {
@@ -527,5 +531,5 @@ func (r *AuthRepository) safePrincipalLog(principal string) string {
 
 // isMachineUser checks if a principal is a machine user
 func (r *AuthRepository) isMachineUser(principal string) bool {
-	return strings.HasPrefix(principal, constants.MachineUserPrefix)
+	return len(principal) > len(constants.MachineUserSuffix) && strings.HasSuffix(principal, constants.MachineUserSuffix)
 }
