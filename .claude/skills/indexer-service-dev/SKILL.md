@@ -13,6 +13,9 @@ paths:
 allowed-tools: Read, Glob, Grep, Edit, Write, Bash
 ---
 
+<!-- Copyright The Linux Foundation and each contributor to LFX. -->
+<!-- SPDX-License-Identifier: MIT -->
+
 # Development Conventions (lfx-v2-indexer-service)
 
 Repo-local Go conventions for the indexer service. This service consumes NATS index messages on `lfx.index.>` (V2) and `lfx.v1.index.>` (V1), writes documents into OpenSearch, and emits domain events on `lfx.{object_type}.{action}`. Conventions below apply to this repo's own Go code.

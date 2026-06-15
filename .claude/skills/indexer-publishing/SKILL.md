@@ -19,6 +19,9 @@ paths:
   - 'docs/client-guide.md'
 ---
 
+<!-- Copyright The Linux Foundation and each contributor to LFX. -->
+<!-- SPDX-License-Identifier: MIT -->
+
 # Indexer Publishing
 
 The indexer is generic. Publishers tell it everything via the envelope. Follow this workflow for any change that touches the contract.

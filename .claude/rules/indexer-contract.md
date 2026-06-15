@@ -9,6 +9,9 @@ paths:
   - 'docs/indexer-contract.md'
 ---
 
+<!-- Copyright The Linux Foundation and each contributor to LFX. -->
+<!-- SPDX-License-Identifier: MIT -->
+
 # Indexer contract policy
 
 - Use action constants from `pkg/constants`. Never inline string literals for action values at call sites.
