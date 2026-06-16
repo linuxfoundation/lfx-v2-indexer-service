@@ -31,8 +31,10 @@ type MessageProcessor struct {
 	logger            *slog.Logger
 
 	// Configuration
-	index string
-	queue string
+	index             string
+	queue             string
+	indexingSubject   string
+	v1IndexingSubject string
 }
 
 // NewMessageProcessor creates a new message processor
@@ -49,6 +51,24 @@ func NewMessageProcessor(
 		logger:            logging.WithComponent(logger, "message_processor"),
 		index:             constants.DefaultIndex,
 		queue:             constants.DefaultQueue,
+		indexingSubject:   constants.AllSubjects,
+		v1IndexingSubject: constants.AllV1Subjects,
+	}
+}
+
+// Configure applies runtime workflow settings loaded by the container.
+func (mp *MessageProcessor) Configure(index, queue, indexingSubject, v1IndexingSubject string) {
+	if index != "" {
+		mp.index = index
+	}
+	if queue != "" {
+		mp.queue = queue
+	}
+	if indexingSubject != "" {
+		mp.indexingSubject = indexingSubject
+	}
+	if v1IndexingSubject != "" {
+		mp.v1IndexingSubject = v1IndexingSubject
 	}
 }
 
@@ -246,34 +266,34 @@ func (mp *MessageProcessor) StartSubscriptions(ctx context.Context) error {
 		"index", mp.index)
 
 	// Subscribe to V2 indexing messages
-	if err := mp.subscribeTo(ctx, constants.AllSubjects, "V2 indexing messages"); err != nil {
+	if err := mp.subscribeTo(ctx, mp.indexingSubject, "V2 indexing messages"); err != nil {
 		logger.Error("Failed to subscribe to V2 messages",
-			"subjects", constants.AllSubjects,
+			"subjects", mp.indexingSubject,
 			"queue", mp.queue,
 			"error", err.Error())
 		return fmt.Errorf("failed to subscribe to V2 messages: %w", err)
 	}
 
 	logger.Info("V2 subscription successful",
-		"subjects", constants.AllSubjects,
+		"subjects", mp.indexingSubject,
 		"queue", mp.queue)
 
 	// Subscribe to V1 indexing messages
-	if err := mp.subscribeTo(ctx, constants.AllV1Subjects, "V1 indexing messages"); err != nil {
+	if err := mp.subscribeTo(ctx, mp.v1IndexingSubject, "V1 indexing messages"); err != nil {
 		logger.Error("Failed to subscribe to V1 messages",
-			"subjects", constants.AllV1Subjects,
+			"subjects", mp.v1IndexingSubject,
 			"queue", mp.queue,
 			"error", err.Error())
 		return fmt.Errorf("failed to subscribe to V1 messages: %w", err)
 	}
 
 	logger.Info("V1 subscription successful",
-		"subjects", constants.AllV1Subjects,
+		"subjects", mp.v1IndexingSubject,
 		"queue", mp.queue)
 
 	logger.Info("All NATS subscriptions started successfully",
-		"v2_subjects", constants.AllSubjects,
-		"v1_subjects", constants.AllV1Subjects,
+		"v2_subjects", mp.indexingSubject,
+		"v1_subjects", mp.v1IndexingSubject,
 		"queue", mp.queue)
 
 	return nil

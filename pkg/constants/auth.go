@@ -14,7 +14,7 @@ const (
 	BearerPrefix = "bearer "
 
 	// Machine user identifier
-	MachineUserPrefix = "clients@"
+	MachineUserSuffix = "@clients"
 
 	// Error messages for authentication
 	ErrInvalidToken          = "invalid token"
