@@ -1278,7 +1278,9 @@ func (s *IndexerService) buildTransactionBodyFromIndexingConfig(
 	body.SortName = config.SortName
 	body.NameAndAliases = config.NameAndAliases
 	body.ParentRefs = config.ParentRefs
-	body.Tags = append(transaction.Tags, config.Tags...)
+	// Producers may set the same tags in both the top-level message and
+	// indexing_config, so de-duplicate to avoid doubled tags in the index.
+	body.Tags = dedupeStrings(append(transaction.Tags, config.Tags...))
 	body.Fulltext = config.Fulltext
 	body.Contacts = config.Contacts
 
@@ -1300,6 +1302,24 @@ func (s *IndexerService) buildTransactionBodyFromIndexingConfig(
 	slog.Debug("Built transaction body from indexing config", "body", body)
 
 	return body, nil
+}
+
+// dedupeStrings returns the order-preserving, first-occurrence union of the
+// input, dropping later duplicates.
+func dedupeStrings(in []string) []string {
+	if len(in) == 0 {
+		return in
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
 }
 
 // expandTemplates recursively expands template variables in the format {{ field_name }}

@@ -1048,6 +1048,52 @@ func TestIndexerService_buildTransactionBodyFromIndexingConfig(t *testing.T) {
 				assert.Equal(t, "committee:committee-123#admin", body.HistoryCheckQuery)
 			},
 		},
+		{
+			name: "tags overlapping between transaction and config are de-duplicated",
+			data: map[string]any{
+				"id": "org-dup",
+			},
+			config: &types.IndexingConfig{
+				ObjectID:             "org-dup",
+				AccessCheckObject:    "b2b_org:org-dup",
+				AccessCheckRelation:  "viewer",
+				HistoryCheckObject:   "b2b_org:org-dup",
+				HistoryCheckRelation: "historian",
+				Tags:                 []string{"a", "b", "c"},
+			},
+			transaction: &contracts.LFXTransaction{
+				Action:     constants.ActionCreated,
+				ObjectType: "b2b_org",
+				Timestamp:  time.Now(),
+				Tags:       []string{"a", "b"},
+			},
+			validate: func(t *testing.T, body *contracts.TransactionBody) {
+				assert.Equal(t, []string{"a", "b", "c"}, body.Tags)
+			},
+		},
+		{
+			name: "tags with no overlap are unioned in order",
+			data: map[string]any{
+				"id": "org-union",
+			},
+			config: &types.IndexingConfig{
+				ObjectID:             "org-union",
+				AccessCheckObject:    "b2b_org:org-union",
+				AccessCheckRelation:  "viewer",
+				HistoryCheckObject:   "b2b_org:org-union",
+				HistoryCheckRelation: "historian",
+				Tags:                 []string{"c", "d"},
+			},
+			transaction: &contracts.LFXTransaction{
+				Action:     constants.ActionCreated,
+				ObjectType: "b2b_org",
+				Timestamp:  time.Now(),
+				Tags:       []string{"a", "b"},
+			},
+			validate: func(t *testing.T, body *contracts.TransactionBody) {
+				assert.Equal(t, []string{"a", "b", "c", "d"}, body.Tags)
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -1059,6 +1105,25 @@ func TestIndexerService_buildTransactionBodyFromIndexingConfig(t *testing.T) {
 			if tt.validate != nil {
 				tt.validate(t, body)
 			}
+		})
+	}
+}
+
+func TestDedupeStrings(t *testing.T) {
+	tests := []struct {
+		name     string
+		in       []string
+		expected []string
+	}{
+		{name: "overlapping union collapses duplicates", in: []string{"a", "b", "a", "b", "c"}, expected: []string{"a", "b", "c"}},
+		{name: "no duplicates preserved in order", in: []string{"a", "b", "c", "d"}, expected: []string{"a", "b", "c", "d"}},
+		{name: "empty input", in: []string{}, expected: []string{}},
+		{name: "nil input", in: nil, expected: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, dedupeStrings(tt.in))
 		})
 	}
 }
