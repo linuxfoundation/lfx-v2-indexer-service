@@ -1117,6 +1117,8 @@ func TestDedupeStrings(t *testing.T) {
 	}{
 		{name: "overlapping union collapses duplicates", in: []string{"a", "b", "a", "b", "c"}, expected: []string{"a", "b", "c"}},
 		{name: "no duplicates preserved in order", in: []string{"a", "b", "c", "d"}, expected: []string{"a", "b", "c", "d"}},
+		{name: "single element", in: []string{"a"}, expected: []string{"a"}},
+		{name: "all duplicates", in: []string{"a", "a", "a"}, expected: []string{"a"}},
 		{name: "empty input", in: []string{}, expected: []string{}},
 		{name: "nil input", in: nil, expected: nil},
 	}
