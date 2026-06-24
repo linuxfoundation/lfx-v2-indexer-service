@@ -102,6 +102,7 @@ func (r *MessagingRepository) Subscribe(ctx context.Context, subject string, han
 				trace.WithAttributes(
 					attribute.String("messaging.system", "nats"),
 					attribute.String("messaging.destination.name", msgSubject),
+					attribute.String("messaging.operation.type", "process"),
 					attribute.Int("messaging.message.body.size", len(data)),
 				),
 			)
@@ -174,6 +175,7 @@ func (r *MessagingRepository) QueueSubscribe(ctx context.Context, subject string
 				trace.WithAttributes(
 					attribute.String("messaging.system", "nats"),
 					attribute.String("messaging.destination.name", msgSubject),
+					attribute.String("messaging.operation.type", "process"),
 					attribute.Int("messaging.message.body.size", len(data)),
 				),
 			)
@@ -248,6 +250,7 @@ func (r *MessagingRepository) QueueSubscribeWithReply(ctx context.Context, subje
 				trace.WithAttributes(
 					attribute.String("messaging.system", "nats"),
 					attribute.String("messaging.destination.name", msgSubject),
+					attribute.String("messaging.operation.type", "process"),
 					attribute.Int("messaging.message.body.size", len(data)),
 				),
 			)

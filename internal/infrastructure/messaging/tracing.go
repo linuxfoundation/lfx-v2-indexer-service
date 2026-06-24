@@ -4,7 +4,7 @@
 package messaging
 
 import (
-	"github.com/nats-io/nats.go"
+	natsgo "github.com/nats-io/nats.go"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 )
@@ -15,8 +15,9 @@ import (
 var tracer = otel.Tracer("github.com/linuxfoundation/lfx-v2-indexer-service/internal/infrastructure/messaging")
 
 // natsHeaderCarrier adapts nats.Header to the OTel TextMapCarrier interface
-// so trace context can be injected/extracted from NATS message headers.
-type natsHeaderCarrier nats.Header
+// for both injecting trace context into outgoing NATS messages and extracting
+// it from incoming ones.
+type natsHeaderCarrier natsgo.Header
 
 func (c natsHeaderCarrier) Get(key string) string {
 	vals := c[key]
