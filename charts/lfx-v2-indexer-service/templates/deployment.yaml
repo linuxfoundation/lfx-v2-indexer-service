@@ -9,6 +9,10 @@ metadata:
   namespace: lfx
   labels:
     app.kubernetes.io/name: {{ .Chart.Name }}
+  {{- with .Values.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   replicas: {{ .Values.app.replicas }}
   selector:
