@@ -797,6 +797,16 @@ func (r *MessagingRepository) ConsumeWithJetStream(
 		msgCtx := otel.GetTextMapPropagator().Extract(ctx, natsHeaderCarrier(msg.Headers()))
 		data := append([]byte(nil), msg.Data()...)
 		subject := msg.Subject()
+		replySubject := msg.Reply()
+
+		// Preserve the synchronous request/reply contract: callers using
+		// conn.Request() set a reply subject and expect "OK" or "ERROR: ..."
+		// back after the document is indexed. Mimic QueueSubscribeWithReply:
+		// set refresh=wait_for so the document is immediately searchable
+		// before we reply.
+		if replySubject != "" {
+			msgCtx = logging.WithRefreshWaitFor(msgCtx)
+		}
 
 		spanCtx, span := tracer.Start(msgCtx, "jetstream.process",
 			trace.WithSpanKind(trace.SpanKindConsumer),
@@ -809,11 +819,46 @@ func (r *MessagingRepository) ConsumeWithJetStream(
 		)
 		defer span.End()
 
-		if err := handler(spanCtx, data, subject); err != nil {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
+		handlerErr := handler(spanCtx, data, subject)
+
+		// Send reply before ACK/NAK so the caller unblocks as soon as the
+		// document is confirmed indexed (or the error is known).
+		if replySubject != "" {
+			var replyData []byte
+			if handlerErr != nil {
+				replyData = []byte("ERROR: " + handlerErr.Error())
+			} else {
+				replyData = []byte("OK")
+			}
+			replyCtx, replySpan := tracer.Start(spanCtx, "jetstream.reply.publish",
+				trace.WithSpanKind(trace.SpanKindProducer),
+				trace.WithAttributes(
+					attribute.String("messaging.system", "nats"),
+					attribute.String("messaging.destination.name", replySubject),
+					attribute.Int("messaging.message.body.size", len(replyData)),
+				),
+			)
+			replyMsg := nats.NewMsg(replySubject)
+			replyMsg.Header = make(nats.Header)
+			replyMsg.Data = replyData
+			otel.GetTextMapPropagator().Inject(replyCtx, natsHeaderCarrier(replyMsg.Header))
+			if pubErr := r.conn.PublishMsg(replyMsg); pubErr != nil {
+				replySpan.RecordError(pubErr)
+				replySpan.SetStatus(codes.Error, pubErr.Error())
+				r.logger.ErrorContext(replyCtx, "Failed to send JetStream reply",
+					"error", pubErr,
+					"reply_subject", replySubject)
+			} else {
+				replySpan.SetStatus(codes.Ok, "")
+			}
+			replySpan.End()
+		}
+
+		if handlerErr != nil {
+			span.RecordError(handlerErr)
+			span.SetStatus(codes.Error, handlerErr.Error())
 			r.logger.ErrorContext(spanCtx, "JetStream message handler failed — NAKing with backoff",
-				"error", err,
+				"error", handlerErr,
 				"subject", subject,
 				"consumer", cfg.Name)
 			if nakErr := msg.NakWithDelay(nakDelay(msg)); nakErr != nil {
