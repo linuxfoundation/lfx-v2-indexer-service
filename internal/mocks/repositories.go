@@ -554,6 +554,11 @@ func (m *MockMessagingRepository) ParsePrincipals(ctx context.Context, headers m
 	return m.AuthRepo.ParsePrincipals(ctx, headers)
 }
 
+// ConsumeWithJetStream mocks starting a JetStream durable consumer
+func (m *MockMessagingRepository) ConsumeWithJetStream(_ context.Context, _ string, _ []string, _ func(context.Context, []byte, string) error) error {
+	return nil
+}
+
 // GetPublishedMessages returns all published messages for a given subject from the mock
 func (m *MockMessagingRepository) GetPublishedMessages(subject string) []MockMessage {
 	m.mu.RLock()

@@ -8,10 +8,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
+	"math/rand"
 	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -28,6 +31,7 @@ type MessagingRepository struct {
 	authRepo          contracts.AuthRepository
 	logger            *slog.Logger
 	subscriptions     []*nats.Subscription
+	consumeContexts   []jetstream.ConsumeContext
 	mu                sync.RWMutex
 	wg                sync.WaitGroup
 	drainTimeout      time.Duration
@@ -385,7 +389,16 @@ func (r *MessagingRepository) DrainWithTimeout() error {
 	r.mu.Lock()
 	r.isShuttingDown = true
 	totalSubscriptions := len(r.subscriptions)
+	consumeContexts := r.consumeContexts
+	r.consumeContexts = nil
 	r.mu.Unlock()
+
+	// Stop JetStream consumers before draining core NATS subscriptions.
+	// ConsumeContext.Stop() blocks until any in-flight callback returns,
+	// so this ensures JetStream message processing completes cleanly.
+	for _, cc := range consumeContexts {
+		cc.Stop()
+	}
 
 	r.logger.Info("Starting NATS graceful drain sequence", "timeout", r.drainTimeout, "subscriptions", totalSubscriptions)
 
@@ -735,4 +748,119 @@ func (r *MessagingRepository) GetConnectionStatus() map[string]interface{} {
 	}
 
 	return status
+}
+
+// =================
+// JETSTREAM OPERATIONS
+// =================
+
+// ConsumeWithJetStream creates a durable JetStream consumer on streamName,
+// filtering on filterSubjects, and delivers messages to handler. On handler
+// error the message is NAKed with exponential-backoff jitter; on success it
+// is ACKed. The consumer is stopped automatically when DrainWithTimeout is
+// called.
+func (r *MessagingRepository) ConsumeWithJetStream(
+	ctx context.Context,
+	streamName string,
+	filterSubjects []string,
+	handler func(context.Context, []byte, string) error,
+) error {
+	js, err := jetstream.New(r.conn)
+	if err != nil {
+		r.logger.ErrorContext(ctx, "Failed to create JetStream client for consumer",
+			"error", err,
+			"stream", streamName,
+			"consumer", constants.ConsumerNameIndexer)
+		return fmt.Errorf("failed to create JetStream client: %w", err)
+	}
+
+	cfg := jetstream.ConsumerConfig{
+		Name:           constants.ConsumerNameIndexer,
+		Durable:        constants.ConsumerNameIndexer,
+		FilterSubjects: filterSubjects,
+		AckPolicy:      jetstream.AckExplicitPolicy,
+		MaxDeliver:     5,
+		AckWait:        30 * time.Second,
+		MaxAckPending:  100,
+	}
+
+	consumer, err := js.CreateOrUpdateConsumer(ctx, streamName, cfg)
+	if err != nil {
+		r.logger.ErrorContext(ctx, "Failed to create JetStream durable consumer",
+			"error", err,
+			"stream", streamName,
+			"consumer", cfg.Name)
+		return fmt.Errorf("failed to create JetStream consumer on stream %s: %w", streamName, err)
+	}
+
+	consumeCtx, err := consumer.Consume(func(msg jetstream.Msg) {
+		msgCtx := otel.GetTextMapPropagator().Extract(ctx, natsHeaderCarrier(msg.Headers()))
+		data := append([]byte(nil), msg.Data()...)
+		subject := msg.Subject()
+
+		spanCtx, span := tracer.Start(msgCtx, "jetstream.process",
+			trace.WithSpanKind(trace.SpanKindConsumer),
+			trace.WithAttributes(
+				attribute.String("messaging.system", "nats"),
+				attribute.String("messaging.destination.name", subject),
+				attribute.String("messaging.operation.type", "process"),
+				attribute.Int("messaging.message.body.size", len(data)),
+			),
+		)
+		defer span.End()
+
+		if err := handler(spanCtx, data, subject); err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			r.logger.ErrorContext(spanCtx, "JetStream message handler failed — NAKing with backoff",
+				"error", err,
+				"subject", subject,
+				"consumer", cfg.Name)
+			if nakErr := msg.NakWithDelay(nakDelay(msg)); nakErr != nil {
+				r.logger.ErrorContext(spanCtx, "Failed to NAK JetStream message",
+					"error", nakErr,
+					"subject", subject)
+			}
+			return
+		}
+		span.SetStatus(codes.Ok, "")
+		if ackErr := msg.Ack(); ackErr != nil {
+			r.logger.ErrorContext(spanCtx, "Failed to ACK JetStream message",
+				"error", ackErr,
+				"subject", subject)
+		}
+	})
+	if err != nil {
+		r.logger.ErrorContext(ctx, "Failed to start JetStream consume loop",
+			"error", err,
+			"stream", streamName,
+			"consumer", cfg.Name)
+		return fmt.Errorf("failed to start JetStream consume loop: %w", err)
+	}
+
+	r.logger.InfoContext(ctx, "JetStream durable consumer started",
+		"stream", streamName,
+		"consumer", cfg.Name,
+		"filter_subjects", filterSubjects)
+
+	r.mu.Lock()
+	r.consumeContexts = append(r.consumeContexts, consumeCtx)
+	r.mu.Unlock()
+
+	return nil
+}
+
+// nakDelay returns an exponential backoff duration with full jitter based on
+// the message delivery attempt count. Full jitter (random in [0, cap])
+// prevents correlated retries across concurrent service replicas.
+//
+// Attempt 1 → rand(0, 1s)
+// Attempt 2 → rand(0, 2s)
+func nakDelay(msg jetstream.Msg) time.Duration {
+	meta, err := msg.Metadata()
+	if err != nil || meta == nil {
+		return time.Second
+	}
+	maxDelay := time.Second * time.Duration(math.Pow(2, float64(meta.NumDelivered-1)))
+	return time.Duration(rand.Int63n(int64(maxDelay) + 1))
 }

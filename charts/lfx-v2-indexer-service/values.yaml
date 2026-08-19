@@ -19,6 +19,34 @@ nats:
   # drainTimeout is the timeout for draining NATS connections
   drainTimeout: "55s"
 
+  # stream_index_events persists lfx.index.> and lfx.v1.index.> messages so
+  # the indexer-consumer can replay and retry failed deliveries.
+  stream_index_events:
+    # creation controls whether the Stream CRD is provisioned by this chart
+    creation: true
+    # keep preserves the stream during helm uninstall to avoid message loss
+    keep: true
+    # name is the NATS stream name
+    name: index-events
+    # subjects captured by this stream
+    subjects:
+      - lfx.index.>
+      - lfx.v1.index.>
+    # storage is the storage backend for the stream
+    storage: file
+    # retention keeps messages up to maxAge
+    retention: limits
+    # maxAge must cover queue wait and retry window
+    maxAge: 24h
+    # maxBytes is unlimited; maxAge is the primary eviction mechanism
+    maxBytes: -1
+    # maxMsgs is unlimited; maxAge is the primary eviction mechanism
+    maxMsgs: -1
+    # replicas matches the NATS cluster size for durability
+    replicas: 3
+    # compression reduces storage cost for JSON payloads
+    compression: s2
+
 # opensearch is the configuration for the OpenSearch server
 opensearch:
   # url is the URL of the OpenSearch server

@@ -403,20 +403,25 @@ func (c *Container) SetupNATSSubscriptions(ctx context.Context) error {
 		return fmt.Errorf("failed to subscribe - messaging repository is not initialized")
 	}
 
-	if c.IndexingMessageHandler == nil {
-		return fmt.Errorf("indexing message handler is not initialized")
+	if c.MessageProcessor == nil {
+		return fmt.Errorf("message processor is not initialized")
 	}
 
-	// Subscribe to indexing messages with queue group for load balancing and reply support
-	indexingSubject := c.Config.NATS.IndexingSubject
-	if err := c.MessagingRepository.QueueSubscribeWithReply(ctx, indexingSubject, c.Config.NATS.Queue, c.IndexingMessageHandler); err != nil {
-		return fmt.Errorf("failed to subscribe to %s: %w", indexingSubject, err)
+	// Route each JetStream message to the appropriate processor method based on subject.
+	handler := func(msgCtx context.Context, data []byte, subject string) error {
+		if strings.HasPrefix(subject, constants.FromV1Prefix) {
+			return c.MessageProcessor.ProcessV1IndexingMessage(msgCtx, data, subject)
+		}
+		return c.MessageProcessor.ProcessIndexingMessage(msgCtx, data, subject)
 	}
 
-	// Subscribe to v1 indexing messages with the same unified handler and reply support
-	v1IndexingSubject := c.Config.NATS.V1IndexingSubject
-	if err := c.MessagingRepository.QueueSubscribeWithReply(ctx, v1IndexingSubject, c.Config.NATS.Queue, c.IndexingMessageHandler); err != nil {
-		return fmt.Errorf("failed to subscribe to %s: %w", v1IndexingSubject, err)
+	if err := c.MessagingRepository.ConsumeWithJetStream(
+		ctx,
+		constants.StreamNameIndexEvents,
+		[]string{c.Config.NATS.IndexingSubject, c.Config.NATS.V1IndexingSubject},
+		handler,
+	); err != nil {
+		return fmt.Errorf("failed to start JetStream index consumer: %w", err)
 	}
 
 	return nil

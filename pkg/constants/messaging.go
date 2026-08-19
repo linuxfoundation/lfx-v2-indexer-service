@@ -73,6 +73,12 @@ const (
 	ReplyTimeout   = 5 * time.Second
 )
 
+// JetStream resource names for the index events stream.
+const (
+	StreamNameIndexEvents = "index-events"
+	ConsumerNameIndexer   = "indexer-consumer"
+)
+
 // NATS pending buffer and concurrency defaults.
 //
 // These pending limits are per subscription, not process-wide. In deployments
