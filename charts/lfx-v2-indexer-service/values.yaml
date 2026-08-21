@@ -19,28 +19,28 @@ nats:
   # drainTimeout is the timeout for draining NATS connections
   drainTimeout: "55s"
 
-  # stream_index_events persists lfx.index.> and lfx.v1.index.> messages so
-  # the indexer-consumer can replay and retry failed deliveries.
+  # stream_index_events persists indexing messages so the indexer-consumer
+  # can replay and retry failed deliveries.
+  # Stream subjects are derived from nats.indexingSubject and
+  # nats.v1IndexingSubject to keep them in sync with the consumer filters.
+  # Stream name is hardcoded in the template (must match
+  # constants.StreamNameIndexEvents = "index-events" in the application).
   stream_index_events:
     # creation controls whether the Stream CRD is provisioned by this chart
     creation: true
     # keep preserves the stream during helm uninstall to avoid message loss
     keep: true
-    # name is the NATS stream name
-    name: index-events
-    # subjects captured by this stream
-    subjects:
-      - lfx.index.>
-      - lfx.v1.index.>
     # storage is the storage backend for the stream
     storage: file
     # retention keeps messages up to maxAge
     retention: limits
-    # maxAge must cover queue wait and retry window
+    # maxAge must cover queue wait and retry window (5 retries × 30 s AckWait)
     maxAge: 24h
-    # maxBytes is unlimited; maxAge is the primary eviction mechanism
-    maxBytes: -1
-    # maxMsgs is unlimited; maxAge is the primary eviction mechanism
+    # maxBytes caps storage per stream; 10 GiB covers expected 24 h traffic
+    # with headroom. Quoted to prevent Helm from rendering as scientific notation.
+    # Adjust if average payload size or message rate changes significantly.
+    maxBytes: "10737418240"
+    # maxMsgs is unlimited; maxAge and maxBytes are the primary limits
     maxMsgs: -1
     # replicas matches the NATS cluster size for durability
     replicas: 3

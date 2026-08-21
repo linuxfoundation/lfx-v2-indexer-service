@@ -393,17 +393,33 @@ func (r *MessagingRepository) DrainWithTimeout() error {
 	r.consumeContexts = nil
 	r.mu.Unlock()
 
+	// Record the deadline before stopping consumers so the entire
+	// shutdown sequence — consumer stop plus connection drain — is
+	// bounded by drainTimeout.
+	deadline := time.Now().Add(r.drainTimeout)
+
 	// Stop JetStream consumers before draining core NATS subscriptions.
-	// ConsumeContext.Stop() blocks until any in-flight callback returns,
-	// so this ensures JetStream message processing completes cleanly.
+	// Stop() signals the consumer to stop delivering new messages and
+	// returns once the currently-executing callback (if any) has returned.
+	// JetStream goroutines spawned inside the callback are tracked via r.wg
+	// and are waited on further below via waitForHandlers.
 	for _, cc := range consumeContexts {
-		cc.Stop()
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			r.logger.Warn("Drain budget exhausted before all JetStream consumers stopped")
+			break
+		}
+		stopped := make(chan struct{}, 1)
+		go func(c jetstream.ConsumeContext) { c.Stop(); stopped <- struct{}{} }(cc)
+		select {
+		case <-stopped:
+		case <-time.After(remaining):
+			r.logger.Warn("Timed out waiting for JetStream consumer to stop",
+				"remaining", remaining)
+		}
 	}
 
 	r.logger.Info("Starting NATS graceful drain sequence", "timeout", r.drainTimeout, "subscriptions", totalSubscriptions)
-
-	// Record the deadline so we can compute remaining time for wg.Wait().
-	deadline := time.Now().Add(r.drainTimeout)
 
 	if r.conn == nil {
 		r.logger.Warn("NATS connection is nil, skipping drain")
@@ -794,86 +810,57 @@ func (r *MessagingRepository) ConsumeWithJetStream(
 	}
 
 	consumeCtx, err := consumer.Consume(func(msg jetstream.Msg) {
+		// Extract trace context and snapshot message fields while still
+		// in the consumer callback goroutine (msg is only valid here).
 		msgCtx := otel.GetTextMapPropagator().Extract(ctx, natsHeaderCarrier(msg.Headers()))
 		data := append([]byte(nil), msg.Data()...)
 		subject := msg.Subject()
-		replySubject := msg.Reply()
 
-		// Preserve the synchronous request/reply contract: callers using
-		// conn.Request() set a reply subject and expect "OK" or "ERROR: ..."
-		// back after the document is indexed. Mimic QueueSubscribeWithReply:
-		// set refresh=wait_for so the document is immediately searchable
-		// before we reply.
-		if replySubject != "" {
-			msgCtx = logging.WithRefreshWaitFor(msgCtx)
-		}
+		// Acquire a worker slot; this blocks the consumer callback goroutine
+		// until a slot is free, which provides back-pressure alongside
+		// MaxAckPending and keeps OpenSearch write concurrency bounded.
+		// Track the goroutine in r.wg so DrainWithTimeout can wait for
+		// in-flight processing to complete after Stop() returns.
+		r.wg.Add(1)
+		r.sem <- struct{}{}
+		go func() {
+			defer func() {
+				<-r.sem
+				r.wg.Done()
+			}()
 
-		spanCtx, span := tracer.Start(msgCtx, "jetstream.process",
-			trace.WithSpanKind(trace.SpanKindConsumer),
-			trace.WithAttributes(
-				attribute.String("messaging.system", "nats"),
-				attribute.String("messaging.destination.name", subject),
-				attribute.String("messaging.operation.type", "process"),
-				attribute.Int("messaging.message.body.size", len(data)),
-			),
-		)
-		defer span.End()
-
-		handlerErr := handler(spanCtx, data, subject)
-
-		// Send reply before ACK/NAK so the caller unblocks as soon as the
-		// document is confirmed indexed (or the error is known).
-		if replySubject != "" {
-			var replyData []byte
-			if handlerErr != nil {
-				replyData = []byte("ERROR: " + handlerErr.Error())
-			} else {
-				replyData = []byte("OK")
-			}
-			replyCtx, replySpan := tracer.Start(spanCtx, "jetstream.reply.publish",
-				trace.WithSpanKind(trace.SpanKindProducer),
+			spanCtx, span := tracer.Start(msgCtx, "jetstream.process",
+				trace.WithSpanKind(trace.SpanKindConsumer),
 				trace.WithAttributes(
 					attribute.String("messaging.system", "nats"),
-					attribute.String("messaging.destination.name", replySubject),
-					attribute.Int("messaging.message.body.size", len(replyData)),
+					attribute.String("messaging.destination.name", subject),
+					attribute.String("messaging.operation.type", "process"),
+					attribute.Int("messaging.message.body.size", len(data)),
 				),
 			)
-			replyMsg := nats.NewMsg(replySubject)
-			replyMsg.Header = make(nats.Header)
-			replyMsg.Data = replyData
-			otel.GetTextMapPropagator().Inject(replyCtx, natsHeaderCarrier(replyMsg.Header))
-			if pubErr := r.conn.PublishMsg(replyMsg); pubErr != nil {
-				replySpan.RecordError(pubErr)
-				replySpan.SetStatus(codes.Error, pubErr.Error())
-				r.logger.ErrorContext(replyCtx, "Failed to send JetStream reply",
-					"error", pubErr,
-					"reply_subject", replySubject)
-			} else {
-				replySpan.SetStatus(codes.Ok, "")
-			}
-			replySpan.End()
-		}
+			defer span.End()
 
-		if handlerErr != nil {
-			span.RecordError(handlerErr)
-			span.SetStatus(codes.Error, handlerErr.Error())
-			r.logger.ErrorContext(spanCtx, "JetStream message handler failed — NAKing with backoff",
-				"error", handlerErr,
-				"subject", subject,
-				"consumer", cfg.Name)
-			if nakErr := msg.NakWithDelay(nakDelay(msg)); nakErr != nil {
-				r.logger.ErrorContext(spanCtx, "Failed to NAK JetStream message",
-					"error", nakErr,
+			if err := handler(spanCtx, data, subject); err != nil {
+				span.RecordError(err)
+				span.SetStatus(codes.Error, err.Error())
+				r.logger.ErrorContext(spanCtx, "JetStream message handler failed — NAKing with backoff",
+					"error", err,
+					"subject", subject,
+					"consumer", cfg.Name)
+				if nakErr := msg.NakWithDelay(nakDelay(msg)); nakErr != nil {
+					r.logger.ErrorContext(spanCtx, "Failed to NAK JetStream message",
+						"error", nakErr,
+						"subject", subject)
+				}
+				return
+			}
+			span.SetStatus(codes.Ok, "")
+			if ackErr := msg.Ack(); ackErr != nil {
+				r.logger.ErrorContext(spanCtx, "Failed to ACK JetStream message",
+					"error", ackErr,
 					"subject", subject)
 			}
-			return
-		}
-		span.SetStatus(codes.Ok, "")
-		if ackErr := msg.Ack(); ackErr != nil {
-			r.logger.ErrorContext(spanCtx, "Failed to ACK JetStream message",
-				"error", ackErr,
-				"subject", subject)
-		}
+		}()
 	})
 	if err != nil {
 		r.logger.ErrorContext(ctx, "Failed to start JetStream consume loop",
@@ -888,7 +875,15 @@ func (r *MessagingRepository) ConsumeWithJetStream(
 		"consumer", cfg.Name,
 		"filter_subjects", filterSubjects)
 
+	// Guard against a race where DrainWithTimeout has already copied and
+	// cleared consumeContexts before we append: if shutdown has started,
+	// stop the consumer immediately so it is not leaked.
 	r.mu.Lock()
+	if r.isShuttingDown {
+		r.mu.Unlock()
+		consumeCtx.Stop()
+		return fmt.Errorf("cannot start JetStream consumer on %s: messaging repository is shutting down", streamName)
+	}
 	r.consumeContexts = append(r.consumeContexts, consumeCtx)
 	r.mu.Unlock()
 

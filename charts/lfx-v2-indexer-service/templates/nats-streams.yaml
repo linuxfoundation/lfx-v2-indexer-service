@@ -5,7 +5,7 @@
 apiVersion: jetstream.nats.io/v1beta2
 kind: Stream
 metadata:
-  name: {{ .Values.nats.stream_index_events.name }}
+  name: index-events
   namespace: {{ .Release.Namespace }}
   {{- if .Values.nats.stream_index_events.keep }}
   annotations:
@@ -14,9 +14,14 @@ metadata:
   labels:
     app.kubernetes.io/name: {{ .Chart.Name }}
 spec:
-  name: {{ .Values.nats.stream_index_events.name }}
+  # Stream name must match constants.StreamNameIndexEvents in the application.
+  # Do not make this configurable — a mismatch causes the consumer to fail at startup.
+  name: index-events
   subjects:
-    {{- toYaml .Values.nats.stream_index_events.subjects | nindent 4 }}
+    # Mirror the application subject settings so a single values override
+    # keeps the stream and the consumer filter in sync.
+    - {{ .Values.nats.indexingSubject }}
+    - {{ .Values.nats.v1IndexingSubject }}
   retention: {{ .Values.nats.stream_index_events.retention }}
   maxAge: {{ .Values.nats.stream_index_events.maxAge }}
   maxBytes: {{ .Values.nats.stream_index_events.maxBytes }}
