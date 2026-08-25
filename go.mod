@@ -3,7 +3,7 @@
 
 module github.com/linuxfoundation/lfx-v2-indexer-service
 
-go 1.24.0
+go 1.25.14
 
 require (
 	github.com/auth0/go-jwt-middleware/v2 v2.3.0

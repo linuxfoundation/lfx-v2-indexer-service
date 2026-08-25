@@ -128,4 +128,4 @@ yarn-debug.log*
 yarn-error.log*
 
 # MegaLinter reports
-megalinter-reports/ 
+megalinter-reports/
