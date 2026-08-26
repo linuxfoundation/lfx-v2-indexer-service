@@ -46,8 +46,8 @@ SPELL_CSPELL_ANALYZE_FILE_NAMES: false
 SPELL_CSPELL_PRE_COMMANDS:
   - command: >-
       cp .cspell.json /tmp/cspell.json.orig &&
-      curl -sSf
-      https://raw.githubusercontent.com/linuxfoundation/lfx-public-workflows/main/cspell/flagwords.json.snippet
+      curl -sSf --connect-timeout 5 --max-time 15
+      https://raw.githubusercontent.com/linuxfoundation/lfx-public-workflows/a93335d2abc2a2e2bb1b7a4cdefbbf15351681ce/cspell/flagwords.json.snippet
       -o /tmp/flagwords.json.snippet &&
       [ "$(grep -c '"flagWords": \[\]' .cspell.json)" -eq 1 ] &&
       sed -i -e '/"flagWords": \[\]/{r /tmp/flagwords.json.snippet' -e 'd}' .cspell.json
