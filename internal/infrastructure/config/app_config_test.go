@@ -108,3 +108,11 @@ func TestValidate_FullConfig(t *testing.T) {
 	cfg := baseValidConfig()
 	require.NoError(t, cfg.Validate(), "base valid config should pass full validation")
 }
+
+func TestLoadConfig_NATSMaxReconnectsDefault(t *testing.T) {
+	t.Setenv("NATS_MAX_RECONNECTS", "")
+	cfg, err := LoadConfig()
+	require.NoError(t, err)
+	assert.Equal(t, -1, cfg.NATS.MaxReconnects,
+		"NATS_MAX_RECONNECTS should default to -1 (infinite) when unset")
+}
