@@ -142,7 +142,9 @@ JWKS_URL=http://localhost:4457/.well-known/jwks
 
 # Message processing
 NATS_QUEUE=lfx.indexer.queue
+NATS_MAX_RECONNECTS=-1          # -1 = infinite reconnects (recommended for production)
 OPENSEARCH_INDEX=resources
+OPENSEARCH_TIMEOUT=30s          # ResponseHeaderTimeout: bounds first-byte wait; body reads are not bounded
 NATS_INDEXING_SUBJECT=lfx.index.>
 NATS_V1_INDEXING_SUBJECT=lfx.v1.index.>
 
