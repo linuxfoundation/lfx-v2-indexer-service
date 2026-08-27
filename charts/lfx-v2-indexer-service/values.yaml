@@ -25,7 +25,7 @@ opensearch:
   url: http://opensearch-cluster-master.lfx.svc.cluster.local:9200/
   # index is the index name for storing resources
   index: resources
-  # timeout is the ResponseHeaderTimeout for OpenSearch requests — prevents indefinite hangs on stale connections
+  # timeout is the ResponseHeaderTimeout for OpenSearch requests — covers time waiting for the first response byte; body reads are not bounded
   timeout: "30s"
 
 # heimdall is the configuration for the heimdall middleware

@@ -17,8 +17,8 @@ import (
 )
 
 // TestOpenSearchTransport_ResponseHeaderTimeout verifies that newOpenSearchTransport
-// (the same function used by initializeInfrastructure) fires its timeout when the
-// server never sends response headers, preventing indefinite hangs on stale connections.
+// (the same function used by initializeInfrastructure) fires its ResponseHeaderTimeout
+// — covering time waiting for the first response byte; body reads are not bounded.
 func TestOpenSearchTransport_ResponseHeaderTimeout(t *testing.T) {
 	// Server that accepts the connection but never writes response headers.
 	hangServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
