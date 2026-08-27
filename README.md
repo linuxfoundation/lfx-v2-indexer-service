@@ -327,7 +327,7 @@ NATS_RECONNECT_WAIT=2s                       # Wait time between reconnects
 NATS_CONNECTION_TIMEOUT=10s                  # Initial connection timeout
 
 # OpenSearch Connection Settings
-OPENSEARCH_TIMEOUT=30s                       # Response header timeout (prevents indefinite hangs on stale connections)
+OPENSEARCH_TIMEOUT=30s                       # Response header timeout — covers time waiting for the first response byte; body reads are not bounded by this setting
 
 # JWT Configuration
 JWT_ISSUER=heimdall                          # JWT issuer validation

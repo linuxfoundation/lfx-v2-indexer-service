@@ -4,6 +4,8 @@
 package container
 
 import (
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -36,5 +38,8 @@ func TestOpenSearchTransport_ResponseHeaderTimeout(t *testing.T) {
 	elapsed := time.Since(start)
 
 	assert.Error(t, err, "expected timeout error from hanging server")
-	assert.Less(t, elapsed, 2*timeout, "request should have timed out within 2× the configured timeout")
+	assert.GreaterOrEqual(t, elapsed, timeout/2, "request should not have failed before the timeout fired")
+	assert.Less(t, elapsed, 2*timeout, "request should have timed out within 2x the configured timeout")
+	var netErr net.Error
+	assert.True(t, errors.As(err, &netErr) && netErr.Timeout(), "expected a net.Error timeout, got: %v", err)
 }

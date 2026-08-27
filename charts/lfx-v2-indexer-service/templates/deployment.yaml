@@ -59,6 +59,8 @@ spec:
               value: {{ .Values.opensearch.url }}
             - name: OPENSEARCH_INDEX
               value: {{ .Values.opensearch.index }}
+            - name: OPENSEARCH_TIMEOUT
+              value: {{ .Values.opensearch.timeout }}
             - name: JWKS_URL
               value: {{ .Values.heimdall.jwksUrl }}
             - name: JWT_ISSUER
