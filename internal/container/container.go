@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	natsgo "github.com/nats-io/nats.go"
 	opensearchgo "github.com/opensearch-project/opensearch-go/v2"
@@ -217,11 +218,9 @@ func (c *Container) initializeInfrastructure() error {
 		return fmt.Errorf("failed to create OpenSearch client: %w", err)
 	}
 
-	baseTransport := http.DefaultTransport.(*http.Transport).Clone()
-	baseTransport.ResponseHeaderTimeout = c.Config.OpenSearch.Timeout
 	opensearchConfig := opensearchgo.Config{
 		Addresses: []string{c.Config.OpenSearch.URL},
-		Transport: otelhttp.NewTransport(baseTransport),
+		Transport: newOpenSearchTransport(c.Config.OpenSearch.Timeout),
 	}
 	opensearchClient, err := opensearchgo.NewClient(opensearchConfig)
 	if err != nil {
@@ -232,6 +231,14 @@ func (c *Container) initializeInfrastructure() error {
 	logger.Info("OpenSearch client created", "url", c.Config.OpenSearch.URL)
 
 	return nil
+}
+
+// newOpenSearchTransport returns an instrumented HTTP transport with the given
+// ResponseHeaderTimeout applied on top of http.DefaultTransport settings.
+func newOpenSearchTransport(timeout time.Duration) http.RoundTripper {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.ResponseHeaderTimeout = timeout
+	return otelhttp.NewTransport(t)
 }
 
 // initializeRepositories initializes repository layer with consolidated interfaces
