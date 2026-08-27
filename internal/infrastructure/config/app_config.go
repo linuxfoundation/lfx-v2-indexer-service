@@ -235,8 +235,10 @@ func (c *AppConfig) validateNATS() error {
 		return fmt.Errorf("NATS V1 indexing subject is required")
 	}
 
-	if c.NATS.MaxReconnects < 0 {
-		return fmt.Errorf("NATS max reconnects cannot be negative, got: %d", c.NATS.MaxReconnects)
+	// Negative values signal infinite reconnects to the nats.go library; -1 is the idiomatic sentinel.
+	// Reject anything below -1 as it is almost certainly a misconfiguration.
+	if c.NATS.MaxReconnects < -1 {
+		return fmt.Errorf("NATS max reconnects must be -1 (infinite) or a non-negative integer, got: %d", c.NATS.MaxReconnects)
 	}
 
 	if c.NATS.ReconnectWait <= 0 {
@@ -270,6 +272,10 @@ func (c *AppConfig) validateOpenSearch() error {
 
 	if c.OpenSearch.Index == "" {
 		return fmt.Errorf("OpenSearch index is required")
+	}
+
+	if c.OpenSearch.Timeout <= 0 {
+		return fmt.Errorf("OpenSearch timeout must be positive, got: %v", c.OpenSearch.Timeout)
 	}
 
 	return nil

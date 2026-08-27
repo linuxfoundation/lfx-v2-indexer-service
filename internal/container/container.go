@@ -217,9 +217,8 @@ func (c *Container) initializeInfrastructure() error {
 		return fmt.Errorf("failed to create OpenSearch client: %w", err)
 	}
 
-	baseTransport := &http.Transport{
-		ResponseHeaderTimeout: c.Config.OpenSearch.Timeout,
-	}
+	baseTransport := http.DefaultTransport.(*http.Transport).Clone()
+	baseTransport.ResponseHeaderTimeout = c.Config.OpenSearch.Timeout
 	opensearchConfig := opensearchgo.Config{
 		Addresses: []string{c.Config.OpenSearch.URL},
 		Transport: otelhttp.NewTransport(baseTransport),
