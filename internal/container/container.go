@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -216,9 +217,12 @@ func (c *Container) initializeInfrastructure() error {
 		return fmt.Errorf("failed to create OpenSearch client: %w", err)
 	}
 
+	baseTransport := &http.Transport{
+		ResponseHeaderTimeout: c.Config.OpenSearch.Timeout,
+	}
 	opensearchConfig := opensearchgo.Config{
 		Addresses: []string{c.Config.OpenSearch.URL},
-		Transport: otelhttp.NewTransport(nil),
+		Transport: otelhttp.NewTransport(baseTransport),
 	}
 	opensearchClient, err := opensearchgo.NewClient(opensearchConfig)
 	if err != nil {

@@ -104,7 +104,7 @@ func LoadConfig() (*AppConfig, error) {
 		},
 		NATS: NATSConfig{
 			URL:               getEnvStringWithLogging("NATS_URL", "nats://nats:4222", envVarsUsed, defaultsUsed, logger),
-			MaxReconnects:     getEnvIntWithLogging("NATS_MAX_RECONNECTS", 10, envVarsUsed, defaultsUsed, logger),
+			MaxReconnects:     getEnvIntWithLogging("NATS_MAX_RECONNECTS", -1, envVarsUsed, defaultsUsed, logger),
 			ReconnectWait:     getEnvDurationWithLogging("NATS_RECONNECT_WAIT", 2*time.Second, envVarsUsed, defaultsUsed, logger),
 			ConnectionTimeout: getEnvDurationWithLogging("NATS_CONNECTION_TIMEOUT", 10*time.Second, envVarsUsed, defaultsUsed, logger),
 			IndexingSubject:   getEnvStringWithLogging("NATS_INDEXING_SUBJECT", "lfx.index.>", envVarsUsed, defaultsUsed, logger),
@@ -116,8 +116,9 @@ func LoadConfig() (*AppConfig, error) {
 			WorkerCount:       getEnvIntWithLogging("NATS_WORKER_COUNT", constants.DefaultWorkerCount, envVarsUsed, defaultsUsed, logger),
 		},
 		OpenSearch: OpenSearchConfig{
-			URL:   getEnvStringWithLogging("OPENSEARCH_URL", "http://localhost:9200", envVarsUsed, defaultsUsed, logger),
-			Index: getEnvStringWithLogging("OPENSEARCH_INDEX", "resources", envVarsUsed, defaultsUsed, logger),
+			URL:     getEnvStringWithLogging("OPENSEARCH_URL", "http://localhost:9200", envVarsUsed, defaultsUsed, logger),
+			Index:   getEnvStringWithLogging("OPENSEARCH_INDEX", "resources", envVarsUsed, defaultsUsed, logger),
+			Timeout: getEnvDurationWithLogging("OPENSEARCH_TIMEOUT", 30*time.Second, envVarsUsed, defaultsUsed, logger),
 		},
 		JWT: JWTConfig{
 			Issuer: getEnvStringWithLogging("JWT_ISSUER", "heimdall", envVarsUsed, defaultsUsed, logger),
