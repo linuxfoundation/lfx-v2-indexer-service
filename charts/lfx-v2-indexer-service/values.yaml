@@ -6,8 +6,8 @@
 nats:
   # url is the URL of the NATS server
   url: nats://lfx-platform-nats.lfx.svc.cluster.local:4222
-  # maxReconnects is the maximum number of reconnection attempts
-  maxReconnects: 10
+  # maxReconnects is the maximum number of reconnection attempts. -1 means infinite (recommended for production).
+  maxReconnects: -1
   # reconnectWait is the time to wait between reconnection attempts
   reconnectWait: "2s"
   # connectionTimeout is the timeout for establishing a connection
@@ -25,6 +25,8 @@ opensearch:
   url: http://opensearch-cluster-master.lfx.svc.cluster.local:9200/
   # index is the index name for storing resources
   index: resources
+  # timeout is the ResponseHeaderTimeout for OpenSearch requests — covers time waiting for the first response byte; body reads are not bounded
+  timeout: "30s"
 
 # heimdall is the configuration for the heimdall middleware
 heimdall:

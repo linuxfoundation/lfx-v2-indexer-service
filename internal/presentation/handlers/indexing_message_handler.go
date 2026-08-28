@@ -120,7 +120,7 @@ func (h *IndexingMessageHandler) respondSuccessWithContext(ctx context.Context, 
 				"reply_error", replyErr.Error(),
 				"request_id", logging.GetRequestID(ctx))
 		} else {
-			logger.Info("Success reply sent to NATS",
+			logger.Debug("Success reply sent to NATS",
 				"subject", subject,
 				"request_id", logging.GetRequestID(ctx))
 		}

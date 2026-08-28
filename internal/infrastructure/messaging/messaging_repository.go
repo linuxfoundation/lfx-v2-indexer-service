@@ -600,7 +600,7 @@ func (r *MessagingRepository) HealthCheck(ctx context.Context) error {
 		}
 	}
 
-	r.logger.Info("NATS health check completed successfully", "status", "healthy", "subscriptions", totalSubs)
+	r.logger.Debug("NATS health check completed successfully", "status", "healthy", "subscriptions", totalSubs)
 
 	return nil
 }
@@ -620,7 +620,6 @@ func (r *MessagingRepository) ValidateToken(ctx context.Context, token string) (
 
 	principal, err := r.authRepo.ValidateToken(ctx, token)
 	if err != nil {
-		r.logger.Error("Token validation delegation failed", "error", err.Error())
 		return nil, err
 	}
 
@@ -639,7 +638,6 @@ func (r *MessagingRepository) ParsePrincipals(ctx context.Context, headers map[s
 
 	principals, err := r.authRepo.ParsePrincipals(ctx, headers)
 	if err != nil {
-		r.logger.Error("Principal parsing delegation failed", "error", err.Error())
 		return nil, err
 	}
 
