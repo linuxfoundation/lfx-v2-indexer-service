@@ -14,7 +14,7 @@ apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: lfx-v2-indexer-service
-  namespace: lfx
+  namespace: {{ .Release.Namespace }}
 spec:
   selector:
     matchLabels:
