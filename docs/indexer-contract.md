@@ -96,14 +96,15 @@ type IndexingConfig struct {
 
 > **Note on retry behaviour:** Under the JetStream consumer every non-nil handler
 > error results in a NAK with exponential-backoff jitter. This includes the
-> validation conditions listed below. Messages are redelivered up to `MaxDeliver`
-> times total; after that the NATS server stops delivering them. There is currently
+> validation conditions listed below. Messages are redelivered indefinitely
+> (`MaxDeliver: -1`); the effective give-up deadline is the stream's `maxAge`
+> (24 h) — once a message ages out it will not be redelivered. There is currently
 > no terminal-ACK path that skips retries for malformed messages — improvement
 > tracked as a follow-up.
 
 | Condition | Outcome |
 |---|---|
-| Missing `IndexingConfig` on create/update | Message NAKed; retried up to `MaxDeliver` times, then dropped |
+| Missing `IndexingConfig` on create/update | Message NAKed; redelivered indefinitely until ACKed or aged out of the stream (24 h) |
 | Empty `ObjectID` | NAKed and retried (no primary key) |
 | Empty `AccessCheckObject` or `AccessCheckRelation` | NAKed and retried during `IndexingConfig` parsing |
 | Empty `HistoryCheckObject` or `HistoryCheckRelation` | NAKed and retried during `IndexingConfig` parsing |
@@ -120,9 +121,9 @@ field with its internal ACK address (`$JS.ACK...`), so the original publisher
 inbox is not reachable from the consumer. `conn.Request()` callers will time out.
 Publishers must use `conn.Publish()` (fire-and-forget). Delivery guarantees are
 provided by the JetStream stream: messages that fail processing are NAKed with
-exponential backoff and redelivered up to `MaxDeliver` times in total (the initial
-delivery counts toward the limit, so `MaxDeliver: 5` allows one initial attempt plus
-up to four redeliveries).
+exponential backoff and redelivered indefinitely (`MaxDeliver: -1`). The effective
+give-up deadline is the stream's `maxAge` (24 h) — a message aged out of the stream
+will not be redelivered regardless of how many delivery attempts were made.
 
 ### Choosing search fields
 
