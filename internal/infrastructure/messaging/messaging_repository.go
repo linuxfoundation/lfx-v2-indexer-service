@@ -33,7 +33,8 @@ type MessagingRepository struct {
 	subscriptions     []*nats.Subscription
 	consumeContexts   []jetstream.ConsumeContext
 	mu                sync.RWMutex
-	wg                sync.WaitGroup
+	wg                sync.WaitGroup // tracks all in-flight handler goroutines (core NATS + JetStream)
+	jsWg              sync.WaitGroup // tracks JetStream-only goroutines; waited before conn.Drain()
 	drainTimeout      time.Duration
 	isShuttingDown    bool
 	pendingMsgLimit   int
@@ -384,6 +385,27 @@ func (r *MessagingRepository) waitForHandlers(timeout time.Duration) bool {
 	}
 }
 
+// waitForJetStreamWorkers waits for all goroutines tracked by r.jsWg to finish,
+// bounded by timeout. Returns true if it timed out.
+func (r *MessagingRepository) waitForJetStreamWorkers(timeout time.Duration) bool {
+	if timeout <= 0 {
+		r.logger.Warn("No time remaining to wait for in-flight JetStream workers")
+		return true
+	}
+	done := make(chan struct{})
+	go func() {
+		r.jsWg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return false
+	case <-time.After(timeout):
+		r.logger.Warn("Timed out waiting for in-flight JetStream workers", "timeout", timeout)
+		return true
+	}
+}
+
 // DrainWithTimeout performs graceful NATS connection drain with timeout
 func (r *MessagingRepository) DrainWithTimeout() error {
 	r.mu.Lock()
@@ -398,11 +420,10 @@ func (r *MessagingRepository) DrainWithTimeout() error {
 	// bounded by drainTimeout.
 	deadline := time.Now().Add(r.drainTimeout)
 
-	// Stop JetStream consumers before draining core NATS subscriptions.
-	// Stop() signals the consumer to stop delivering new messages and
-	// returns once the currently-executing callback (if any) has returned.
-	// JetStream goroutines spawned inside the callback are tracked via r.wg
-	// and are waited on further below via waitForHandlers.
+	// Phase 1: Stop JetStream consumers so no new callbacks fire.
+	// Stop() returns once the currently-executing callback (if any) has
+	// returned, so after this loop the only running JetStream work is inside
+	// goroutines that were already spawned by a callback.
 	for _, cc := range consumeContexts {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
@@ -419,17 +440,24 @@ func (r *MessagingRepository) DrainWithTimeout() error {
 		}
 	}
 
+	// Phase 2: Wait for all in-flight JetStream goroutines to finish BEFORE
+	// draining the NATS connection. These goroutines publish domain events via
+	// conn; if conn.Drain() closes the connection first, those publishes fail.
+	// jsWg is separate from wg so we don't accidentally wait for core-NATS
+	// callbacks that are still active on the open connection.
+	r.waitForJetStreamWorkers(time.Until(deadline))
+
 	r.logger.Info("Starting NATS graceful drain sequence", "timeout", r.drainTimeout, "subscriptions", totalSubscriptions)
 
 	if r.conn == nil {
 		r.logger.Warn("NATS connection is nil, skipping drain")
-		r.waitForHandlers(r.drainTimeout)
+		r.waitForHandlers(time.Until(deadline))
 		return nil
 	}
 
 	if r.conn.IsClosed() {
 		r.logger.Info("NATS connection already closed, no drain needed")
-		r.waitForHandlers(r.drainTimeout)
+		r.waitForHandlers(time.Until(deadline))
 		return nil
 	}
 
@@ -447,7 +475,7 @@ func (r *MessagingRepository) DrainWithTimeout() error {
 		}()
 		select {
 		case <-drainDone:
-		case <-time.After(r.drainTimeout):
+		case <-time.After(time.Until(deadline)):
 			r.logger.Warn("Timed out waiting for ongoing NATS drain", "timeout", r.drainTimeout)
 			return fmt.Errorf("timed out waiting for ongoing NATS drain after %s", r.drainTimeout)
 		}
@@ -455,7 +483,7 @@ func (r *MessagingRepository) DrainWithTimeout() error {
 		return nil
 	}
 
-	// Start drain process
+	// Phase 3: Drain core NATS subscriptions.
 	r.logger.Debug("Initiating NATS connection drain")
 
 	if err := r.conn.Drain(); err != nil {
@@ -463,10 +491,10 @@ func (r *MessagingRepository) DrainWithTimeout() error {
 		return fmt.Errorf("failed to drain NATS connection: %w", err)
 	}
 
-	// Wait for drain to complete
+	// Wait for drain to complete, bounded by the remaining deadline.
 	drainTimedOut := false
 	select {
-	case <-time.After(r.drainTimeout):
+	case <-time.After(time.Until(deadline)):
 		drainTimedOut = true
 		r.logger.Warn("NATS drain timeout reached", "timeout", r.drainTimeout)
 	case <-func() <-chan struct{} {
@@ -482,9 +510,9 @@ func (r *MessagingRepository) DrainWithTimeout() error {
 		// Drain completed before timeout
 	}
 
-	// Wait for all in-flight handler goroutines to finish, bounded by the
-	// remaining drain budget. Conn.Drain() only waits for callbacks to return,
-	// not for goroutines spawned inside them, so we track them with a WaitGroup.
+	// Phase 4: Wait for core-NATS handler goroutines, bounded by remaining budget.
+	// conn.Drain() only waits for subscriber callbacks to return, not for
+	// goroutines they spawn; r.wg covers those spawned goroutines.
 	handlersTimedOut := r.waitForHandlers(time.Until(deadline))
 
 	if drainTimedOut || handlersTimedOut {
@@ -798,6 +826,12 @@ func (r *MessagingRepository) ConsumeWithJetStream(
 		MaxDeliver:     5,
 		AckWait:        30 * time.Second,
 		MaxAckPending:  100,
+		// DeliverNewPolicy ensures a freshly-created durable consumer only
+		// processes messages published after it was created. On pod restart the
+		// NATS server restores the consumer's ACK floor, so in-progress messages
+		// are redelivered and no messages are skipped. Without this the initial
+		// consumer creation would replay the full 24 h stream history.
+		DeliverPolicy: jetstream.DeliverNewPolicy,
 	}
 
 	consumer, err := js.CreateOrUpdateConsumer(ctx, streamName, cfg)
@@ -819,13 +853,16 @@ func (r *MessagingRepository) ConsumeWithJetStream(
 		// Acquire a worker slot; this blocks the consumer callback goroutine
 		// until a slot is free, which provides back-pressure alongside
 		// MaxAckPending and keeps OpenSearch write concurrency bounded.
-		// Track the goroutine in r.wg so DrainWithTimeout can wait for
-		// in-flight processing to complete after Stop() returns.
+		// Track in r.wg (all handlers) AND r.jsWg (JetStream-only) so
+		// DrainWithTimeout can wait for JetStream workers before draining the
+		// connection (preventing domain-event publishes on a closed connection).
 		r.wg.Add(1)
+		r.jsWg.Add(1)
 		r.sem <- struct{}{}
 		go func() {
 			defer func() {
 				<-r.sem
+				r.jsWg.Done()
 				r.wg.Done()
 			}()
 

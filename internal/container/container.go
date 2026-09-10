@@ -55,8 +55,7 @@ type Container struct {
 	MessageProcessor *application.MessageProcessor
 
 	// Handlers (consolidated)
-	HealthHandler          *handlers.HealthHandler
-	IndexingMessageHandler *handlers.IndexingMessageHandler // Unified handler for both V2 and V1
+	HealthHandler *handlers.HealthHandler
 }
 
 // NewContainer creates a new dependency injection container with CLI overrides
@@ -316,9 +315,6 @@ func (c *Container) initializeHandlers() error {
 	// Initialize health handler with indexer service
 	simpleResponse := !c.Config.Health.EnableDetailedResponse
 	c.HealthHandler = handlers.NewHealthHandler(c.IndexerService, simpleResponse)
-
-	// Initialize unified message handler (handles both V2 and V1)
-	c.IndexingMessageHandler = handlers.NewIndexingMessageHandler(c.MessageProcessor)
 
 	return nil
 }

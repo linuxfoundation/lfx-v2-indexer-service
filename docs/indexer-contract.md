@@ -7,8 +7,10 @@ This is the **owner document** for the indexer event envelope, the OpenSearch do
 shape, and the rules the indexer enforces on incoming messages. Other services link
 here rather than copy.
 
-The indexer consumes `lfx.index.>` (V2) and `lfx.v1.index.>` (V1) NATS subjects
-from a durable JetStream consumer (`index-events` stream), writes documents into
+The indexer consumes the configured indexing subjects (defaults: `lfx.index.>` for
+V2 and `lfx.v1.index.>` for V1; overridable via `nats.indexingSubject` and
+`nats.v1IndexingSubject` Helm values) from a durable JetStream consumer
+(`index-events` stream), writes documents into
 OpenSearch, and emits domain events on `lfx.{object_type}.{action}`. It is fully
 generic; resource services tell it everything it needs via the message payload.
 
@@ -111,7 +113,9 @@ field with its internal ACK address (`$JS.ACK...`), so the original publisher
 inbox is not reachable from the consumer. `conn.Request()` callers will time out.
 Publishers must use `conn.Publish()` (fire-and-forget). Delivery guarantees are
 provided by the JetStream stream: messages that fail processing are NAKed with
-exponential backoff and redelivered up to `MaxDeliver` times.
+exponential backoff and redelivered up to `MaxDeliver` times in total (the initial
+delivery counts toward the limit, so `MaxDeliver: 5` allows one initial attempt plus
+up to four redeliveries).
 
 ### Choosing search fields
 
@@ -247,8 +251,9 @@ Before merging a change to publisher code in a resource service, verify:
 2. Deletes use `action = "deleted"` and `Data` = the UID string (not the resource).
 3. The subject matches the resource type that other services already use; check
    `pkg/constants/` for the canonical constant.
-4. The publisher waits for `OK` on the reply when the write must be confirmed
-   (or accepts fire-and-forget for non-critical writes; document which).
+4. Publishing is fire-and-forget — use `conn.Publish()`, not `conn.Request()`.
+   The indexer now runs as a JetStream durable consumer; request/reply is not
+   supported (see the note in the rejection table above).
 5. Headers carry lower-case `authorization` and `x-on-behalf-of` keys so audit principals are
    recorded on the indexed document.
 

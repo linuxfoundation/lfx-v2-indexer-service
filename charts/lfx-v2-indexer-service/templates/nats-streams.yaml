@@ -34,4 +34,11 @@ spec:
   storage: {{ .Values.nats.stream_index_events.storage }}
   replicas: {{ .Values.nats.stream_index_events.replicas }}
   compression: {{ .Values.nats.stream_index_events.compression }}
+  # Rollback trade-off: when rolling back to a pre-JetStream release the durable
+  # consumer remains on the NATS server and accumulates messages while old pods
+  # process live traffic through core NATS. On the next re-upgrade the consumer
+  # resumes from its ACK floor, which may cause a burst of reprocessing for the
+  # rollback interval. This is acceptable because the indexer is idempotent
+  # (upsert semantics in OpenSearch). The stream is preserved across rollbacks
+  # (helm.sh/resource-policy: keep) to avoid losing the persisted backlog.
 {{- end }}

@@ -34,7 +34,9 @@ nats:
     storage: file
     # retention keeps messages up to maxAge
     retention: limits
-    # maxAge must cover queue wait and retry window (5 retries × 30 s AckWait)
+    # maxAge must cover the full retry window: MaxDeliver=5 total deliveries
+    # (1 initial + 4 retries), with NAK-based exponential backoff up to ~16 s
+    # per attempt. 24 h gives ample headroom for transient downstream outages.
     maxAge: 24h
     # maxBytes caps storage per stream; 10 GiB covers expected 24 h traffic
     # with headroom. Quoted to prevent Helm from rendering as scientific notation.
