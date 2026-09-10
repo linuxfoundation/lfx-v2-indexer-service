@@ -55,7 +55,8 @@ type Container struct {
 	MessageProcessor *application.MessageProcessor
 
 	// Handlers (consolidated)
-	HealthHandler *handlers.HealthHandler
+	HealthHandler          *handlers.HealthHandler
+	IndexingMessageHandler *handlers.IndexingMessageHandler // routes JetStream messages to MessageProcessor
 }
 
 // NewContainer creates a new dependency injection container with CLI overrides
@@ -316,6 +317,11 @@ func (c *Container) initializeHandlers() error {
 	simpleResponse := !c.Config.Health.EnableDetailedResponse
 	c.HealthHandler = handlers.NewHealthHandler(c.IndexerService, simpleResponse)
 
+	// Initialize the indexing message handler. Subject routing (V2 vs V1)
+	// lives in the presentation layer; the container wires it as the callback
+	// for the JetStream consumer rather than duplicating the routing inline.
+	c.IndexingMessageHandler = handlers.NewIndexingMessageHandler(c.MessageProcessor)
+
 	return nil
 }
 
@@ -403,19 +409,18 @@ func (c *Container) SetupNATSSubscriptions(ctx context.Context) error {
 		return fmt.Errorf("message processor is not initialized")
 	}
 
-	// Route each JetStream message to the appropriate processor method based on subject.
-	handler := func(msgCtx context.Context, data []byte, subject string) error {
-		if strings.HasPrefix(subject, constants.FromV1Prefix) {
-			return c.MessageProcessor.ProcessV1IndexingMessage(msgCtx, data, subject)
-		}
-		return c.MessageProcessor.ProcessIndexingMessage(msgCtx, data, subject)
+	if c.IndexingMessageHandler == nil {
+		return fmt.Errorf("indexing message handler is not initialized")
 	}
 
+	// Delegate subject routing to the presentation-layer handler so the logic
+	// lives in one place (IndexingMessageHandler.Handle) rather than being
+	// duplicated inline here.
 	if err := c.MessagingRepository.ConsumeWithJetStream(
 		ctx,
 		constants.StreamNameIndexEvents,
 		[]string{c.Config.NATS.IndexingSubject, c.Config.NATS.V1IndexingSubject},
-		handler,
+		c.IndexingMessageHandler.Handle,
 	); err != nil {
 		return fmt.Errorf("failed to start JetStream index consumer: %w", err)
 	}

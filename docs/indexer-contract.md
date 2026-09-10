@@ -94,18 +94,25 @@ type IndexingConfig struct {
 
 ### What the indexer rejects
 
+> **Note on retry behaviour:** Under the JetStream consumer every non-nil handler
+> error results in a NAK with exponential-backoff jitter. This includes the
+> validation conditions listed below. Messages are redelivered up to `MaxDeliver`
+> times total; after that the NATS server stops delivering them. There is currently
+> no terminal-ACK path that skips retries for malformed messages — improvement
+> tracked as a follow-up.
+
 | Condition | Outcome |
 |---|---|
-| Missing `IndexingConfig` on create/update | Message ACKed and discarded (terminal — not retried) |
-| Empty `ObjectID` | ACKed and discarded (no primary key) |
-| Empty `AccessCheckObject` or `AccessCheckRelation` | ACKed and discarded during `IndexingConfig` parsing |
-| Empty `HistoryCheckObject` or `HistoryCheckRelation` | ACKed and discarded during `IndexingConfig` parsing |
-| Unknown `action` value | ACKed and discarded (`unknown action`) |
-| Missing lower-case `authorization` header on V2 messages | ACKed and discarded during header validation |
-| `data` not present on create/update | ACKed and discarded |
-| `data` not a string on delete | ACKed and discarded |
-| Subject suffix empty (`lfx.index.` with no type) | ACKed and discarded (must have a non-empty resource type) |
-| Subject suffix contains `.`, `*`, `>`, whitespace, or equals `index` | ACKed and discarded (invalid or reserved object type) |
+| Missing `IndexingConfig` on create/update | Message NAKed; retried up to `MaxDeliver` times, then dropped |
+| Empty `ObjectID` | NAKed and retried (no primary key) |
+| Empty `AccessCheckObject` or `AccessCheckRelation` | NAKed and retried during `IndexingConfig` parsing |
+| Empty `HistoryCheckObject` or `HistoryCheckRelation` | NAKed and retried during `IndexingConfig` parsing |
+| Unknown `action` value | NAKed and retried (`unknown action`) |
+| Missing lower-case `authorization` header on V2 messages | NAKed and retried during header validation |
+| `data` not present on create/update | NAKed and retried |
+| `data` not a string on delete | NAKed and retried |
+| Subject suffix empty (`lfx.index.` with no type) | NAKed and retried (must have a non-empty resource type) |
+| Subject suffix contains `.`, `*`, `>`, whitespace, or equals `index` | NAKed and retried (invalid or reserved object type) |
 
 **Request/reply (synchronous) is not supported.** The indexer now consumes
 messages from a JetStream durable stream. JetStream overwrites the NATS `Reply`

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"math"
 	"math/rand"
+	"os"
 	"sync"
 	"time"
 
@@ -445,7 +446,7 @@ func (r *MessagingRepository) DrainWithTimeout() error {
 	// conn; if conn.Drain() closes the connection first, those publishes fail.
 	// jsWg is separate from wg so we don't accidentally wait for core-NATS
 	// callbacks that are still active on the open connection.
-	r.waitForJetStreamWorkers(time.Until(deadline))
+	jsWorkersTimedOut := r.waitForJetStreamWorkers(time.Until(deadline))
 
 	r.logger.Info("Starting NATS graceful drain sequence", "timeout", r.drainTimeout, "subscriptions", totalSubscriptions)
 
@@ -515,11 +516,23 @@ func (r *MessagingRepository) DrainWithTimeout() error {
 	// goroutines they spawn; r.wg covers those spawned goroutines.
 	handlersTimedOut := r.waitForHandlers(time.Until(deadline))
 
-	if drainTimedOut || handlersTimedOut {
-		r.logger.Warn("NATS drain did not complete cleanly", "drain_timed_out", drainTimedOut, "handlers_timed_out", handlersTimedOut, "subscriptions_processed", totalSubscriptions)
+	if jsWorkersTimedOut || drainTimedOut || handlersTimedOut {
+		r.logger.Warn("NATS drain did not complete cleanly",
+			"js_workers_timed_out", jsWorkersTimedOut,
+			"drain_timed_out", drainTimedOut,
+			"handlers_timed_out", handlersTimedOut,
+			"subscriptions_processed", totalSubscriptions)
 		switch {
+		case jsWorkersTimedOut && drainTimedOut && handlersTimedOut:
+			return fmt.Errorf("JetStream worker wait, NATS drain, and handler wait all timed out after %s", r.drainTimeout)
+		case jsWorkersTimedOut && drainTimedOut:
+			return fmt.Errorf("JetStream worker wait and NATS drain both timed out after %s", r.drainTimeout)
+		case jsWorkersTimedOut && handlersTimedOut:
+			return fmt.Errorf("JetStream worker wait and handler wait both timed out after %s", r.drainTimeout)
 		case drainTimedOut && handlersTimedOut:
 			return fmt.Errorf("NATS drain and in-flight handler wait both timed out after %s", r.drainTimeout)
+		case jsWorkersTimedOut:
+			return fmt.Errorf("timed out waiting for in-flight JetStream workers to finish after %s", r.drainTimeout)
 		case drainTimedOut:
 			return fmt.Errorf("NATS drain timed out after %s", r.drainTimeout)
 		default: // handlersTimedOut only
@@ -826,12 +839,15 @@ func (r *MessagingRepository) ConsumeWithJetStream(
 		MaxDeliver:     5,
 		AckWait:        30 * time.Second,
 		MaxAckPending:  100,
-		// DeliverNewPolicy ensures a freshly-created durable consumer only
-		// processes messages published after it was created. On pod restart the
-		// NATS server restores the consumer's ACK floor, so in-progress messages
-		// are redelivered and no messages are skipped. Without this the initial
-		// consumer creation would replay the full 24 h stream history.
-		DeliverPolicy: jetstream.DeliverNewPolicy,
+		// DeliverAllPolicy (the default) is intentionally used here rather than
+		// DeliverNewPolicy. DeliverNewPolicy would skip any messages that landed
+		// in the stream between stream-CRD creation and pod startup — a real loss
+		// window since Argo CD applies the CRD before the Deployment rolls out.
+		// With DeliverAllPolicy:
+		//   - First creation (new deployment): stream is brand-new so there is
+		//     nothing to replay; all messages are effectively "new".
+		//   - Pod restart: NATS server restores the durable consumer's ACK floor
+		//     automatically; messages are not replayed from the beginning.
 	}
 
 	consumer, err := js.CreateOrUpdateConsumer(ctx, streamName, cfg)
@@ -841,6 +857,20 @@ func (r *MessagingRepository) ConsumeWithJetStream(
 			"stream", streamName,
 			"consumer", cfg.Name)
 		return fmt.Errorf("failed to create JetStream consumer on stream %s: %w", streamName, err)
+	}
+
+	// consumeErrHandler is called by the nats.go library when a terminal
+	// consumer-level error occurs — e.g. the durable consumer was deleted on
+	// the server, or a bad-request status was returned. These errors are not
+	// per-message: they stop the consume loop entirely, meaning no further
+	// messages will be delivered. The pod must be restarted to recreate the
+	// consumer. We log the error and exit so Kubernetes restarts the pod.
+	consumeErrHandler := func(_ jetstream.ConsumeContext, err error) {
+		r.logger.Error("JetStream consumer encountered a terminal error — exiting for pod restart",
+			"error", err,
+			"stream", streamName,
+			"consumer", cfg.Name)
+		os.Exit(1)
 	}
 
 	consumeCtx, err := consumer.Consume(func(msg jetstream.Msg) {
@@ -898,7 +928,7 @@ func (r *MessagingRepository) ConsumeWithJetStream(
 					"subject", subject)
 			}
 		}()
-	})
+	}, jetstream.ConsumeErrHandler(consumeErrHandler))
 	if err != nil {
 		r.logger.ErrorContext(ctx, "Failed to start JetStream consume loop",
 			"error", err,
