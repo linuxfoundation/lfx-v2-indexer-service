@@ -9,10 +9,17 @@ metadata:
   namespace: lfx
   labels:
     app.kubernetes.io/name: {{ .Chart.Name }}
-  {{- with .Values.annotations }}
   annotations:
+    # sync-wave: -1 ensures Argo CD terminates old pods (via Recreate strategy)
+    # and waits for the Deployment to become healthy BEFORE applying the NATS
+    # Stream CRD (wave 0). Without this, the stream can be created while old
+    # core-NATS pods are still active, causing a window where messages are both
+    # consumed by old pods and captured in the stream for replay by new pods
+    # (duplicate domain events via DeliverAllPolicy).
+    argocd.argoproj.io/sync-wave: "-1"
+    {{- with .Values.annotations }}
     {{- toYaml . | nindent 4 }}
-  {{- end }}
+    {{- end }}
 spec:
   replicas: {{ .Values.app.replicas }}
   # Recreate terminates all old pods before starting new ones.

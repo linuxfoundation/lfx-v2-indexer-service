@@ -991,6 +991,16 @@ func (r *MessagingRepository) ConsumeWithJetStream(
 // dropped before their next delivery attempt.
 const nakMaxBackoff = 5 * time.Minute
 
+// nakMaxExp is the maximum exponent used in the backoff formula. At exponent 9,
+// 2^9 s = 512 s > nakMaxBackoff (300 s), so the cap always fires for attempts
+// beyond 10. Capping here prevents the multiplication
+//
+//	time.Second * time.Duration(math.Pow(2, exp))
+//
+// from overflowing int64 at delivery 35+ (where 2^34 * 1e9 ≈ 1.72e19 > int64
+// max ≈ 9.22e18), which would produce a negative duration and panic rand.Int63n.
+const nakMaxExp = 9
+
 // nakDelay returns an exponential backoff duration with full jitter based on
 // the message delivery attempt count, capped at nakMaxBackoff. Full jitter
 // (random in [0, cap]) prevents correlated retries across service replicas.
@@ -1004,7 +1014,11 @@ func nakDelay(msg jetstream.Msg) time.Duration {
 	if err != nil || meta == nil {
 		return time.Second
 	}
-	maxDelay := time.Second * time.Duration(math.Pow(2, float64(meta.NumDelivered-1)))
+	exp := float64(meta.NumDelivered - 1)
+	if exp > nakMaxExp {
+		exp = nakMaxExp
+	}
+	maxDelay := time.Second * time.Duration(math.Pow(2, exp))
 	if maxDelay > nakMaxBackoff {
 		maxDelay = nakMaxBackoff
 	}
