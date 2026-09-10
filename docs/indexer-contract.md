@@ -97,14 +97,15 @@ type IndexingConfig struct {
 > **Note on retry behaviour:** Under the JetStream consumer every non-nil handler
 > error results in a NAK with exponential-backoff jitter. This includes the
 > validation conditions listed below. Messages are redelivered indefinitely
-> (`MaxDeliver: -1`); the effective give-up deadline is the stream's `maxAge`
-> (24 h) — once a message ages out it will not be redelivered. There is currently
-> no terminal-ACK path that skips retries for malformed messages — improvement
+> (`MaxDeliver: -1`); the effective give-up deadline is whichever stream limit is
+> reached first — the age limit (24 h) or the size limit (10 GiB). Once a message
+> is evicted by either limit it will not be redelivered. There is currently no
+> terminal-ACK path that skips retries for malformed messages — improvement
 > tracked as a follow-up.
 
 | Condition | Outcome |
 |---|---|
-| Missing `IndexingConfig` on create/update | Message NAKed; redelivered indefinitely until ACKed or aged out of the stream (24 h) |
+| Missing `IndexingConfig` on create/update | Message NAKed; redelivered indefinitely until ACKed or evicted by the stream age (24 h) or size (10 GiB) limit |
 | Empty `ObjectID` | NAKed and retried (no primary key) |
 | Empty `AccessCheckObject` or `AccessCheckRelation` | NAKed and retried during `IndexingConfig` parsing |
 | Empty `HistoryCheckObject` or `HistoryCheckRelation` | NAKed and retried during `IndexingConfig` parsing |
@@ -122,8 +123,9 @@ inbox is not reachable from the consumer. `conn.Request()` callers will time out
 Publishers must use `conn.Publish()` (fire-and-forget). Delivery guarantees are
 provided by the JetStream stream: messages that fail processing are NAKed with
 exponential backoff and redelivered indefinitely (`MaxDeliver: -1`). The effective
-give-up deadline is the stream's `maxAge` (24 h) — a message aged out of the stream
-will not be redelivered regardless of how many delivery attempts were made.
+give-up deadline is whichever stream limit fires first — the age limit (24 h) or the
+size limit (10 GiB). A message evicted by either limit will not be redelivered
+regardless of how many delivery attempts were made.
 
 ### Choosing search fields
 
