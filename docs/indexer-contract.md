@@ -117,9 +117,13 @@ type IndexingConfig struct {
 | Subject suffix contains `.`, `*`, `>`, whitespace, or equals `index` | NAKed and retried (invalid or reserved object type) |
 
 **Request/reply (synchronous) is not supported.** The indexer now consumes
-messages from a JetStream durable stream. JetStream overwrites the NATS `Reply`
-field with its internal ACK address (`$JS.ACK...`), so the original publisher
-inbox is not reachable from the consumer. `conn.Request()` callers will time out.
+messages from a JetStream durable stream. Callers that use `conn.Request()` on a
+JetStream-captured subject receive a `PubAck` JSON persistence acknowledgment from
+the NATS server — **not** an application-level processing result from the indexer.
+The message is stored in the stream and processed asynchronously; there is no way
+to determine whether indexing succeeded from the publish call. JetStream also
+overwrites the NATS `Reply` field with its internal ACK address (`$JS.ACK...`), so
+the original publisher reply inbox is not reachable from the consumer.
 Publishers must use `conn.Publish()` (fire-and-forget). Delivery guarantees are
 provided by the JetStream stream: messages that fail processing are NAKed with
 exponential backoff and redelivered indefinitely (`MaxDeliver: -1`). The effective
