@@ -7,10 +7,10 @@ This is the **owner document** for the indexer event envelope, the OpenSearch do
 shape, and the rules the indexer enforces on incoming messages. Other services link
 here rather than copy.
 
-The indexer subscribes to `lfx.index.>` (V2) and `lfx.v1.index.>` (V1) NATS subjects
-on a queue group, writes documents into OpenSearch, and emits domain events on
-`lfx.{object_type}.{action}`. It is fully generic; resource services tell it
-everything it needs via the message payload.
+The indexer consumes `lfx.index.>` (V2) and `lfx.v1.index.>` (V1) NATS subjects
+from a durable JetStream consumer (`index-events` stream), writes documents into
+OpenSearch, and emits domain events on `lfx.{object_type}.{action}`. It is fully
+generic; resource services tell it everything it needs via the message payload.
 
 ## Subject Conventions
 
@@ -94,16 +94,16 @@ type IndexingConfig struct {
 
 | Condition | Outcome |
 |---|---|
-| Missing `IndexingConfig` on create/update | Message rejected with error reply |
-| Empty `ObjectID` | Rejected (no primary key) |
-| Empty `AccessCheckObject` or `AccessCheckRelation` | Rejected during `IndexingConfig` parsing |
-| Empty `HistoryCheckObject` or `HistoryCheckRelation` | Rejected during `IndexingConfig` parsing |
-| Unknown `action` value | Rejected with `unknown action` |
-| Missing lower-case `authorization` header on V2 messages | Rejected during header validation |
-| `data` not present on create/update | Rejected |
-| `data` not a string on delete | Rejected |
-| Subject suffix empty (`lfx.index.` with no type) | Rejected (must have a non-empty resource type) |
-| Subject suffix contains `.`, `*`, `>`, whitespace, or equals `index` | Rejected (invalid or reserved object type) |
+| Missing `IndexingConfig` on create/update | Message ACKed and discarded (terminal — not retried) |
+| Empty `ObjectID` | ACKed and discarded (no primary key) |
+| Empty `AccessCheckObject` or `AccessCheckRelation` | ACKed and discarded during `IndexingConfig` parsing |
+| Empty `HistoryCheckObject` or `HistoryCheckRelation` | ACKed and discarded during `IndexingConfig` parsing |
+| Unknown `action` value | ACKed and discarded (`unknown action`) |
+| Missing lower-case `authorization` header on V2 messages | ACKed and discarded during header validation |
+| `data` not present on create/update | ACKed and discarded |
+| `data` not a string on delete | ACKed and discarded |
+| Subject suffix empty (`lfx.index.` with no type) | ACKed and discarded (must have a non-empty resource type) |
+| Subject suffix contains `.`, `*`, `>`, whitespace, or equals `index` | ACKed and discarded (invalid or reserved object type) |
 
 **Request/reply (synchronous) is not supported.** The indexer now consumes
 messages from a JetStream durable stream. JetStream overwrites the NATS `Reply`

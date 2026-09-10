@@ -9,7 +9,12 @@ metadata:
   namespace: {{ .Release.Namespace }}
   {{- if .Values.nats.stream_index_events.keep }}
   annotations:
+    # Helm: do not delete this resource on `helm uninstall` or rollback.
     "helm.sh/resource-policy": keep
+    # Argo CD: do not prune this resource when the manifest is absent from the
+    # target revision (e.g. during a rollback). Without this, Argo CD can delete
+    # the stream — and its persisted message backlog — even when Helm would keep it.
+    "argocd.argoproj.io/sync-options": "Prune=false"
   {{- end }}
   labels:
     app.kubernetes.io/name: {{ .Chart.Name }}
