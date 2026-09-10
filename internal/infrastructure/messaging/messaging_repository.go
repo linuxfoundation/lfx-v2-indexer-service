@@ -6,6 +6,7 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -421,22 +422,28 @@ func (r *MessagingRepository) DrainWithTimeout() error {
 	// bounded by drainTimeout.
 	deadline := time.Now().Add(r.drainTimeout)
 
-	// Phase 1: Stop JetStream consumers so no new callbacks fire.
-	// Stop() returns once the currently-executing callback (if any) has
-	// returned, so after this loop the only running JetStream work is inside
-	// goroutines that were already spawned by a callback.
+	// Phase 1: Stop JetStream consumers and wait for each one to fully close.
+	//
+	// In nats.go v1.43, Stop() only signals the internal goroutine to halt by
+	// closing sub.done; it returns immediately while the goroutine may still be
+	// inside our callback (which spawns a jsWg goroutine before returning).
+	// Calling waitForJetStreamWorkers before the internal goroutine has exited
+	// creates a race: jsWg.Wait() can observe zero before jsWg.Add(1) fires.
+	//
+	// The fix: after Stop(), wait for cc.Closed() which is closed only after
+	// the internal goroutine has fully exited and will never call our callback
+	// again. Only then is it safe to wait on jsWg.
 	for _, cc := range consumeContexts {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			r.logger.Warn("Drain budget exhausted before all JetStream consumers stopped")
 			break
 		}
-		stopped := make(chan struct{}, 1)
-		go func(c jetstream.ConsumeContext) { c.Stop(); stopped <- struct{}{} }(cc)
+		cc.Stop()
 		select {
-		case <-stopped:
+		case <-cc.Closed():
 		case <-time.After(remaining):
-			r.logger.Warn("Timed out waiting for JetStream consumer to stop",
+			r.logger.Warn("Timed out waiting for JetStream consumer to close",
 				"remaining", remaining)
 		}
 	}
@@ -446,6 +453,8 @@ func (r *MessagingRepository) DrainWithTimeout() error {
 	// conn; if conn.Drain() closes the connection first, those publishes fail.
 	// jsWg is separate from wg so we don't accidentally wait for core-NATS
 	// callbacks that are still active on the open connection.
+	// It is safe to call jsWg.Wait() here because all consumers are fully closed
+	// (cc.Closed() returned above) so no new jsWg.Add(1) calls can fire.
 	jsWorkersTimedOut := r.waitForJetStreamWorkers(time.Until(deadline))
 
 	r.logger.Info("Starting NATS graceful drain sequence", "timeout", r.drainTimeout, "subscriptions", totalSubscriptions)
@@ -836,9 +845,14 @@ func (r *MessagingRepository) ConsumeWithJetStream(
 		Durable:        constants.ConsumerNameIndexer,
 		FilterSubjects: filterSubjects,
 		AckPolicy:      jetstream.AckExplicitPolicy,
-		MaxDeliver:     5,
-		AckWait:        30 * time.Second,
-		MaxAckPending:  100,
+		// MaxDeliver: -1 means unlimited redeliveries. The stream's maxAge (24 h)
+		// is the effective "give up" deadline: once a message ages out of the
+		// stream it will not be redelivered, regardless of delivery count.
+		// This prevents the consumer from exhausting its delivery budget during
+		// an extended downstream outage (e.g. OpenSearch down for hours).
+		MaxDeliver:    -1,
+		AckWait:       30 * time.Second,
+		MaxAckPending: 100,
 		// DeliverAllPolicy (the default) is intentionally used here rather than
 		// DeliverNewPolicy. DeliverNewPolicy would skip any messages that landed
 		// in the stream between stream-CRD creation and pod startup — a real loss
@@ -859,18 +873,32 @@ func (r *MessagingRepository) ConsumeWithJetStream(
 		return fmt.Errorf("failed to create JetStream consumer on stream %s: %w", streamName, err)
 	}
 
-	// consumeErrHandler is called by the nats.go library when a terminal
-	// consumer-level error occurs — e.g. the durable consumer was deleted on
-	// the server, or a bad-request status was returned. These errors are not
-	// per-message: they stop the consume loop entirely, meaning no further
-	// messages will be delivered. The pod must be restarted to recreate the
-	// consumer. We log the error and exit so Kubernetes restarts the pod.
+	// consumeErrHandler is called by the nats.go library when a consumer-level
+	// error occurs. Not all errors are terminal: nats.go sends transient errors
+	// such as ErrNoHeartbeat and ErrConsumerLeadershipChanged to this handler
+	// but auto-recovers from them internally. Exiting on those would cause all
+	// replicas to restart simultaneously during a brief NATS interruption.
+	//
+	// Terminal errors (ErrConsumerDeleted, ErrBadRequest) stop the consume loop
+	// permanently — no further messages will ever be delivered. The only
+	// recovery is a pod restart to recreate/reattach the consumer.
 	consumeErrHandler := func(_ jetstream.ConsumeContext, err error) {
-		r.logger.Error("JetStream consumer encountered a terminal error — exiting for pod restart",
+		isTerminal := errors.Is(err, jetstream.ErrConsumerDeleted) ||
+			errors.Is(err, jetstream.ErrBadRequest)
+
+		if isTerminal {
+			r.logger.Error("JetStream consumer encountered a terminal error — exiting for pod restart",
+				"error", err,
+				"stream", streamName,
+				"consumer", cfg.Name)
+			os.Exit(1)
+		}
+
+		// Transient errors: log at Warn and let nats.go auto-recover.
+		r.logger.Warn("JetStream consumer transient error (auto-recovering)",
 			"error", err,
 			"stream", streamName,
 			"consumer", cfg.Name)
-		os.Exit(1)
 	}
 
 	consumeCtx, err := consumer.Consume(func(msg jetstream.Msg) {
@@ -957,17 +985,28 @@ func (r *MessagingRepository) ConsumeWithJetStream(
 	return nil
 }
 
+// nakMaxBackoff is the upper bound on the NAK retry delay. Without a cap,
+// the exponential formula would grow without bound (e.g. 2^17 s ≈ 36 h),
+// causing messages to wait longer than the stream's maxAge (24 h) and be
+// dropped before their next delivery attempt.
+const nakMaxBackoff = 5 * time.Minute
+
 // nakDelay returns an exponential backoff duration with full jitter based on
-// the message delivery attempt count. Full jitter (random in [0, cap])
-// prevents correlated retries across concurrent service replicas.
+// the message delivery attempt count, capped at nakMaxBackoff. Full jitter
+// (random in [0, cap]) prevents correlated retries across service replicas.
 //
 // Attempt 1 → rand(0, 1s)
 // Attempt 2 → rand(0, 2s)
+// ...
+// Attempt ≥10 → rand(0, 5min)  (capped)
 func nakDelay(msg jetstream.Msg) time.Duration {
 	meta, err := msg.Metadata()
 	if err != nil || meta == nil {
 		return time.Second
 	}
 	maxDelay := time.Second * time.Duration(math.Pow(2, float64(meta.NumDelivered-1)))
+	if maxDelay > nakMaxBackoff {
+		maxDelay = nakMaxBackoff
+	}
 	return time.Duration(rand.Int63n(int64(maxDelay) + 1))
 }

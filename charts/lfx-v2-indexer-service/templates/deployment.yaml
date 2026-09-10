@@ -15,6 +15,13 @@ metadata:
   {{- end }}
 spec:
   replicas: {{ .Values.app.replicas }}
+  # Recreate terminates all old pods before starting new ones.
+  # With a durable JetStream consumer (DeliverAllPolicy), a RollingUpdate
+  # would create an overlap window where both the old (core-NATS) and new
+  # (JetStream) pods are running simultaneously, causing the same domain
+  # events to be processed twice. Recreate eliminates that window.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: lfx-v2-indexer-service
