@@ -257,8 +257,6 @@ func TestContainer_CLIConfigOverrides(t *testing.T) {
 			t.Setenv("JWT_ISSUER", "test-issuer")
 			t.Setenv("JWT_AUDIENCES", "test-audience")
 			t.Setenv("JWT_JWKS_URL", "https://test.com/.well-known/jwks.json")
-			defer func() {
-			}()
 
 			logger := logging.NewLogger(true)
 
