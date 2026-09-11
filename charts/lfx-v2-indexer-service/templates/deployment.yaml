@@ -15,6 +15,19 @@ metadata:
   {{- end }}
 spec:
   replicas: {{ .Values.app.replicas }}
+  # Recreate terminates all old pods before starting new ones.
+  # With a durable JetStream consumer (DeliverAllPolicy), a RollingUpdate
+  # would create an overlap window where both the old (core-NATS) and new
+  # (JetStream) pods are running simultaneously, causing the same domain
+  # events to be processed twice. Recreate eliminates that window.
+  #
+  # TODO: revert to RollingUpdate once the initial JetStream migration is
+  # complete and no pre-JetStream release will be rolled back through this
+  # chart. At that point all replicas will be JetStream consumers sharing
+  # the same durable consumer ACK floor, so a rolling restart is safe and
+  # avoids the availability gap that Recreate introduces on every upgrade.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: lfx-v2-indexer-service

@@ -92,6 +92,11 @@ func (m *MockMessagingRepository) ParsePrincipals(ctx context.Context, headers m
 	return principals, args.Error(1)
 }
 
+func (m *MockMessagingRepository) ConsumeWithJetStream(ctx context.Context, streamName string, filterSubjects []string, handler func(context.Context, []byte, string) error) error {
+	args := m.Called(ctx, streamName, filterSubjects, handler)
+	return args.Error(0)
+}
+
 type MockStorageRepository struct {
 	mock.Mock
 }

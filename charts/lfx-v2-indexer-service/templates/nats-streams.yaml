@@ -1,0 +1,50 @@
+# Copyright The Linux Foundation and each contributor to LFX.
+# SPDX-License-Identifier: MIT
+---
+{{- if .Values.nats.stream_index_events.creation }}
+apiVersion: jetstream.nats.io/v1beta2
+kind: Stream
+metadata:
+  name: index-events
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    # sync-wave: -1 ensures Argo CD provisions the Stream BEFORE the Deployment
+    # (wave 0). New pods call CreateOrUpdateConsumer at startup; if the stream
+    # does not yet exist that call fails and — with Recreate strategy — there is
+    # no old pod to fall back to, causing a permanent rollout deadlock.
+    # Applying the Stream first eliminates that window.
+    argocd.argoproj.io/sync-wave: "-1"
+    {{- if .Values.nats.stream_index_events.keep }}
+    # Helm: do not delete this resource on `helm uninstall` or rollback.
+    "helm.sh/resource-policy": keep
+    # Argo CD: do not prune this resource when the manifest is absent from the
+    # target revision (e.g. during a rollback). Without this, Argo CD can delete
+    # the stream — and its persisted message backlog — even when Helm would keep it.
+    "argocd.argoproj.io/sync-options": "Prune=false"
+    {{- end }}
+  labels:
+    app.kubernetes.io/name: {{ .Chart.Name }}
+spec:
+  # Stream name must match constants.StreamNameIndexEvents in the application.
+  # Do not make this configurable — a mismatch causes the consumer to fail at startup.
+  name: index-events
+  subjects:
+    # Mirror the application subject settings so a single values override
+    # keeps the stream and the consumer filter in sync.
+    - {{ .Values.nats.indexingSubject }}
+    - {{ .Values.nats.v1IndexingSubject }}
+  retention: {{ .Values.nats.stream_index_events.retention }}
+  maxAge: {{ .Values.nats.stream_index_events.maxAge }}
+  maxBytes: {{ .Values.nats.stream_index_events.maxBytes }}
+  maxMsgs: {{ .Values.nats.stream_index_events.maxMsgs }}
+  storage: {{ .Values.nats.stream_index_events.storage }}
+  replicas: {{ .Values.nats.stream_index_events.replicas }}
+  compression: {{ .Values.nats.stream_index_events.compression }}
+  # Rollback trade-off: when rolling back to a pre-JetStream release the durable
+  # consumer remains on the NATS server and accumulates messages while old pods
+  # process live traffic through core NATS. On the next re-upgrade the consumer
+  # resumes from its ACK floor, which may cause a burst of reprocessing for the
+  # rollback interval. This is acceptable because the indexer is idempotent
+  # (upsert semantics in OpenSearch). The stream is preserved across rollbacks
+  # (helm.sh/resource-policy: keep) to avoid losing the persisted backlog.
+{{- end }}
