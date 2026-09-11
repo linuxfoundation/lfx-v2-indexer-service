@@ -6,7 +6,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: lfx-v2-indexer-service
-  namespace: lfx
+  namespace: {{ .Release.Namespace }}
   labels:
     app.kubernetes.io/name: {{ .Chart.Name }}
   {{- with .Values.annotations }}
@@ -72,6 +72,8 @@ spec:
               value: {{ .Values.opensearch.url }}
             - name: OPENSEARCH_INDEX
               value: {{ .Values.opensearch.index }}
+            - name: OPENSEARCH_TIMEOUT
+              value: {{ .Values.opensearch.timeout }}
             - name: JWKS_URL
               value: {{ .Values.heimdall.jwksUrl }}
             - name: JWT_ISSUER

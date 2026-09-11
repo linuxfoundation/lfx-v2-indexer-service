@@ -175,7 +175,7 @@ func (s *IndexerService) CreateTransactionFromMessage(messageData map[string]any
 		}
 	}
 
-	logger.Info("Transaction created successfully",
+	logger.Debug("Transaction created successfully",
 		"transaction_id", s.generateTransactionID(transaction),
 		"action", action,
 		"object_type", objectType,
@@ -532,7 +532,7 @@ func (s *IndexerService) EnrichTransaction(ctx context.Context, transaction *con
 	logger := logging.FromContext(ctx, s.logger)
 	transactionID := s.generateTransactionID(transaction)
 
-	logger.Info("Starting transaction enrichment",
+	logger.Debug("Starting transaction enrichment",
 		"transaction_id", transactionID,
 		"action", transaction.Action,
 		"object_type", transaction.ObjectType,
@@ -540,44 +540,29 @@ func (s *IndexerService) EnrichTransaction(ctx context.Context, transaction *con
 
 	// Validate transaction action
 	if err := s.ValidateTransactionAction(transaction); err != nil {
-		logging.LogError(logger, "Transaction enrichment failed: action validation", err,
-			"transaction_id", transactionID,
-			"step", "validate_action")
 		return fmt.Errorf("%s: %w", constants.ErrInvalidAction, err)
 	}
 	logger.Debug("Action validation completed", "transaction_id", transactionID)
 
 	if err := s.ValidateObjectType(transaction); err != nil {
-		logging.LogError(logger, "Transaction enrichment failed: object type validation", err,
-			"transaction_id", transactionID,
-			"step", "validate_object_type")
 		return err
 	}
 	logger.Debug("Object type validation completed", "transaction_id", transactionID)
 
 	// Validate transaction data
 	if err := s.ValidateTransactionData(transaction); err != nil {
-		logging.LogError(logger, "Transaction enrichment failed: data validation", err,
-			"transaction_id", transactionID,
-			"step", "validate_data")
 		return fmt.Errorf("invalid transaction data: %w", err)
 	}
 	logger.Debug("Data validation completed", "transaction_id", transactionID)
 
 	// Validate transaction headers
 	if err := s.ValidateTransactionHeaders(transaction); err != nil {
-		logging.LogError(logger, "Transaction enrichment failed: header validation", err,
-			"transaction_id", transactionID,
-			"step", "validate_headers")
 		return fmt.Errorf("invalid transaction headers: %w", err)
 	}
 	logger.Debug("Header validation completed", "transaction_id", transactionID)
 
 	// Parse data based on action
 	if err := s.parseTransactionData(transaction); err != nil {
-		logging.LogError(logger, "Transaction enrichment failed: data parsing", err,
-			"transaction_id", transactionID,
-			"step", "parse_data")
 		return fmt.Errorf("%s: %w", constants.ErrParseTransaction, err)
 	}
 	logger.Debug("Data parsing completed", "transaction_id", transactionID)
@@ -586,20 +571,13 @@ func (s *IndexerService) EnrichTransaction(ctx context.Context, transaction *con
 	canonicalAction := s.GetCanonicalAction(transaction)
 	if canonicalAction == constants.ActionCreated || canonicalAction == constants.ActionUpdated {
 		if transaction.IndexingConfig == nil {
-			err := fmt.Errorf("indexing_config is required for object_type %q", transaction.ObjectType)
-			logging.LogError(logger, "Enrichment failed: missing indexing_config", err,
-				"transaction_id", transactionID,
-				"object_type", transaction.ObjectType)
-			return err
+			return fmt.Errorf("indexing_config is required for object_type %q", transaction.ObjectType)
 		}
 	}
 
 	// Parse principals based on transaction version
 	principals, err := s.parsePrincipals(ctx, transaction)
 	if err != nil {
-		logging.LogError(logger, "Transaction enrichment failed: principal parsing", err,
-			"transaction_id", transactionID,
-			"step", "parse_principals")
 		return fmt.Errorf("failed to parse principals: %w", err)
 	}
 	transaction.ParsedPrincipals = principals
@@ -607,7 +585,7 @@ func (s *IndexerService) EnrichTransaction(ctx context.Context, transaction *con
 		"transaction_id", transactionID,
 		"principal_count", len(principals))
 
-	logger.Info("Transaction enrichment completed successfully",
+	logger.Debug("Transaction enrichment completed successfully",
 		"transaction_id", transactionID,
 		"principal_count", len(principals))
 
@@ -741,7 +719,7 @@ func (s *IndexerService) ProcessTransaction(ctx context.Context, transaction *co
 		MessageID:   s.generateMessageID(transaction),
 	}
 
-	logger.Info("Processing transaction",
+	logger.Debug("Processing transaction",
 		"transaction_id", transactionID,
 		"action", transaction.Action,
 		"object_type", transaction.ObjectType,
@@ -750,9 +728,6 @@ func (s *IndexerService) ProcessTransaction(ctx context.Context, transaction *co
 
 	// Enrich the transaction
 	if err := s.EnrichTransaction(ctx, transaction); err != nil {
-		logging.LogError(logger, "Failed to enrich transaction", err,
-			"transaction_id", transactionID,
-			"step", "enrichment")
 		result.Error = err
 		result.Success = false
 		return result, err
@@ -762,9 +737,6 @@ func (s *IndexerService) ProcessTransaction(ctx context.Context, transaction *co
 	// Generate transaction body
 	body, err := s.GenerateTransactionBody(ctx, transaction)
 	if err != nil {
-		logging.LogError(logger, "Failed to generate transaction body", err,
-			"transaction_id", transactionID,
-			"step", "body_generation")
 		result.Error = err
 		result.Success = false
 		return result, err
@@ -778,9 +750,6 @@ func (s *IndexerService) ProcessTransaction(ctx context.Context, transaction *co
 	bodyBytes, err := json.Marshal(body)
 	if err != nil {
 		err = fmt.Errorf("failed to marshal body: %w", err)
-		logging.LogError(logger, "Failed to marshal transaction body", err,
-			"transaction_id", transactionID,
-			"step", "json_marshaling")
 		result.Error = err
 		result.Success = false
 		return result, err
@@ -792,11 +761,6 @@ func (s *IndexerService) ProcessTransaction(ctx context.Context, transaction *co
 	// Index the transaction using storage repository
 	err = s.storageRepo.Index(ctx, index, body.ObjectRef, bytes.NewReader(bodyBytes))
 	if err != nil {
-		logging.LogError(logger, "Failed to index transaction", err,
-			"transaction_id", transactionID,
-			"step", "indexing",
-			"index", index,
-			"object_ref", body.ObjectRef)
 		result.Error = err
 		result.Success = false
 		result.IndexSuccess = false
@@ -811,7 +775,7 @@ func (s *IndexerService) ProcessTransaction(ctx context.Context, transaction *co
 	result.IndexSuccess = true
 	result.DocumentID = body.ObjectRef
 
-	logger.Info("Transaction processing completed successfully",
+	logger.Debug("Transaction processing completed successfully",
 		"transaction_id", transactionID,
 		"object_ref", body.ObjectRef)
 
@@ -857,7 +821,7 @@ func (s *IndexerService) publishIndexingEvent(ctx context.Context, body *contrac
 		return
 	}
 
-	logger.Info("Indexing event published",
+	logger.Debug("Indexing event published",
 		"subject", subject,
 		"document_id", body.ObjectRef,
 		"action", canonicalAction,
@@ -892,7 +856,7 @@ func (s *IndexerService) CheckReadiness(ctx context.Context) *HealthStatus {
 	s.lastReadiness = &cachedResult{status: status, timestamp: time.Now()}
 	s.mu.Unlock()
 
-	logger.Info("Health readiness check completed",
+	logger.Debug("Health readiness check completed",
 		"status", status.Status,
 		"error_count", status.ErrorCount,
 		"duration", status.Duration)
@@ -1093,8 +1057,6 @@ func (s *IndexerService) parsePrincipals(ctx context.Context, transaction *contr
 
 	principals, err := s.parseV2Principals(ctx, transaction, transactionID)
 	if err != nil {
-		logging.LogError(logger, "Failed to parse V2 principals", err,
-			"transaction_id", transactionID)
 		return nil, err
 	}
 
@@ -1147,8 +1109,6 @@ func (s *IndexerService) parseV2Principals(ctx context.Context, transaction *con
 	// Parse principals using messaging repository
 	principals, err := s.messagingRepo.ParsePrincipals(ctx, transaction.Headers)
 	if err != nil {
-		logging.LogError(logger, "Failed to parse V2 principals via messaging repository", err,
-			"transaction_id", transactionID)
 		return nil, err
 	}
 
