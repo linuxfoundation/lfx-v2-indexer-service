@@ -6,7 +6,6 @@ package logging
 
 import (
 	"bytes"
-	"context"
 	"log/slog"
 	"testing"
 )
@@ -18,12 +17,6 @@ func TestLogger(_ *testing.T) (*slog.Logger, *bytes.Buffer) {
 		Level: slog.LevelDebug,
 	}))
 	return logger, &buf
-}
-
-// TestContext creates a context with request_id for testing
-func TestContext(_ *testing.T, logger *slog.Logger) context.Context {
-	ctx, _ := WithRequestID(context.Background(), logger)
-	return ctx
 }
 
 // AssertLogContains checks if log output contains expected text
