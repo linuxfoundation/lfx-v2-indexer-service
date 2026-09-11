@@ -58,7 +58,7 @@ type Container struct {
 
 	// Handlers (consolidated)
 	HealthHandler          *handlers.HealthHandler
-	IndexingMessageHandler *handlers.IndexingMessageHandler // Unified handler for both V2 and V1
+	IndexingMessageHandler *handlers.IndexingMessageHandler // routes JetStream messages to MessageProcessor
 }
 
 // NewContainer creates a new dependency injection container with CLI overrides
@@ -327,7 +327,9 @@ func (c *Container) initializeHandlers() error {
 	simpleResponse := !c.Config.Health.EnableDetailedResponse
 	c.HealthHandler = handlers.NewHealthHandler(c.IndexerService, simpleResponse)
 
-	// Initialize unified message handler (handles both V2 and V1)
+	// Initialize the indexing message handler. Subject routing (V2 vs V1)
+	// lives in the presentation layer; the container wires it as the callback
+	// for the JetStream consumer rather than duplicating the routing inline.
 	c.IndexingMessageHandler = handlers.NewIndexingMessageHandler(c.MessageProcessor)
 
 	return nil
@@ -413,20 +415,24 @@ func (c *Container) SetupNATSSubscriptions(ctx context.Context) error {
 		return fmt.Errorf("failed to subscribe - messaging repository is not initialized")
 	}
 
+	if c.MessageProcessor == nil {
+		return fmt.Errorf("message processor is not initialized")
+	}
+
 	if c.IndexingMessageHandler == nil {
 		return fmt.Errorf("indexing message handler is not initialized")
 	}
 
-	// Subscribe to indexing messages with queue group for load balancing and reply support
-	indexingSubject := c.Config.NATS.IndexingSubject
-	if err := c.MessagingRepository.QueueSubscribeWithReply(ctx, indexingSubject, c.Config.NATS.Queue, c.IndexingMessageHandler); err != nil {
-		return fmt.Errorf("failed to subscribe to %s: %w", indexingSubject, err)
-	}
-
-	// Subscribe to v1 indexing messages with the same unified handler and reply support
-	v1IndexingSubject := c.Config.NATS.V1IndexingSubject
-	if err := c.MessagingRepository.QueueSubscribeWithReply(ctx, v1IndexingSubject, c.Config.NATS.Queue, c.IndexingMessageHandler); err != nil {
-		return fmt.Errorf("failed to subscribe to %s: %w", v1IndexingSubject, err)
+	// Delegate subject routing to the presentation-layer handler so the logic
+	// lives in one place (IndexingMessageHandler.Handle) rather than being
+	// duplicated inline here.
+	if err := c.MessagingRepository.ConsumeWithJetStream(
+		ctx,
+		constants.StreamNameIndexEvents,
+		[]string{c.Config.NATS.IndexingSubject, c.Config.NATS.V1IndexingSubject},
+		c.IndexingMessageHandler.Handle,
+	); err != nil {
+		return fmt.Errorf("failed to start JetStream index consumer: %w", err)
 	}
 
 	return nil

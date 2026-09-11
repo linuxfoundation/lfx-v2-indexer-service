@@ -6,12 +6,17 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"math"
+	"math/rand"
+	"os"
 	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -28,8 +33,10 @@ type MessagingRepository struct {
 	authRepo          contracts.AuthRepository
 	logger            *slog.Logger
 	subscriptions     []*nats.Subscription
+	consumeContexts   []jetstream.ConsumeContext
 	mu                sync.RWMutex
-	wg                sync.WaitGroup
+	wg                sync.WaitGroup // tracks all in-flight handler goroutines (core NATS + JetStream)
+	jsWg              sync.WaitGroup // tracks JetStream-only goroutines; waited before conn.Drain()
 	drainTimeout      time.Duration
 	isShuttingDown    bool
 	pendingMsgLimit   int
@@ -380,27 +387,87 @@ func (r *MessagingRepository) waitForHandlers(timeout time.Duration) bool {
 	}
 }
 
+// waitForJetStreamWorkers waits for all goroutines tracked by r.jsWg to finish,
+// bounded by timeout. Returns true if it timed out.
+func (r *MessagingRepository) waitForJetStreamWorkers(timeout time.Duration) bool {
+	if timeout <= 0 {
+		r.logger.Warn("No time remaining to wait for in-flight JetStream workers")
+		return true
+	}
+	done := make(chan struct{})
+	go func() {
+		r.jsWg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return false
+	case <-time.After(timeout):
+		r.logger.Warn("Timed out waiting for in-flight JetStream workers", "timeout", timeout)
+		return true
+	}
+}
+
 // DrainWithTimeout performs graceful NATS connection drain with timeout
 func (r *MessagingRepository) DrainWithTimeout() error {
 	r.mu.Lock()
 	r.isShuttingDown = true
 	totalSubscriptions := len(r.subscriptions)
+	consumeContexts := r.consumeContexts
+	r.consumeContexts = nil
 	r.mu.Unlock()
+
+	// Record the deadline before stopping consumers so the entire
+	// shutdown sequence — consumer stop plus connection drain — is
+	// bounded by drainTimeout.
+	deadline := time.Now().Add(r.drainTimeout)
+
+	// Phase 1: Stop JetStream consumers and wait for each one to fully close.
+	//
+	// In nats.go v1.43, Stop() only signals the internal goroutine to halt by
+	// closing sub.done; it returns immediately while the goroutine may still be
+	// inside our callback (which spawns a jsWg goroutine before returning).
+	// Calling waitForJetStreamWorkers before the internal goroutine has exited
+	// creates a race: jsWg.Wait() can observe zero before jsWg.Add(1) fires.
+	//
+	// The fix: after Stop(), wait for cc.Closed() which is closed only after
+	// the internal goroutine has fully exited and will never call our callback
+	// again. Only then is it safe to wait on jsWg.
+	for _, cc := range consumeContexts {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			r.logger.Warn("Drain budget exhausted before all JetStream consumers stopped")
+			break
+		}
+		cc.Stop()
+		select {
+		case <-cc.Closed():
+		case <-time.After(remaining):
+			r.logger.Warn("Timed out waiting for JetStream consumer to close",
+				"remaining", remaining)
+		}
+	}
+
+	// Phase 2: Wait for all in-flight JetStream goroutines to finish BEFORE
+	// draining the NATS connection. These goroutines publish domain events via
+	// conn; if conn.Drain() closes the connection first, those publishes fail.
+	// jsWg is separate from wg so we don't accidentally wait for core-NATS
+	// callbacks that are still active on the open connection.
+	// It is safe to call jsWg.Wait() here because all consumers are fully closed
+	// (cc.Closed() returned above) so no new jsWg.Add(1) calls can fire.
+	jsWorkersTimedOut := r.waitForJetStreamWorkers(time.Until(deadline))
 
 	r.logger.Info("Starting NATS graceful drain sequence", "timeout", r.drainTimeout, "subscriptions", totalSubscriptions)
 
-	// Record the deadline so we can compute remaining time for wg.Wait().
-	deadline := time.Now().Add(r.drainTimeout)
-
 	if r.conn == nil {
 		r.logger.Warn("NATS connection is nil, skipping drain")
-		r.waitForHandlers(r.drainTimeout)
+		r.waitForHandlers(time.Until(deadline))
 		return nil
 	}
 
 	if r.conn.IsClosed() {
 		r.logger.Info("NATS connection already closed, no drain needed")
-		r.waitForHandlers(r.drainTimeout)
+		r.waitForHandlers(time.Until(deadline))
 		return nil
 	}
 
@@ -418,7 +485,7 @@ func (r *MessagingRepository) DrainWithTimeout() error {
 		}()
 		select {
 		case <-drainDone:
-		case <-time.After(r.drainTimeout):
+		case <-time.After(time.Until(deadline)):
 			r.logger.Warn("Timed out waiting for ongoing NATS drain", "timeout", r.drainTimeout)
 			return fmt.Errorf("timed out waiting for ongoing NATS drain after %s", r.drainTimeout)
 		}
@@ -426,7 +493,7 @@ func (r *MessagingRepository) DrainWithTimeout() error {
 		return nil
 	}
 
-	// Start drain process
+	// Phase 3: Drain core NATS subscriptions.
 	r.logger.Debug("Initiating NATS connection drain")
 
 	if err := r.conn.Drain(); err != nil {
@@ -434,10 +501,10 @@ func (r *MessagingRepository) DrainWithTimeout() error {
 		return fmt.Errorf("failed to drain NATS connection: %w", err)
 	}
 
-	// Wait for drain to complete
+	// Wait for drain to complete, bounded by the remaining deadline.
 	drainTimedOut := false
 	select {
-	case <-time.After(r.drainTimeout):
+	case <-time.After(time.Until(deadline)):
 		drainTimedOut = true
 		r.logger.Warn("NATS drain timeout reached", "timeout", r.drainTimeout)
 	case <-func() <-chan struct{} {
@@ -453,16 +520,28 @@ func (r *MessagingRepository) DrainWithTimeout() error {
 		// Drain completed before timeout
 	}
 
-	// Wait for all in-flight handler goroutines to finish, bounded by the
-	// remaining drain budget. Conn.Drain() only waits for callbacks to return,
-	// not for goroutines spawned inside them, so we track them with a WaitGroup.
+	// Phase 4: Wait for core-NATS handler goroutines, bounded by remaining budget.
+	// conn.Drain() only waits for subscriber callbacks to return, not for
+	// goroutines they spawn; r.wg covers those spawned goroutines.
 	handlersTimedOut := r.waitForHandlers(time.Until(deadline))
 
-	if drainTimedOut || handlersTimedOut {
-		r.logger.Warn("NATS drain did not complete cleanly", "drain_timed_out", drainTimedOut, "handlers_timed_out", handlersTimedOut, "subscriptions_processed", totalSubscriptions)
+	if jsWorkersTimedOut || drainTimedOut || handlersTimedOut {
+		r.logger.Warn("NATS drain did not complete cleanly",
+			"js_workers_timed_out", jsWorkersTimedOut,
+			"drain_timed_out", drainTimedOut,
+			"handlers_timed_out", handlersTimedOut,
+			"subscriptions_processed", totalSubscriptions)
 		switch {
+		case jsWorkersTimedOut && drainTimedOut && handlersTimedOut:
+			return fmt.Errorf("JetStream worker wait, NATS drain, and handler wait all timed out after %s", r.drainTimeout)
+		case jsWorkersTimedOut && drainTimedOut:
+			return fmt.Errorf("JetStream worker wait and NATS drain both timed out after %s", r.drainTimeout)
+		case jsWorkersTimedOut && handlersTimedOut:
+			return fmt.Errorf("JetStream worker wait and handler wait both timed out after %s", r.drainTimeout)
 		case drainTimedOut && handlersTimedOut:
 			return fmt.Errorf("NATS drain and in-flight handler wait both timed out after %s", r.drainTimeout)
+		case jsWorkersTimedOut:
+			return fmt.Errorf("timed out waiting for in-flight JetStream workers to finish after %s", r.drainTimeout)
 		case drainTimedOut:
 			return fmt.Errorf("NATS drain timed out after %s", r.drainTimeout)
 		default: // handlersTimedOut only
@@ -733,4 +812,213 @@ func (r *MessagingRepository) GetConnectionStatus() map[string]interface{} {
 	}
 
 	return status
+}
+
+// =================
+// JETSTREAM OPERATIONS
+// =================
+
+// ConsumeWithJetStream creates a durable JetStream consumer on streamName,
+// filtering on filterSubjects, and delivers messages to handler. On handler
+// error the message is NAKed with exponential-backoff jitter; on success it
+// is ACKed. The consumer is stopped automatically when DrainWithTimeout is
+// called.
+func (r *MessagingRepository) ConsumeWithJetStream(
+	ctx context.Context,
+	streamName string,
+	filterSubjects []string,
+	handler func(context.Context, []byte, string) error,
+) error {
+	js, err := jetstream.New(r.conn)
+	if err != nil {
+		r.logger.ErrorContext(ctx, "Failed to create JetStream client for consumer",
+			"error", err,
+			"stream", streamName,
+			"consumer", constants.ConsumerNameIndexer)
+		return fmt.Errorf("failed to create JetStream client: %w", err)
+	}
+
+	cfg := jetstream.ConsumerConfig{
+		Name:           constants.ConsumerNameIndexer,
+		Durable:        constants.ConsumerNameIndexer,
+		FilterSubjects: filterSubjects,
+		AckPolicy:      jetstream.AckExplicitPolicy,
+		// MaxDeliver: -1 means unlimited redeliveries. The stream's maxAge (24 h)
+		// is the effective "give up" deadline: once a message ages out of the
+		// stream it will not be redelivered, regardless of delivery count.
+		// This prevents the consumer from exhausting its delivery budget during
+		// an extended downstream outage (e.g. OpenSearch down for hours).
+		MaxDeliver:    -1,
+		AckWait:       30 * time.Second,
+		MaxAckPending: 100,
+		// DeliverAllPolicy (the default) is intentionally used here rather than
+		// DeliverNewPolicy. DeliverNewPolicy would skip any messages that landed
+		// in the stream between stream-CRD creation and pod startup — a real loss
+		// window since Argo CD applies the CRD before the Deployment rolls out.
+		// With DeliverAllPolicy:
+		//   - First creation (new deployment): stream is brand-new so there is
+		//     nothing to replay; all messages are effectively "new".
+		//   - Pod restart: NATS server restores the durable consumer's ACK floor
+		//     automatically; messages are not replayed from the beginning.
+	}
+
+	consumer, err := js.CreateOrUpdateConsumer(ctx, streamName, cfg)
+	if err != nil {
+		r.logger.ErrorContext(ctx, "Failed to create JetStream durable consumer",
+			"error", err,
+			"stream", streamName,
+			"consumer", cfg.Name)
+		return fmt.Errorf("failed to create JetStream consumer on stream %s: %w", streamName, err)
+	}
+
+	// consumeErrHandler is called by the nats.go library when a consumer-level
+	// error occurs. Not all errors are terminal: nats.go sends transient errors
+	// such as ErrNoHeartbeat and ErrConsumerLeadershipChanged to this handler
+	// but auto-recovers from them internally. Exiting on those would cause all
+	// replicas to restart simultaneously during a brief NATS interruption.
+	//
+	// Terminal errors (ErrConsumerDeleted, ErrBadRequest) stop the consume loop
+	// permanently — no further messages will ever be delivered. The only
+	// recovery is a pod restart to recreate/reattach the consumer.
+	consumeErrHandler := func(_ jetstream.ConsumeContext, err error) {
+		isTerminal := errors.Is(err, jetstream.ErrConsumerDeleted) ||
+			errors.Is(err, jetstream.ErrBadRequest)
+
+		if isTerminal {
+			r.logger.Error("JetStream consumer encountered a terminal error — exiting for pod restart",
+				"error", err,
+				"stream", streamName,
+				"consumer", cfg.Name)
+			os.Exit(1)
+		}
+
+		// Transient errors: log at Warn and let nats.go auto-recover.
+		r.logger.Warn("JetStream consumer transient error (auto-recovering)",
+			"error", err,
+			"stream", streamName,
+			"consumer", cfg.Name)
+	}
+
+	consumeCtx, err := consumer.Consume(func(msg jetstream.Msg) {
+		// Extract trace context and snapshot message fields while still
+		// in the consumer callback goroutine (msg is only valid here).
+		msgCtx := otel.GetTextMapPropagator().Extract(ctx, natsHeaderCarrier(msg.Headers()))
+		data := append([]byte(nil), msg.Data()...)
+		subject := msg.Subject()
+
+		// Acquire a worker slot; this blocks the consumer callback goroutine
+		// until a slot is free, which provides back-pressure alongside
+		// MaxAckPending and keeps OpenSearch write concurrency bounded.
+		// Track in r.wg (all handlers) AND r.jsWg (JetStream-only) so
+		// DrainWithTimeout can wait for JetStream workers before draining the
+		// connection (preventing domain-event publishes on a closed connection).
+		r.wg.Add(1)
+		r.jsWg.Add(1)
+		r.sem <- struct{}{}
+		go func() {
+			defer func() {
+				<-r.sem
+				r.jsWg.Done()
+				r.wg.Done()
+			}()
+
+			spanCtx, span := tracer.Start(msgCtx, "jetstream.process",
+				trace.WithSpanKind(trace.SpanKindConsumer),
+				trace.WithAttributes(
+					attribute.String("messaging.system", "nats"),
+					attribute.String("messaging.destination.name", subject),
+					attribute.String("messaging.operation.type", "process"),
+					attribute.Int("messaging.message.body.size", len(data)),
+				),
+			)
+			defer span.End()
+
+			if err := handler(spanCtx, data, subject); err != nil {
+				span.RecordError(err)
+				span.SetStatus(codes.Error, err.Error())
+				r.logger.ErrorContext(spanCtx, "JetStream message handler failed — NAKing with backoff",
+					"error", err,
+					"subject", subject,
+					"consumer", cfg.Name)
+				if nakErr := msg.NakWithDelay(nakDelay(msg)); nakErr != nil {
+					r.logger.ErrorContext(spanCtx, "Failed to NAK JetStream message",
+						"error", nakErr,
+						"subject", subject)
+				}
+				return
+			}
+			span.SetStatus(codes.Ok, "")
+			if ackErr := msg.Ack(); ackErr != nil {
+				r.logger.ErrorContext(spanCtx, "Failed to ACK JetStream message",
+					"error", ackErr,
+					"subject", subject)
+			}
+		}()
+	}, jetstream.ConsumeErrHandler(consumeErrHandler))
+	if err != nil {
+		r.logger.ErrorContext(ctx, "Failed to start JetStream consume loop",
+			"error", err,
+			"stream", streamName,
+			"consumer", cfg.Name)
+		return fmt.Errorf("failed to start JetStream consume loop: %w", err)
+	}
+
+	r.logger.InfoContext(ctx, "JetStream durable consumer started",
+		"stream", streamName,
+		"consumer", cfg.Name,
+		"filter_subjects", filterSubjects)
+
+	// Guard against a race where DrainWithTimeout has already copied and
+	// cleared consumeContexts before we append: if shutdown has started,
+	// stop the consumer immediately so it is not leaked.
+	r.mu.Lock()
+	if r.isShuttingDown {
+		r.mu.Unlock()
+		consumeCtx.Stop()
+		return fmt.Errorf("cannot start JetStream consumer on %s: messaging repository is shutting down", streamName)
+	}
+	r.consumeContexts = append(r.consumeContexts, consumeCtx)
+	r.mu.Unlock()
+
+	return nil
+}
+
+// nakMaxBackoff is the upper bound on the NAK retry delay. Without a cap,
+// the exponential formula would grow without bound (e.g. 2^17 s ≈ 36 h),
+// causing messages to wait longer than the stream's maxAge (24 h) and be
+// dropped before their next delivery attempt.
+const nakMaxBackoff = 5 * time.Minute
+
+// nakMaxExp is the maximum exponent used in the backoff formula. At exponent 9,
+// 2^9 s = 512 s > nakMaxBackoff (300 s), so the cap always fires for attempts
+// beyond 10. Capping here prevents the multiplication
+//
+//	time.Second * time.Duration(math.Pow(2, exp))
+//
+// from overflowing int64 at delivery 35+ (where 2^34 * 1e9 ≈ 1.72e19 > int64
+// max ≈ 9.22e18), which would produce a negative duration and panic rand.Int63n.
+const nakMaxExp = 9
+
+// nakDelay returns an exponential backoff duration with full jitter based on
+// the message delivery attempt count, capped at nakMaxBackoff. Full jitter
+// (random in [0, cap]) prevents correlated retries across service replicas.
+//
+// Attempt 1 → rand(0, 1s)
+// Attempt 2 → rand(0, 2s)
+// ...
+// Attempt ≥10 → rand(0, 5min)  (capped)
+func nakDelay(msg jetstream.Msg) time.Duration {
+	meta, err := msg.Metadata()
+	if err != nil || meta == nil {
+		return time.Second
+	}
+	exp := float64(meta.NumDelivered - 1)
+	if exp > nakMaxExp {
+		exp = nakMaxExp
+	}
+	maxDelay := time.Second * time.Duration(math.Pow(2, exp))
+	if maxDelay > nakMaxBackoff {
+		maxDelay = nakMaxBackoff
+	}
+	return time.Duration(rand.Int63n(int64(maxDelay) + 1))
 }
