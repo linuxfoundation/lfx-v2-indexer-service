@@ -75,14 +75,14 @@ func TestTraceContextInjection(t *testing.T) {
 	// Setup OTel with test exporter to capture spans
 	exporter := tracetest.NewInMemoryExporter()
 	tp := trace.NewTracerProvider(trace.WithBatcher(exporter))
-	defer tp.Shutdown(context.Background())
+	defer func() { _ = tp.Shutdown(context.Background()) }()
 	otel.SetTracerProvider(tp)
 
 	logger := logging.NewLogger(true)
 	repo := NewMessagingRepository(conn, nil, logger, 5*time.Second,
 		constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit,
 		constants.DefaultWorkerCount)
-	defer repo.Close()
+	defer func() { _ = repo.Close() }()
 
 	ctx := context.Background()
 
@@ -95,7 +95,7 @@ func TestTraceContextInjection(t *testing.T) {
 		require.NoError(t, err)
 
 		// Flush the batch processor to ensure spans are exported
-		tp.ForceFlush(context.Background())
+		_ = tp.ForceFlush(context.Background())
 
 		// Verify that a span was created
 		spans := exporter.GetSpans()
@@ -129,14 +129,14 @@ func TestTraceContextExtraction(t *testing.T) {
 	// Setup OTel with test exporter
 	exporter := tracetest.NewInMemoryExporter()
 	tp := trace.NewTracerProvider(trace.WithBatcher(exporter))
-	defer tp.Shutdown(context.Background())
+	defer func() { _ = tp.Shutdown(context.Background()) }()
 	otel.SetTracerProvider(tp)
 
 	logger := logging.NewLogger(true)
 	repo := NewMessagingRepository(conn, nil, logger, 5*time.Second,
 		constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit,
 		constants.DefaultWorkerCount)
-	defer repo.Close()
+	defer func() { _ = repo.Close() }()
 
 	ctx := context.Background()
 
@@ -168,7 +168,7 @@ func TestTraceContextExtraction(t *testing.T) {
 			time.Sleep(100 * time.Millisecond) // Allow spans to be exported
 
 			// Flush the batch processor to ensure spans are exported before asserting.
-			tp.ForceFlush(context.Background())
+			_ = tp.ForceFlush(context.Background())
 
 			// Check that both publish and process spans exist
 			spans := exporter.GetSpans()
@@ -205,7 +205,7 @@ func TestTraceContextPreservation(t *testing.T) {
 	repo := NewMessagingRepository(conn, nil, logger, 5*time.Second,
 		constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit,
 		constants.DefaultWorkerCount)
-	defer repo.Close()
+	defer func() { _ = repo.Close() }()
 
 	t.Run("subscribe_preserves_context_deadline", func(t *testing.T) {
 		subject := "test.context.deadline"
@@ -270,14 +270,14 @@ func TestReplyPublishTraceContext(t *testing.T) {
 	// Setup OTel with test exporter
 	exporter := tracetest.NewInMemoryExporter()
 	tp := trace.NewTracerProvider(trace.WithBatcher(exporter))
-	defer tp.Shutdown(context.Background())
+	defer func() { _ = tp.Shutdown(context.Background()) }()
 	otel.SetTracerProvider(tp)
 
 	logger := logging.NewLogger(true)
 	repo := NewMessagingRepository(conn, nil, logger, 5*time.Second,
 		constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit,
 		constants.DefaultWorkerCount)
-	defer repo.Close()
+	defer func() { _ = repo.Close() }()
 
 	ctx := context.Background()
 
@@ -332,7 +332,7 @@ func TestReplyPublishTraceContext(t *testing.T) {
 			time.Sleep(100 * time.Millisecond) // Allow spans to be exported
 
 			// Flush the batch processor to ensure spans are exported
-			tp.ForceFlush(context.Background())
+			_ = tp.ForceFlush(context.Background())
 
 			// Verify that reply.publish span was created
 			spans := exporter.GetSpans()
@@ -380,7 +380,7 @@ func TestHeaderCarrierCompatibility(t *testing.T) {
 		// Setup OTel with test provider to ensure propagator is initialized
 		exporter := tracetest.NewInMemoryExporter()
 		tp := trace.NewTracerProvider(trace.WithBatcher(exporter))
-		defer tp.Shutdown(context.Background())
+		defer func() { _ = tp.Shutdown(context.Background()) }()
 		otel.SetTracerProvider(tp)
 
 		propagator := otel.GetTextMapPropagator()

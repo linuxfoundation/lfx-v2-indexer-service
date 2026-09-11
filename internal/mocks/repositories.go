@@ -109,11 +109,6 @@ func NewMockStorageRepository() *MockStorageRepository {
 	}
 }
 
-// NewMockTransactionRepository creates a new mock storage repository (backward compatibility)
-func NewMockTransactionRepository() *MockStorageRepository {
-	return NewMockStorageRepository()
-}
-
 // Index mocks indexing a document
 func (m *MockStorageRepository) Index(_ context.Context, index string, docID string, body io.Reader) error {
 	m.mu.Lock()
@@ -450,11 +445,6 @@ func NewMockMessagingRepository() *MockMessagingRepository {
 		QueueSubCalls:      make([]QueueSubscribeCall, 0),
 		QueueReplySubCalls: make([]QueueSubscribeWithReplyCall, 0),
 	}
-}
-
-// NewMockMessageRepository creates a new mock messaging repository (backward compatibility)
-func NewMockMessageRepository() *MockMessagingRepository {
-	return NewMockMessagingRepository()
 }
 
 // Subscribe mocks subscribing to messages

@@ -394,15 +394,16 @@ func TestNewSampler_InvalidArg(t *testing.T) {
 
 			// If ratio is 1.0, all traces sampled; if 0.0, all dropped.
 			// For other ratios, verify the sampler description reflects the parsed value.
-			if tt.wantRatio == 1.0 {
+			switch tt.wantRatio {
+			case 1.0:
 				if result.Decision != trace.RecordAndSample {
 					t.Errorf("with ratio 1.0, expected RecordAndSample, got %v", result.Decision)
 				}
-			} else if tt.wantRatio == 0.0 {
+			case 0.0:
 				if result.Decision != trace.Drop {
 					t.Errorf("with ratio 0.0, expected Drop, got %v", result.Decision)
 				}
-			} else {
+			default:
 				// Verify the sampler parsed the ratio (not fallen back to 1.0).
 				// A ratio-based sampler with 0 < r < 1 will not always sample.
 				if s.Description() == "" {

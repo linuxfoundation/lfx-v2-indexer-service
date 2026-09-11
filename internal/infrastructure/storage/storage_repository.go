@@ -62,7 +62,7 @@ func (r *StorageRepository) Index(ctx context.Context, index string, docID strin
 		logger.Error("Failed to index document", "error", err.Error())
 		return fmt.Errorf("%s: %w", constants.ErrIndexDocument, err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 
 	if res.IsError() {
 		logger.Error("Index request failed", "status", res.Status())
@@ -94,7 +94,7 @@ func (r *StorageRepository) Search(ctx context.Context, index string, query map[
 		logger.Error("Search request failed", "error", err.Error())
 		return nil, fmt.Errorf("%s: %w", constants.ErrSearchFailed, err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 
 	if res.IsError() {
 		logger.Error("Search response error", "status", res.Status())
@@ -147,7 +147,7 @@ func (r *StorageRepository) SearchWithVersions(ctx context.Context, index string
 		logger.Error("Search request failed", "error", err.Error())
 		return nil, fmt.Errorf("%s: %w", constants.ErrSearchFailed, err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 
 	if res.IsError() {
 		logger.Error("Search response error", "status", res.Status())
@@ -204,7 +204,7 @@ func (r *StorageRepository) Update(ctx context.Context, index string, docID stri
 		logger.Error("Failed to update document", "error", err.Error())
 		return fmt.Errorf("%s: %w", constants.ErrUpdateDocument, err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 
 	if res.IsError() {
 		logger.Error("Update request failed", "status", res.Status())
@@ -238,7 +238,7 @@ func (r *StorageRepository) Delete(ctx context.Context, index string, docID stri
 		logger.Error("Failed to execute delete request", "error", err.Error())
 		return fmt.Errorf("%s: %w", constants.ErrDeleteDocument, err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 
 	if res.IsError() {
 		// 404 is not an error for delete operations
@@ -309,7 +309,7 @@ func (r *StorageRepository) BulkIndex(ctx context.Context, operations []contract
 		logger.Error("Failed to execute bulk request", "error", err.Error(), "body_size", buf.Len())
 		return fmt.Errorf("%s: %w", constants.ErrBulkOperation, err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 
 	if res.IsError() {
 		logger.Error("Bulk request failed", "status", res.Status(), "body_size", buf.Len())
@@ -399,7 +399,7 @@ func (r *StorageRepository) UpdateWithOptimisticLock(ctx context.Context, index,
 		logger.Error("Failed to execute update with lock request", "error", err.Error())
 		return fmt.Errorf("%s: %w", constants.ErrOptimisticUpdate, err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 
 	if res.IsError() {
 		// Check for version conflict (409)
@@ -434,7 +434,7 @@ func (r *StorageRepository) HealthCheck(ctx context.Context) error {
 		logger.Warn("OpenSearch health check failed", "error", err.Error())
 		return fmt.Errorf("%s: %w", constants.ErrHealthCheck, err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 
 	if res.IsError() {
 		logger.Warn("OpenSearch health check returned error status", "status", res.Status())
