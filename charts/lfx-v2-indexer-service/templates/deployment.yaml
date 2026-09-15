@@ -15,6 +15,17 @@ metadata:
   {{- end }}
 spec:
   replicas: {{ .Values.app.replicas }}
+  # maxSurge: 0 / maxUnavailable: 100% eliminates the overlap window between
+  # old core-NATS pods and new JetStream pods during the migration: all old
+  # pods terminate before any new pod starts, preventing the same message
+  # from being processed twice and emitting duplicate domain events.
+  # TODO: revert to the default rollingUpdate values (maxSurge: 25%,
+  # maxUnavailable: 25%) once the JetStream migration is complete and no
+  # pre-JetStream release will be rolled back through this chart.
+  strategy:
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: "100%"
   selector:
     matchLabels:
       app: lfx-v2-indexer-service
