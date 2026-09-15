@@ -131,8 +131,8 @@ yarn-error.log*
 megalinter-reports/
 
 # Agent and tooling runtime files (must not be committed)
-.claude/scheduled_tasks.lock
-.cursor/rules/
+.claude/
+.cursor/
 
 # Compiled service binary (built by `go build` or `make build-local`)
 lfx-indexer
