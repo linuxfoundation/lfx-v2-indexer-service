@@ -10,8 +10,8 @@ metadata:
   annotations:
     # sync-wave: -1 ensures Argo CD provisions the Stream BEFORE the Deployment
     # (wave 0). New pods call CreateOrUpdateConsumer at startup; if the stream
-    # does not yet exist that call fails and — with Recreate strategy — there is
-    # no old pod to fall back to, causing a permanent rollout deadlock.
+    # does not yet exist that call fails, the startup probe never passes, and the
+    # rolling rollout stalls until the stream is provisioned.
     # Applying the Stream first eliminates that window.
     argocd.argoproj.io/sync-wave: "-1"
     {{- if .Values.nats.stream_index_events.keep }}
