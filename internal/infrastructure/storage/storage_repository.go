@@ -65,7 +65,8 @@ func (r *StorageRepository) Index(ctx context.Context, index string, docID strin
 	defer func() { _ = res.Body.Close() }()
 
 	if res.IsError() {
-		logger.Error("Index request failed", "status", res.Status())
+		body, _ := io.ReadAll(res.Body)
+		logger.Error("Index request failed", "status", res.Status(), "response_body", string(body))
 		return fmt.Errorf("%s: %s", constants.ErrIndexDocument, res.Status())
 	}
 
