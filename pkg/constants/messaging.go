@@ -67,10 +67,17 @@ const (
 	RefreshFalse = "false"
 	// RefreshWaitFor blocks until the next refresh cycle completes before
 	// returning, making the document immediately searchable without forcing an
-	// extra segment flush. Used when the caller is waiting for an ACK (i.e.
-	// when a NATS reply subject is present).
+	// extra segment flush. Used by the reindex CLI path where the caller
+	// explicitly requests synchronous indexing. Not used in the JetStream
+	// consumer path — request/reply is not supported with JetStream consumers.
 	RefreshWaitFor = "wait_for"
 	ReplyTimeout   = 5 * time.Second
+)
+
+// JetStream resource names for the index events stream.
+const (
+	StreamNameIndexEvents = "index-events"
+	ConsumerNameIndexer   = "indexer-consumer"
 )
 
 // NATS pending buffer and concurrency defaults.

@@ -7,10 +7,12 @@ This is the **owner document** for the indexer event envelope, the OpenSearch do
 shape, and the rules the indexer enforces on incoming messages. Other services link
 here rather than copy.
 
-The indexer subscribes to `lfx.index.>` (V2) and `lfx.v1.index.>` (V1) NATS subjects
-on a queue group, writes documents into OpenSearch, and emits domain events on
-`lfx.{object_type}.{action}`. It is fully generic; resource services tell it
-everything it needs via the message payload.
+The indexer consumes the configured indexing subjects (defaults: `lfx.index.>` for
+V2 and `lfx.v1.index.>` for V1; overridable via `nats.indexingSubject` and
+`nats.v1IndexingSubject` Helm values) from a durable JetStream consumer
+(`index-events` stream), writes documents into
+OpenSearch, and emits domain events on `lfx.{object_type}.{action}`. It is fully
+generic; resource services tell it everything it needs via the message payload.
 
 ## Subject Conventions
 
@@ -92,25 +94,42 @@ type IndexingConfig struct {
 
 ### What the indexer rejects
 
+> **Note on retry behaviour:** Under the JetStream consumer every non-nil handler
+> error results in a NAK with exponential-backoff jitter. This includes the
+> validation conditions listed below. Messages are redelivered indefinitely
+> (`MaxDeliver: -1`); the effective give-up deadline is whichever stream limit is
+> reached first — the age limit (24 h) or the size limit (10 GiB). Once a message
+> is evicted by either limit it will not be redelivered. There is currently no
+> terminal-ACK path that skips retries for malformed messages — improvement
+> tracked as a follow-up.
+
 | Condition | Outcome |
 |---|---|
-| Missing `IndexingConfig` on create/update | Message rejected with error reply |
-| Empty `ObjectID` | Rejected (no primary key) |
-| Empty `AccessCheckObject` or `AccessCheckRelation` | Rejected during `IndexingConfig` parsing |
-| Empty `HistoryCheckObject` or `HistoryCheckRelation` | Rejected during `IndexingConfig` parsing |
-| Unknown `action` value | Rejected with `unknown action` |
-| Missing lower-case `authorization` header on V2 messages | Rejected during header validation |
-| `data` not present on create/update | Rejected |
-| `data` not a string on delete | Rejected |
-| Subject suffix empty (`lfx.index.` with no type) | Rejected (must have a non-empty resource type) |
-| Subject suffix contains `.`, `*`, `>`, whitespace, or equals `index` | Rejected (invalid or reserved object type) |
+| Missing `IndexingConfig` on create/update | Message NAKed; redelivered indefinitely until ACKed or evicted by the stream age (24 h) or size (10 GiB) limit |
+| Empty `ObjectID` | NAKed and retried (no primary key) |
+| Empty `AccessCheckObject` or `AccessCheckRelation` | NAKed and retried during `IndexingConfig` parsing |
+| Empty `HistoryCheckObject` or `HistoryCheckRelation` | NAKed and retried during `IndexingConfig` parsing |
+| Unknown `action` value | NAKed and retried (`unknown action`) |
+| Missing lower-case `authorization` header on V2 messages | NAKed and retried during header validation |
+| `data` not present on create/update | NAKed and retried |
+| `data` not a string on delete | NAKed and retried |
+| Subject suffix empty (`lfx.index.` with no type) | NAKed and retried (must have a non-empty resource type) |
+| Subject suffix contains `.`, `*`, `>`, whitespace, or equals `index` | NAKed and retried (invalid or reserved object type) |
 
-When a reply subject is provided (request/reply), handlers reply `OK` on success or an
-`ERROR: ...` string on failure. The error reply is a generic NACK (currently
-`ERROR: error processing indexing message`), not a detailed error description; callers
-must treat replies strictly as ACK/NACK signals and use the indexer logs for failure
-diagnostics. Plain `Publish` without a reply inbox receives no reply. Publishers should
-use request/reply to confirm processing during writes that require acknowledgement.
+**Request/reply (synchronous) is not supported.** The indexer now consumes
+messages from a JetStream durable stream. Callers that use `conn.Request()` on a
+JetStream-captured subject receive a `PubAck` JSON persistence acknowledgment from
+the NATS server — **not** an application-level processing result from the indexer.
+The message is stored in the stream and processed asynchronously; there is no way
+to determine whether indexing succeeded from the publish call. JetStream also
+overwrites the NATS `Reply` field with its internal ACK address (`$JS.ACK...`), so
+the original publisher reply inbox is not reachable from the consumer.
+Publishers must use `conn.Publish()` (fire-and-forget). Delivery guarantees are
+provided by the JetStream stream: messages that fail processing are NAKed with
+exponential backoff and redelivered indefinitely (`MaxDeliver: -1`). The effective
+give-up deadline is whichever stream limit fires first — the age limit (24 h) or the
+size limit (10 GiB). A message evicted by either limit will not be redelivered
+regardless of how many delivery attempts were made.
 
 ### Choosing search fields
 
@@ -246,8 +265,9 @@ Before merging a change to publisher code in a resource service, verify:
 2. Deletes use `action = "deleted"` and `Data` = the UID string (not the resource).
 3. The subject matches the resource type that other services already use; check
    `pkg/constants/` for the canonical constant.
-4. The publisher waits for `OK` on the reply when the write must be confirmed
-   (or accepts fire-and-forget for non-critical writes; document which).
+4. Publishing is fire-and-forget — use `conn.Publish()`, not `conn.Request()`.
+   The indexer now runs as a JetStream durable consumer; request/reply is not
+   supported (see the note in the rejection table above).
 5. Headers carry lower-case `authorization` and `x-on-behalf-of` keys so audit principals are
    recorded on the indexed document.
 

@@ -221,7 +221,7 @@ func (j *CleanupRepository) processItem(ctx context.Context, objectRef *string) 
 		return "error"
 	}
 
-	j.logger.Info("Janitor processing started",
+	j.logger.Debug("Janitor processing started",
 		"object_ref", safeLogString(objectRef))
 
 	// Search for all documents with this object_ref and latest=true
@@ -252,18 +252,18 @@ func (j *CleanupRepository) processItem(ctx context.Context, objectRef *string) 
 
 	// Log the number of hits with analysis
 	hitCount := len(docs)
-	j.logger.Info("Janitor search completed",
+	j.logger.Debug("Janitor search completed",
 		"object_ref", safeLogString(objectRef),
 		"hits", hitCount)
 
 	if hitCount == 0 {
-		j.logger.Info("No documents found for janitor processing",
+		j.logger.Debug("No documents found for janitor processing",
 			"object_ref", safeLogString(objectRef))
 		return "skipped"
 	}
 
 	if hitCount == 1 {
-		j.logger.Info("Single document found, no janitor action needed",
+		j.logger.Debug("Single document found, no janitor action needed",
 			"object_ref", safeLogString(objectRef),
 			"document_id", docs[0].ID)
 		return "skipped"
@@ -315,7 +315,7 @@ func (j *CleanupRepository) processItem(ctx context.Context, objectRef *string) 
 		// Check if the hit has a `deleted_at` field (deletion priority)
 		if hitBody.DeletedAt != nil && *hitBody.DeletedAt != "" {
 			deletedDocCount++
-			j.logger.Info("Document with deletion timestamp found (takes priority)",
+			j.logger.Debug("Document with deletion timestamp found (takes priority)",
 				"object_ref", safeLogString(objectRef),
 				"document_id", doc.ID,
 				"deleted_at", *hitBody.DeletedAt)
@@ -342,7 +342,7 @@ func (j *CleanupRepository) processItem(ctx context.Context, objectRef *string) 
 		}
 	}
 
-	j.logger.Info("Conflict resolution analysis completed",
+	j.logger.Debug("Conflict resolution analysis completed",
 		"object_ref", safeLogString(objectRef),
 		"winning_id", winningID,
 		"winning_updated_at", winningUpdatedAt,
@@ -351,7 +351,7 @@ func (j *CleanupRepository) processItem(ctx context.Context, objectRef *string) 
 
 	// Don't update anything if there is no winning hit
 	if winningID == "" {
-		j.logger.Info("Janitor: no winning hit", slog.String("object_ref", *objectRef))
+		j.logger.Debug("Janitor: no winning hit", slog.String("object_ref", *objectRef))
 		return "skipped"
 	}
 
@@ -362,7 +362,7 @@ func (j *CleanupRepository) processItem(ctx context.Context, objectRef *string) 
 	for _, doc := range docs {
 		if doc.ID == winningID {
 			// The winning hit must stay `latest=true`, so it doesn't need any update.
-			j.logger.Info("Skipping update for winning document",
+			j.logger.Debug("Skipping update for winning document",
 				"object_ref", safeLogString(objectRef),
 				"document_id", doc.ID,
 				"reason", "winning_document")
@@ -404,7 +404,7 @@ func (j *CleanupRepository) processItem(ctx context.Context, objectRef *string) 
 		}
 	}
 
-	j.logger.Info("Janitor processing completed successfully",
+	j.logger.Debug("Janitor processing completed successfully",
 		"object_ref", safeLogString(objectRef),
 		"winning_id", winningID,
 		"updates_attempted", updatesAttempted,
@@ -453,7 +453,7 @@ func (j *CleanupRepository) updateLatestFlag(ctx context.Context, doc contracts.
 		return err
 	}
 
-	j.logger.Info("Document latest flag updated successfully",
+	j.logger.Debug("Document latest flag updated successfully",
 		"object_ref", objectRef,
 		"document_id", doc.ID,
 		"latest", latest)
@@ -482,18 +482,18 @@ func (j *CleanupRepository) asyncRetry(ctx context.Context, objectRef, docID str
 
 		select {
 		case <-time.After(retryDelay):
-			j.logger.Info("Executing scheduled janitor retry",
+			j.logger.Debug("Executing scheduled janitor retry",
 				"object_ref", objectRef,
 				"document_id", docID,
 				"delay_elapsed", retryDelay)
 			j.CheckItem(objectRef)
 		case <-ctx.Done():
-			j.logger.Info("Janitor retry cancelled due to context",
+			j.logger.Debug("Janitor retry cancelled due to context",
 				"object_ref", objectRef,
 				"document_id", docID,
 				"context_error", ctx.Err())
 		case <-j.shutdown:
-			j.logger.Info("Janitor retry cancelled due to shutdown",
+			j.logger.Debug("Janitor retry cancelled due to shutdown",
 				"object_ref", objectRef,
 				"document_id", docID)
 		}
@@ -504,7 +504,7 @@ func (j *CleanupRepository) asyncRetry(ctx context.Context, objectRef, docID str
 func (j *CleanupRepository) logWorkerHealth(itemsProcessed, itemsSkipped, conflictsResolved, errors int) {
 	queueLength := len(globalJanitorChan)
 
-	j.logger.Info("Janitor worker health check",
+	j.logger.Debug("Janitor worker health check",
 		"items_processed", itemsProcessed,
 		"items_skipped", itemsSkipped,
 		"conflicts_resolved", conflictsResolved,

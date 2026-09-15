@@ -79,9 +79,9 @@ func (h *HealthHandler) writeHealthResponse(w http.ResponseWriter, status *servi
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(statusCode)
 		if statusCode == http.StatusOK {
-			fmt.Fprintf(w, "OK\n")
+			_, _ = fmt.Fprintf(w, "OK\n")
 		} else {
-			fmt.Fprintf(w, "UNHEALTHY\n")
+			_, _ = fmt.Fprintf(w, "UNHEALTHY\n")
 		}
 		return
 	}

@@ -5,7 +5,6 @@ package logging
 
 import (
 	"context"
-	"os"
 	"strings"
 	"testing"
 )
@@ -20,12 +19,8 @@ func TestNewLogger(t *testing.T) {
 
 func TestNewLoggerWithEnvironment(t *testing.T) {
 	// Test with custom environment variables
-	os.Setenv("LOG_LEVEL", "debug")
-	os.Setenv("LOG_FORMAT", "text")
-	defer func() {
-		os.Unsetenv("LOG_LEVEL")
-		os.Unsetenv("LOG_FORMAT")
-	}()
+	t.Setenv("LOG_LEVEL", "debug")
+	t.Setenv("LOG_FORMAT", "text")
 
 	logger := NewLogger()
 	if logger == nil {

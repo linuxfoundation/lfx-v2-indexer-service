@@ -135,8 +135,14 @@ func main() {
 	logger.Info("Signaling background services to stop...")
 	cancel()
 
-	// Wait for background services to complete gracefully with timeout
+	// Wait for background services to complete gracefully with timeout.
+	// The budget must be at least as large as the NATS drain timeout
+	// (NATS_DRAIN_TIMEOUT, default 55 s) so that a slow in-flight JetStream
+	// callback — which can hold up to AckWait (30 s) — is not killed before
+	// DrainWithTimeout finishes. The remaining time (pod grace period 60 s minus
+	// this wait) is reserved for the HTTP server shutdown below.
 	logger.Info("Waiting for background services to complete...")
+	shutdownBudget := container.Config.NATS.DrainTimeout
 	waitDone := make(chan struct{})
 	go func() {
 		gracefulCloseWG.Wait()
@@ -146,8 +152,8 @@ func main() {
 	select {
 	case <-waitDone:
 		logger.Info("All background services completed gracefully")
-	case <-time.After(30 * time.Second):
-		logger.Warn("Background services shutdown timeout reached")
+	case <-time.After(shutdownBudget):
+		logger.Warn("Background services shutdown timeout reached", "budget", shutdownBudget)
 	}
 
 	// Now shutdown HTTP server after all other services are stopped

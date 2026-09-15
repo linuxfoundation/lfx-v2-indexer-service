@@ -358,7 +358,7 @@ func TestMessagingRepository_IntegrationWithNATS(t *testing.T) {
 
 	logger := setupTestLogger()
 	repo := NewMessagingRepository(conn, nil, logger, 5*time.Second, constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit, constants.DefaultWorkerCount)
-	defer repo.Close()
+	defer func() { _ = repo.Close() }()
 
 	ctx := context.Background()
 
@@ -539,7 +539,7 @@ func TestMessagingRepository_WithAuthRepo(t *testing.T) {
 // Test runner setup
 func TestMain(m *testing.M) {
 	// Setup test environment
-	os.Setenv("LOG_LEVEL", "debug")
+	_ = os.Setenv("LOG_LEVEL", "debug")
 
 	// Run tests
 	code := m.Run()

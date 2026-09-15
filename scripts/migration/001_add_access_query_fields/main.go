@@ -134,7 +134,7 @@ func createOpenSearchClient(config *Config) (*opensearch.Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to OpenSearch: %w", err)
 	}
-	defer info.Body.Close()
+	defer func() { _ = info.Body.Close() }()
 
 	log.Println("✓ Connected to OpenSearch successfully")
 	return client, nil
@@ -229,7 +229,7 @@ func searchDocuments(ctx context.Context, client *opensearch.Client, config *Con
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute search: %w", err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 
 	if res.IsError() {
 		return nil, fmt.Errorf("search request failed: %s", res.String())
@@ -263,7 +263,7 @@ func scrollDocuments(ctx context.Context, client *opensearch.Client, scrollID st
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute scroll: %w", err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 
 	if res.IsError() {
 		return nil, fmt.Errorf("scroll request failed: %s", res.String())
@@ -325,7 +325,7 @@ func processBatch(ctx context.Context, client *opensearch.Client, config *Config
 		}
 
 		// Add to bulk body
-		bulkBody.WriteString(fmt.Sprintf(`{"update":{"_index":"%s","_id":"%s"}}`, config.IndexName, doc.ID))
+		_, _ = fmt.Fprintf(&bulkBody, `{"update":{"_index":"%s","_id":"%s"}}`, config.IndexName, doc.ID)
 		bulkBody.WriteString("\n")
 
 		updateJSON, err := json.Marshal(map[string]interface{}{"doc": updateDoc})
@@ -350,7 +350,7 @@ func processBatch(ctx context.Context, client *opensearch.Client, config *Config
 			stats.ErroredDocuments += updateCount
 			return fmt.Errorf("failed to execute bulk update: %w", err)
 		}
-		defer res.Body.Close()
+		defer func() { _ = res.Body.Close() }()
 
 		if res.IsError() {
 			stats.ErroredDocuments += updateCount
@@ -395,7 +395,7 @@ func clearScroll(ctx context.Context, client *opensearch.Client, scrollID string
 	}
 
 	if res, err := req.Do(ctx, client); err == nil {
-		res.Body.Close()
+		_ = res.Body.Close()
 	}
 }
 

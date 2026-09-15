@@ -66,10 +66,12 @@ func parseCLIFlags() *config.CLIConfig {
 		fmt.Fprintf(os.Stderr, "    LOG_LEVEL=info         Logging level (debug,info,warn,error)\n")
 		fmt.Fprintf(os.Stderr, "    LOG_FORMAT=json        Log format (json,text)\n")
 		fmt.Fprintf(os.Stderr, "    NATS_URL=nats://...    NATS server URL\n")
+		fmt.Fprintf(os.Stderr, "    NATS_MAX_RECONNECTS=-1             NATS reconnect limit (-1 = infinite)\n")
 		fmt.Fprintf(os.Stderr, "    NATS_PENDING_MSG_LIMIT=1000000     NATS pending message limit\n")
 		fmt.Fprintf(os.Stderr, "    NATS_PENDING_BYTES_LIMIT=536870912 NATS pending bytes limit\n")
 		fmt.Fprintf(os.Stderr, "    NATS_WORKER_COUNT=100              NATS concurrent handlers\n")
-		fmt.Fprintf(os.Stderr, "    OPENSEARCH_URL=http... OpenSearch URL\n\n")
+		fmt.Fprintf(os.Stderr, "    OPENSEARCH_URL=http... OpenSearch URL\n")
+		fmt.Fprintf(os.Stderr, "    OPENSEARCH_TIMEOUT=30s             ResponseHeaderTimeout (first-byte wait; body reads unbounded)\n\n")
 
 		fmt.Fprintf(os.Stderr, "Configuration precedence: CLI flags > Environment variables > Defaults\n\n")
 		fmt.Fprintf(os.Stderr, "Health endpoints:\n")

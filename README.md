@@ -322,9 +322,12 @@ NATS_QUEUE=lfx.indexer.queue                # Queue group name
 OPENSEARCH_INDEX=resources                   # OpenSearch index name
 
 # NATS Connection Settings
-NATS_MAX_RECONNECTS=10                       # Max reconnection attempts
+NATS_MAX_RECONNECTS=-1                       # Max reconnection attempts (-1 = infinite, recommended for production)
 NATS_RECONNECT_WAIT=2s                       # Wait time between reconnects
 NATS_CONNECTION_TIMEOUT=10s                  # Initial connection timeout
+
+# OpenSearch Connection Settings
+OPENSEARCH_TIMEOUT=30s                       # Response header timeout — covers time waiting for the first response byte; body reads are not bounded by this setting
 
 # JWT Configuration
 JWT_ISSUER=heimdall                          # JWT issuer validation

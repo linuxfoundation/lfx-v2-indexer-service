@@ -109,11 +109,6 @@ func NewMockStorageRepository() *MockStorageRepository {
 	}
 }
 
-// NewMockTransactionRepository creates a new mock storage repository (backward compatibility)
-func NewMockTransactionRepository() *MockStorageRepository {
-	return NewMockStorageRepository()
-}
-
 // Index mocks indexing a document
 func (m *MockStorageRepository) Index(_ context.Context, index string, docID string, body io.Reader) error {
 	m.mu.Lock()
@@ -387,11 +382,15 @@ type MockMessagingRepository struct {
 	QueueSubsWithReply map[string]map[string]contracts.MessageHandlerWithReply
 
 	// Mock responses
-	PublishError   error
-	SubscribeError error
-	HealthError    error
-	DrainError     error
-	CloseError     error
+	PublishError          error
+	SubscribeError        error
+	HealthError           error
+	DrainError            error
+	CloseError            error
+	JetStreamConsumeError error // returned by ConsumeWithJetStream to simulate startup failure
+
+	// JetStream state: handlers registered via ConsumeWithJetStream, keyed by stream name
+	JetStreamHandlers map[string]func(context.Context, []byte, string) error
 
 	// Auth delegation (embedded AuthRepository)
 	AuthRepo *MockAuthRepository
@@ -439,17 +438,13 @@ func NewMockMessagingRepository() *MockMessagingRepository {
 		Subscriptions:      make(map[string]contracts.MessageHandler),
 		QueueSubs:          make(map[string]map[string]contracts.MessageHandler),
 		QueueSubsWithReply: make(map[string]map[string]contracts.MessageHandlerWithReply),
+		JetStreamHandlers:  make(map[string]func(context.Context, []byte, string) error),
 		AuthRepo:           NewMockAuthRepository(),
 		PublishCalls:       make([]PublishCall, 0),
 		SubscribeCalls:     make([]SubscribeCall, 0),
 		QueueSubCalls:      make([]QueueSubscribeCall, 0),
 		QueueReplySubCalls: make([]QueueSubscribeWithReplyCall, 0),
 	}
-}
-
-// NewMockMessageRepository creates a new mock messaging repository (backward compatibility)
-func NewMockMessageRepository() *MockMessagingRepository {
-	return NewMockMessagingRepository()
 }
 
 // Subscribe mocks subscribing to messages
@@ -552,6 +547,34 @@ func (m *MockMessagingRepository) ValidateToken(ctx context.Context, token strin
 // ParsePrincipals parses principals from headers using the embedded auth repository
 func (m *MockMessagingRepository) ParsePrincipals(ctx context.Context, headers map[string]string) ([]contracts.Principal, error) {
 	return m.AuthRepo.ParsePrincipals(ctx, headers)
+}
+
+// ConsumeWithJetStream mocks starting a JetStream durable consumer.
+// It stores the handler keyed by streamName so tests can deliver messages via
+// SimulateJetStreamMessage. Set JetStreamConsumeError to simulate startup failure.
+func (m *MockMessagingRepository) ConsumeWithJetStream(_ context.Context, streamName string, _ []string, handler func(context.Context, []byte, string) error) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.JetStreamConsumeError != nil {
+		return m.JetStreamConsumeError
+	}
+	if m.JetStreamHandlers == nil {
+		m.JetStreamHandlers = make(map[string]func(context.Context, []byte, string) error)
+	}
+	m.JetStreamHandlers[streamName] = handler
+	return nil
+}
+
+// SimulateJetStreamMessage delivers a message to the handler registered for streamName,
+// mirroring SimulateMessage for core NATS subscriptions.
+func (m *MockMessagingRepository) SimulateJetStreamMessage(ctx context.Context, streamName, subject string, data []byte) error {
+	m.mu.RLock()
+	h, ok := m.JetStreamHandlers[streamName]
+	m.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("no JetStream handler registered for stream: %s", streamName)
+	}
+	return h(ctx, data, subject)
 }
 
 // GetPublishedMessages returns all published messages for a given subject from the mock

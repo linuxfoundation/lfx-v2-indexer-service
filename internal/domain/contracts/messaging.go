@@ -40,8 +40,17 @@ type MessagingRepository interface {
 	// HealthCheck checks the health of the NATS connection
 	HealthCheck(ctx context.Context) error
 
-	// DrainWithTimeout performs graceful NATS connection drain with timeout
+	// DrainWithTimeout performs graceful NATS connection drain with timeout.
+	// All active JetStream consumers created via ConsumeWithJetStream are
+	// stopped before the underlying connection is drained.
 	DrainWithTimeout() error
+
+	// ConsumeWithJetStream creates a durable JetStream consumer on streamName,
+	// filtering on filterSubjects, and calls handler for each message with
+	// AckExplicit policy. On handler error the message is NAKed with
+	// exponential-backoff jitter; on success it is ACKed. The consumer is
+	// stopped automatically when DrainWithTimeout is called.
+	ConsumeWithJetStream(ctx context.Context, streamName string, filterSubjects []string, handler func(context.Context, []byte, string) error) error
 
 	// Authentication operations (from AuthRepository)
 
