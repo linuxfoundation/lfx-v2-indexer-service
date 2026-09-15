@@ -5,16 +5,33 @@ package storage
 
 import (
 	"context"
+	"io"
 	"log/slog"
+	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/opensearch-project/opensearch-go/v2"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
 )
+
+// mockTransport is a test http.RoundTripper that returns a fixed response.
+type mockTransport struct {
+	statusCode int
+	body       string
+}
+
+func (m *mockTransport) RoundTrip(_ *http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: m.statusCode,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(m.body)),
+	}, nil
+}
 
 // Helper function to create a test logger
 func setupTestLogger(t *testing.T) *slog.Logger {
@@ -259,6 +276,27 @@ func TestStorageRepository_ParameterValidation(t *testing.T) {
 			assert.IsType(t, "", tc.docID, "DocID should be string type")
 		}
 	})
+}
+
+func TestIndex_LogsStructuredErrorOn400(t *testing.T) {
+	osErrBody := `{"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [data.system_updated_at]"},"status":400}`
+
+	client, err := opensearch.NewClient(opensearch.Config{
+		Addresses: []string{"http://localhost:9200"},
+		Transport: &mockTransport{statusCode: 400, body: osErrBody},
+	})
+	require.NoError(t, err)
+
+	logger, buf := logging.TestLogger(t)
+	repo := NewStorageRepository(client, logger)
+
+	indexErr := repo.Index(context.Background(), "resources", "groupsio_mailing_list:test-uid", strings.NewReader(`{"object_type":"groupsio_mailing_list"}`))
+
+	assert.Error(t, indexErr)
+	logging.AssertLogContains(t, buf, "mapper_parsing_exception")
+	logging.AssertLogContains(t, buf, "failed to parse field")
+	logging.AssertLogContains(t, buf, "error_type")
+	logging.AssertLogContains(t, buf, "error_reason")
 }
 
 // Note: Integration tests that require actual OpenSearch connections should be placed

@@ -66,7 +66,19 @@ func (r *StorageRepository) Index(ctx context.Context, index string, docID strin
 
 	if res.IsError() {
 		body, _ := io.ReadAll(res.Body)
-		logger.Error("Index request failed", "status", res.Status(), "response_body", string(body))
+		// Parse structured fields only — the raw body may echo field values containing PII.
+		var osErr struct {
+			Error struct {
+				Type   string `json:"type"`
+				Reason string `json:"reason"`
+			} `json:"error"`
+		}
+		errType, errReason := "unknown", "unknown"
+		if err := json.Unmarshal(body, &osErr); err == nil && osErr.Error.Type != "" {
+			errType = osErr.Error.Type
+			errReason = osErr.Error.Reason
+		}
+		logger.Error("Index request failed", "status", res.Status(), "error_type", errType, "error_reason", errReason)
 		return fmt.Errorf("%s: %s", constants.ErrIndexDocument, res.Status())
 	}
 
