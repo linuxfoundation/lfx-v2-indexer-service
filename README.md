@@ -22,7 +22,7 @@ The LFX V2 Indexer Service is responsible for:
 
 ### Prerequisites
 
-- **Go 1.25** (see `go.mod`'s `go` directive for the exact minimum patch version)
+- **Go 1.26** (see `go.mod`'s `go` directive for the exact minimum patch version)
 - **NATS Server** (message streaming)
 - **OpenSearch/Elasticsearch** (document indexing)
 - **Heimdall JWT Service** (authentication)
