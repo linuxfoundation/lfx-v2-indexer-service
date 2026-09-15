@@ -65,7 +65,8 @@ func (r *StorageRepository) Index(ctx context.Context, index string, docID strin
 	defer func() { _ = res.Body.Close() }()
 
 	if res.IsError() {
-		body, _ := io.ReadAll(res.Body)
+		// Cap read to avoid unbounded allocation on large proxy error bodies.
+		body, readErr := io.ReadAll(io.LimitReader(res.Body, 4096))
 		// Parse structured fields only — the raw body may echo field values containing PII.
 		var osErr struct {
 			Error struct {
@@ -74,11 +75,17 @@ func (r *StorageRepository) Index(ctx context.Context, index string, docID strin
 			} `json:"error"`
 		}
 		errType, errReason := "unknown", "unknown"
-		if err := json.Unmarshal(body, &osErr); err == nil && osErr.Error.Type != "" {
-			errType = osErr.Error.Type
-			errReason = osErr.Error.Reason
+		if readErr == nil {
+			if err := json.Unmarshal(body, &osErr); err == nil && osErr.Error.Type != "" {
+				errType = osErr.Error.Type
+				errReason = osErr.Error.Reason
+			}
 		}
-		logger.Error("Index request failed", "status", res.Status(), "error_type", errType, "error_reason", errReason)
+		if readErr != nil {
+			logger.Error("Index request failed", "status", res.Status(), "error_type", errType, "error_reason", errReason, "body_read_error", readErr)
+		} else {
+			logger.Error("Index request failed", "status", res.Status(), "error_type", errType, "error_reason", errReason)
+		}
 		return fmt.Errorf("%s: %s", constants.ErrIndexDocument, res.Status())
 	}
 
