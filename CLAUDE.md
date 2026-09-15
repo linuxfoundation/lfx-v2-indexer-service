@@ -167,7 +167,7 @@ explicitly asks for it, **and** you've validated it against the Go version
 MegaLinter itself bundles -- MegaLinter's `golangci-lint` binary is
 statically compiled against a specific Go version and refuses to analyze a
 module whose `go.mod` directive is newer than that. (This is a property of
-`golangci-lint` itself, not of MegaLinter's `osv-scanner`/`trivy`-based
+`golangci-lint` itself, not of MegaLinter's `osv-scanner`-based
 `REPOSITORY_OSV_SCANNER` check, which is a separate, unrelated linter.) A
 `go.mod` directive newer than what `golangci-lint` was built with breaks it
 outright. This is a hard ceiling with no environment-variable workaround --

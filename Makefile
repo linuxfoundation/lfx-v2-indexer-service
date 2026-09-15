@@ -18,7 +18,8 @@ HELM_NAMESPACE := lfx
 HELM_VALUES_FILE := ./charts/lfx-v2-indexer-service/values.local.yaml
 
 # Go
-GO_VERSION := 1.21
+# Derived from go.mod's `go` directive so this never drifts out of sync.
+GO_VERSION := $(shell awk '/^go / {print $$2}' go.mod)
 GOOS := linux
 GOARCH := amd64
 
