@@ -843,9 +843,10 @@ func (r *MessagingRepository) ConsumeWithJetStream(
 		Durable:        constants.ConsumerNameIndexer,
 		FilterSubjects: filterSubjects,
 		AckPolicy:      jetstream.AckExplicitPolicy,
-		// MaxDeliver: 5 caps retries at ~25 min (5 × 5 min max backoff).
-		// Poison messages (e.g. oversized fields, schema violations) are
-		// dropped after 5 attempts rather than retrying indefinitely.
+		// MaxDeliver: 5 caps poison messages at 5 attempts. With nakDelay's
+		// exponent starting at 0, the four NAK intervals are at most 1s, 2s,
+		// 4s, and 8s — the 5-min cap needs delivery ≥10 to activate. Total
+		// retry window: ~15 s. Messages that fail all 5 attempts are dropped.
 		MaxDeliver:    5,
 		AckWait:       30 * time.Second,
 		MaxAckPending: 100,
