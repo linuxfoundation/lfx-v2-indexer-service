@@ -97,14 +97,16 @@ type IndexingConfig struct {
 > **Note on retry behaviour:** Under the JetStream consumer every non-nil handler
 > error results in a NAK with exponential-backoff jitter. This includes the
 > validation conditions listed below. The consumer is configured with
-> `MaxDeliver: 5`; the four NAK intervals (≤1s, ≤2s, ≤4s, ≤8s) give a retry
-> window of at most ~15 seconds. Messages that exhaust all 5 attempts are dropped
-> by JetStream without further redelivery. There is currently no terminal-ACK path
-> that skips retries for malformed messages — improvement tracked as a follow-up.
+> `MaxDeliver: 5` (1 initial delivery + up to 4 redeliveries); the four NAK
+> intervals (≤1s, ≤2s, ≤4s, ≤8s) give a retry window of at most ~15 seconds.
+> After 5 delivery attempts JetStream stops redelivering to this consumer; the
+> message remains in the stream until `maxAge` (24 h) or `maxBytes` (10 GiB)
+> evicts it. There is currently no terminal-ACK path that skips retries for
+> malformed messages — improvement tracked as a follow-up.
 
 | Condition | Outcome |
 |---|---|
-| Missing `IndexingConfig` on create/update | Message NAKed; retried up to 5 times (~15 s total) then dropped |
+| Missing `IndexingConfig` on create/update | Message NAKed; up to 5 delivery attempts (~15 s total), then JetStream stops redelivering |
 | Empty `ObjectID` | NAKed and retried (no primary key) |
 | Empty `AccessCheckObject` or `AccessCheckRelation` | NAKed and retried during `IndexingConfig` parsing |
 | Empty `HistoryCheckObject` or `HistoryCheckRelation` | NAKed and retried during `IndexingConfig` parsing |
@@ -125,10 +127,10 @@ overwrites the NATS `Reply` field with its internal ACK address (`$JS.ACK...`), 
 the original publisher reply inbox is not reachable from the consumer.
 Publishers must use `conn.Publish()` (fire-and-forget). Delivery guarantees are
 provided by the JetStream stream: messages that fail processing are NAKed with
-exponential backoff with `MaxDeliver: 5` (four NAK intervals: ≤1s, ≤2s, ≤4s, ≤8s;
-total retry window ~15 s). Messages that exhaust all 5 attempts are dropped by
-JetStream. A message evicted from the stream by the age limit (24 h) or size limit
-(10 GiB) before its 5th attempt is also not redelivered.
+exponential backoff with `MaxDeliver: 5` (1 initial delivery + up to 4 redeliveries;
+four NAK intervals: ≤1s, ≤2s, ≤4s, ≤8s; total retry window ~15 s). After 5 delivery
+attempts JetStream stops redelivering to this consumer; the message remains in the
+stream until the age limit (24 h) or size limit (10 GiB) evicts it.
 
 ### Choosing search fields
 

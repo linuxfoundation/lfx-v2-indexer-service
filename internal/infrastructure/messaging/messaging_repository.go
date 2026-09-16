@@ -843,10 +843,10 @@ func (r *MessagingRepository) ConsumeWithJetStream(
 		Durable:        constants.ConsumerNameIndexer,
 		FilterSubjects: filterSubjects,
 		AckPolicy:      jetstream.AckExplicitPolicy,
-		// MaxDeliver: 5 caps poison messages at 5 attempts. With nakDelay's
-		// exponent starting at 0, the four NAK intervals are at most 1s, 2s,
-		// 4s, and 8s — the 5-min cap needs delivery ≥10 to activate. Total
-		// retry window: ~15 s. Messages that fail all 5 attempts are dropped.
+		// MaxDeliver: 5 = 1 initial delivery + up to 4 redeliveries (~15 s total;
+		// nakDelay caps at 1s, 2s, 4s, 8s — the 5-min ceiling needs delivery ≥10).
+		// After 5 attempts JetStream stops redelivering to this consumer; the
+		// stream message stays until maxAge/maxBytes eviction (not deleted).
 		MaxDeliver:    5,
 		AckWait:       30 * time.Second,
 		MaxAckPending: 100,
