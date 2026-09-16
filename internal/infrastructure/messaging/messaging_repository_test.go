@@ -5,12 +5,14 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -533,6 +535,69 @@ func TestMessagingRepository_WithAuthRepo(t *testing.T) {
 
 		assert.NotNil(t, metrics)
 		assert.Equal(t, true, metrics["auth_repo_configured"])
+	})
+}
+
+// stubJSMsg is a minimal jetstream.Msg stub for nakDelay tests.
+// Only Metadata() returns real data; all other methods are unused.
+type stubJSMsg struct {
+	numDelivered uint64
+	metaErr      error
+}
+
+func (s *stubJSMsg) Metadata() (*jetstream.MsgMetadata, error) {
+	if s.metaErr != nil {
+		return nil, s.metaErr
+	}
+	return &jetstream.MsgMetadata{NumDelivered: s.numDelivered}, nil
+}
+func (s *stubJSMsg) Data() []byte                       { return nil }
+func (s *stubJSMsg) Headers() nats.Header               { return nil }
+func (s *stubJSMsg) Subject() string                    { return "" }
+func (s *stubJSMsg) Reply() string                      { return "" }
+func (s *stubJSMsg) Ack() error                         { return nil }
+func (s *stubJSMsg) DoubleAck(_ context.Context) error  { return nil }
+func (s *stubJSMsg) Nak() error                         { return nil }
+func (s *stubJSMsg) NakWithDelay(_ time.Duration) error { return nil }
+func (s *stubJSMsg) InProgress() error                  { return nil }
+func (s *stubJSMsg) Term() error                        { return nil }
+func (s *stubJSMsg) TermWithReason(_ string) error      { return nil }
+
+// TestNakDelay pins the per-attempt delay ceiling that the MaxDeliver:5 +
+// nakDelay contract relies on. The function uses full jitter (rand in [0, cap])
+// so we run many iterations and assert no result exceeds the ceiling.
+func TestNakDelay(t *testing.T) {
+	const iterations = 500
+
+	cases := []struct {
+		numDelivered uint64
+		wantCeiling  time.Duration
+		desc         string
+	}{
+		{1, 1 * time.Second, "delivery 1 → ceil 1s"},
+		{2, 2 * time.Second, "delivery 2 → ceil 2s"},
+		{3, 4 * time.Second, "delivery 3 → ceil 4s"},
+		{4, 8 * time.Second, "delivery 4 → ceil 8s"},
+		{5, 16 * time.Second, "delivery 5 → ceil 16s"},
+		{10, nakMaxBackoff, "delivery 10 → ceil 5min (cap first fires here)"},
+		{20, nakMaxBackoff, "delivery 20 → still capped at 5min"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.desc, func(t *testing.T) {
+			msg := &stubJSMsg{numDelivered: tc.numDelivered}
+			for i := 0; i < iterations; i++ {
+				d := nakDelay(msg)
+				assert.GreaterOrEqual(t, d, time.Duration(0), "delay must be non-negative")
+				assert.LessOrEqual(t, d, tc.wantCeiling, "delay exceeded expected ceiling")
+			}
+		})
+	}
+
+	t.Run("metadata_error_returns_1s", func(t *testing.T) {
+		msg := &stubJSMsg{metaErr: errors.New("metadata unavailable")}
+		d := nakDelay(msg)
+		assert.Equal(t, time.Second, d)
 	})
 }
 
