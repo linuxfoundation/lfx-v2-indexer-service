@@ -843,12 +843,11 @@ func (r *MessagingRepository) ConsumeWithJetStream(
 		Durable:        constants.ConsumerNameIndexer,
 		FilterSubjects: filterSubjects,
 		AckPolicy:      jetstream.AckExplicitPolicy,
-		// MaxDeliver: -1 means unlimited redeliveries. The stream's maxAge (24 h)
-		// is the effective "give up" deadline: once a message ages out of the
-		// stream it will not be redelivered, regardless of delivery count.
-		// This prevents the consumer from exhausting its delivery budget during
-		// an extended downstream outage (e.g. OpenSearch down for hours).
-		MaxDeliver:    -1,
+		// MaxDeliver: 5 = 1 initial delivery + up to 4 redeliveries (~15 s total;
+		// nakDelay caps at 1s, 2s, 4s, 8s — the 5-min ceiling needs delivery ≥10).
+		// After 5 attempts JetStream stops redelivering to this consumer; the
+		// stream message stays until maxAge/maxBytes eviction (not deleted).
+		MaxDeliver:    5,
 		AckWait:       30 * time.Second,
 		MaxAckPending: 100,
 		// DeliverAllPolicy (the default) is intentionally used here rather than

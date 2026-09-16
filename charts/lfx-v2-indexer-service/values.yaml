@@ -34,10 +34,10 @@ nats:
     storage: file
     # retention keeps messages up to maxAge
     retention: limits
-    # maxAge is the retry horizon: the consumer uses unlimited redeliveries
-    # (MaxDeliver=-1) with exponential NAK backoff capped at 5 min. Messages
-    # age out of the stream after 24 h regardless of delivery count, which is
-    # the effective give-up deadline. Subject also to maxBytes eviction below.
+    # maxAge bounds how long an undeliverable message stays in the stream.
+    # The consumer retries up to MaxDeliver=5 attempts (~15 s total window);
+    # messages still in the stream after that — or evicted by maxBytes —
+    # are not redelivered. Subject also to maxBytes eviction below.
     maxAge: 24h
     # maxBytes caps storage per stream; 10 GiB covers expected 24 h traffic
     # with headroom. Quoted to prevent Helm from rendering as scientific notation.
