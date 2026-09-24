@@ -267,6 +267,12 @@ func (j *CleanupRepository) processItem(ctx context.Context, objectRef *string) 
 		"object_ref", safeLogString(objectRef),
 		"hits", hitCount)
 
+	if hitCount == janitorMaxDuplicates {
+		j.logger.Warn("Janitor search hit the duplicate cap; some duplicates may not have been resolved",
+			"object_ref", safeLogString(objectRef),
+			"cap", janitorMaxDuplicates)
+	}
+
 	if hitCount == 0 {
 		j.logger.Debug("No documents found for janitor processing",
 			"object_ref", safeLogString(objectRef))

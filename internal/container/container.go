@@ -301,6 +301,7 @@ func (c *Container) initializeServices() error {
 		c.Logger,
 		c.Config.OpenSearch.BatchMaxSize,
 		c.Config.OpenSearch.BatchMaxWait,
+		c.Config.OpenSearch.Timeout,
 	))
 
 	return nil

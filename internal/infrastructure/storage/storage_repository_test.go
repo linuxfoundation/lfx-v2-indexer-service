@@ -279,6 +279,37 @@ func TestStorageRepository_ParameterValidation(t *testing.T) {
 	})
 }
 
+func TestBulkIndex_PartialFailure(t *testing.T) {
+	bulkRespBody := `{
+		"errors": true,
+		"items": [
+			{"index": {"status": 201}},
+			{"index": {"status": 400, "error": "mapper_parsing_exception"}}
+		]
+	}`
+
+	client, err := opensearch.NewClient(opensearch.Config{
+		Addresses: []string{"http://localhost:9200"},
+		Transport: &mockTransport{statusCode: 200, body: bulkRespBody},
+	})
+	require.NoError(t, err)
+
+	logger := setupTestLogger(t)
+	repo := NewStorageRepository(client, logger)
+
+	operations := []contracts.BulkOperation{
+		{Action: "index", Index: "test-index", DocID: "doc-1", Body: strings.NewReader(`{"field":"ok"}`)},
+		{Action: "index", Index: "test-index", DocID: "doc-2", Body: strings.NewReader(`{"field":"bad"}`)},
+	}
+
+	itemErrors, err := repo.BulkIndex(context.Background(), operations)
+
+	require.NoError(t, err, "top-level err is reserved for request-level failures, not per-item ones")
+	require.Len(t, itemErrors, 2)
+	assert.NoError(t, itemErrors[0])
+	assert.Error(t, itemErrors[1])
+}
+
 func TestIndex_LogsStructuredErrorOn400(t *testing.T) {
 	osErrBody := `{"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [data.system_updated_at]"},"status":400}`
 

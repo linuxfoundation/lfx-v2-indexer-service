@@ -83,6 +83,30 @@ func TestValidateNATS_MaxReconnects(t *testing.T) {
 	}
 }
 
+func TestValidateNATS_AckWait(t *testing.T) {
+	cases := []struct {
+		name      string
+		ackWait   time.Duration
+		wantError bool
+	}{
+		{"ack wait below opensearch timeout is rejected", 20 * time.Second, true},
+		{"ack wait equal to opensearch timeout is rejected", 30 * time.Second, true},
+		{"ack wait above opensearch timeout is allowed", 40 * time.Second, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := baseValidConfig()
+			cfg.NATS.AckWait = tc.ackWait
+			err := cfg.validateNATS()
+			if tc.wantError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestValidateOpenSearch_Timeout(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -97,6 +121,54 @@ func TestValidateOpenSearch_Timeout(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := baseValidConfig()
 			cfg.OpenSearch.Timeout = tc.value
+			err := cfg.validateOpenSearch()
+			if tc.wantError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidateOpenSearch_BatchMaxSize(t *testing.T) {
+	cases := []struct {
+		name      string
+		value     int
+		wantError bool
+	}{
+		{"zero is rejected", 0, true},
+		{"negative is rejected", -1, true},
+		{"positive is allowed", 50, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := baseValidConfig()
+			cfg.OpenSearch.BatchMaxSize = tc.value
+			err := cfg.validateOpenSearch()
+			if tc.wantError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidateOpenSearch_BatchMaxWait(t *testing.T) {
+	cases := []struct {
+		name      string
+		value     time.Duration
+		wantError bool
+	}{
+		{"zero is rejected", 0, true},
+		{"negative is rejected", -1 * time.Millisecond, true},
+		{"positive is allowed", 200 * time.Millisecond, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := baseValidConfig()
+			cfg.OpenSearch.BatchMaxWait = tc.value
 			err := cfg.validateOpenSearch()
 			if tc.wantError {
 				assert.Error(t, err)

@@ -39,6 +39,7 @@ type BatchIndexer struct {
 	logger       *slog.Logger
 	maxBatchSize int
 	maxWait      time.Duration
+	flushTimeout time.Duration
 
 	mu      sync.Mutex
 	pending []pendingIndexOp
@@ -46,13 +47,17 @@ type BatchIndexer struct {
 }
 
 // NewBatchIndexer creates a BatchIndexer wrapping repo. maxBatchSize and
-// maxWait must both be positive.
-func NewBatchIndexer(repo bulkIndexer, logger *slog.Logger, maxBatchSize int, maxWait time.Duration) *BatchIndexer {
+// maxWait must both be positive. flushTimeout bounds each bulk request
+// flush issues against repo, since a flush is detached from any single
+// caller's context (it can be batching operations from several callers
+// at once) and so cannot inherit a deadline from them.
+func NewBatchIndexer(repo bulkIndexer, logger *slog.Logger, maxBatchSize int, maxWait time.Duration, flushTimeout time.Duration) *BatchIndexer {
 	return &BatchIndexer{
 		repo:         repo,
 		logger:       logging.WithComponent(logger, "batch_indexer"),
 		maxBatchSize: maxBatchSize,
 		maxWait:      maxWait,
+		flushTimeout: flushTimeout,
 	}
 }
 
@@ -128,7 +133,10 @@ func (b *BatchIndexer) flush() {
 		ops[i] = p.op
 	}
 
-	itemErrors, err := b.repo.BulkIndex(context.Background(), ops)
+	ctx, cancel := context.WithTimeout(context.Background(), b.flushTimeout)
+	defer cancel()
+
+	itemErrors, err := b.repo.BulkIndex(ctx, ops)
 	if err != nil {
 		b.logger.Error("Batch flush failed", "error", err.Error(), "batch_size", len(batch))
 		for _, p := range batch {
