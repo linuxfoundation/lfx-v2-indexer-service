@@ -62,10 +62,11 @@ func TestBulkIndex_EmptyOperations(t *testing.T) {
 	}
 
 	// Execute - Empty operations should be handled without external calls
-	err := repo.BulkIndex(context.TODO(), []contracts.BulkOperation{})
+	itemErrors, err := repo.BulkIndex(context.TODO(), []contracts.BulkOperation{})
 
 	// Verify
 	assert.NoError(t, err)
+	assert.Nil(t, itemErrors)
 }
 
 func TestStorageRepository_StructureValidation(t *testing.T) {

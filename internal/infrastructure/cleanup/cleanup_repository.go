@@ -21,6 +21,12 @@ import (
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
 )
 
+// janitorMaxDuplicates bounds the "latest=true" conflict-resolution search
+// in processItem. Duplicate "latest" documents for one object_ref should be
+// rare and few; this caps memory/response size against an indexer bug that
+// produces far more than expected without silently truncating the normal case.
+const janitorMaxDuplicates = 100
+
 var (
 	// Global janitor channel for up to 50 queued item-janitor requests (matches production)
 	globalJanitorChan = make(chan *string, 50)
@@ -224,9 +230,14 @@ func (j *CleanupRepository) processItem(ctx context.Context, objectRef *string) 
 	j.logger.Debug("Janitor processing started",
 		"object_ref", safeLogString(objectRef))
 
-	// Search for all documents with this object_ref and latest=true
-	// This matches the production query exactly
+	// Search for documents with this object_ref and latest=true. Bounded by
+	// size (janitorMaxDuplicates) since a runaway indexer bug producing
+	// thousands of "latest" duplicates for one object_ref would otherwise
+	// pull them all into memory; _source is limited to the fields conflict
+	// resolution below actually reads.
 	query := map[string]any{
+		"size": janitorMaxDuplicates,
+		"_source": []string{"created_at", "updated_at", "deleted_at"},
 		"query": map[string]any{
 			"bool": map[string]any{
 				"must": []map[string]any{

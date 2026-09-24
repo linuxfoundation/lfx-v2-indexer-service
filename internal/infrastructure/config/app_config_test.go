@@ -31,11 +31,14 @@ func baseValidConfig() *AppConfig {
 			PendingMsgLimit:   1024,
 			PendingBytesLimit: 1024 * 1024,
 			WorkerCount:       10,
+			AckWait:           40 * time.Second,
 		},
 		OpenSearch: OpenSearchConfig{
-			URL:     "http://opensearch:9200",
-			Index:   "resources",
-			Timeout: 30 * time.Second,
+			URL:          "http://opensearch:9200",
+			Index:        "resources",
+			Timeout:      30 * time.Second,
+			BatchMaxSize: 50,
+			BatchMaxWait: 200 * time.Millisecond,
 		},
 		JWT: JWTConfig{
 			Issuer:    "heimdall",

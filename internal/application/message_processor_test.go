@@ -132,9 +132,10 @@ func (m *MockStorageRepository) Delete(ctx context.Context, index string, docID 
 	return args.Error(0)
 }
 
-func (m *MockStorageRepository) BulkIndex(ctx context.Context, operations []contracts.BulkOperation) error {
+func (m *MockStorageRepository) BulkIndex(ctx context.Context, operations []contracts.BulkOperation) ([]error, error) {
 	args := m.Called(ctx, operations)
-	return args.Error(0)
+	itemErrors, _ := args.Get(0).([]error)
+	return itemErrors, args.Error(1)
 }
 
 func (m *MockStorageRepository) HealthCheck(ctx context.Context) error {

@@ -245,12 +245,12 @@ func (m *MockStorageRepository) Delete(_ context.Context, index string, docID st
 }
 
 // BulkIndex mocks bulk indexing operations
-func (m *MockStorageRepository) BulkIndex(_ context.Context, operations []contracts.BulkOperation) error {
+func (m *MockStorageRepository) BulkIndex(_ context.Context, operations []contracts.BulkOperation) ([]error, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if m.BulkError != nil {
-		return m.BulkError
+		return nil, m.BulkError
 	}
 
 	// Track the call
@@ -258,12 +258,15 @@ func (m *MockStorageRepository) BulkIndex(_ context.Context, operations []contra
 		Operations: operations,
 	})
 
+	itemErrors := make([]error, len(operations))
+
 	// Process each operation
-	for _, op := range operations {
+	for i, op := range operations {
 		if op.Action != "delete" && op.Body != nil {
 			bodyBytes, err := io.ReadAll(op.Body)
 			if err != nil {
-				return err
+				itemErrors[i] = err
+				continue
 			}
 
 			if m.IndexedDocuments[op.Index] == nil {
@@ -277,7 +280,7 @@ func (m *MockStorageRepository) BulkIndex(_ context.Context, operations []contra
 		}
 	}
 
-	return nil
+	return itemErrors, nil
 }
 
 // UpdateWithOptimisticLock mocks updating a document with optimistic concurrency control

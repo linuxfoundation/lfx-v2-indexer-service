@@ -59,8 +59,12 @@ type StorageRepository interface {
 	// Delete deletes a document from OpenSearch
 	Delete(ctx context.Context, index string, docID string) error
 
-	// BulkIndex performs bulk indexing operations
-	BulkIndex(ctx context.Context, operations []BulkOperation) error
+	// BulkIndex performs bulk indexing operations. It returns a per-operation
+	// error slice aligned by index with operations (nil entry = that
+	// operation succeeded), plus a top-level error for failures that aren't
+	// attributable to a specific operation (e.g. marshal/transport errors).
+	// A non-nil top-level error means itemErrors may be nil or incomplete.
+	BulkIndex(ctx context.Context, operations []BulkOperation) (itemErrors []error, err error)
 
 	// HealthCheck checks the health of the OpenSearch connection
 	HealthCheck(ctx context.Context) error
