@@ -54,7 +54,13 @@ opensearch:
       tag: "8.11.1"
       pullPolicy: IfNotPresent
     # resources defines CPU and memory limits/requests for the job container
-    resources: {}
+    resources:
+      requests:
+        cpu: 50m
+        memory: 32Mi
+      limits:
+        cpu: 200m
+        memory: 64Mi
 
 # heimdall is the configuration for the heimdall middleware
 heimdall:

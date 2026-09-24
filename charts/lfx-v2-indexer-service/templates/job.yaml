@@ -68,6 +68,15 @@ spec:
               OPENSEARCH_URL="{{ .Values.opensearch.url | trimSuffix "/" }}"
               INDEX_NAME="{{ .Values.opensearch.index }}"
 
+              # The post-install/post-upgrade hook fires once the Job manifest is
+              # applied, not once OpenSearch is actually accepting connections, so
+              # wait for it to answer before checking/creating the index.
+              for i in $(seq 1 30); do
+                curl -s -o /dev/null {{ if .Values.opensearch.auth.enabled }}-u "${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}" {{ end }}"${OPENSEARCH_URL}/" && break
+                echo "waiting for opensearch at ${OPENSEARCH_URL} (${i}/30)"
+                sleep 5
+              done
+
               # Check if index already exists
               HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" {{ if .Values.opensearch.auth.enabled }}-u "${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}" {{ end }}--head "${OPENSEARCH_URL}/${INDEX_NAME}")
 
