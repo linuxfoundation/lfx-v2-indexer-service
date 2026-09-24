@@ -93,7 +93,8 @@ func NewIndexerService(
 
 // SetDocIndexer overrides the single-document indexer used by ProcessTransaction,
 // e.g. to install a batching wrapper around storageRepo. Defaults to storageRepo
-// itself if never called.
+// itself if never called. Not safe to call concurrently with ProcessTransaction —
+// intended for one-time wiring during service startup, before traffic begins.
 func (s *IndexerService) SetDocIndexer(docIndexer singleDocIndexer) {
 	s.docIndexer = docIndexer
 }
