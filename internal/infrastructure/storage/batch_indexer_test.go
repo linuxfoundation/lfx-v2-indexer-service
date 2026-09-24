@@ -28,6 +28,7 @@ type fakeBulkIndexer struct {
 
 	itemErrorsFn func(ops []contracts.BulkOperation) []error
 	err          error
+	delay        time.Duration // simulates a slow round trip
 }
 
 func (f *fakeBulkIndexer) BulkIndex(ctx context.Context, operations []contracts.BulkOperation) ([]error, error) {
@@ -35,7 +36,12 @@ func (f *fakeBulkIndexer) BulkIndex(ctx context.Context, operations []contracts.
 	f.calls = append(f.calls, operations)
 	f.ctxErrs = append(f.ctxErrs, ctx.Err())
 	f.neededRefresh = append(f.neededRefresh, logging.NeedsRefreshWaitFor(ctx))
+	delay := f.delay
 	f.mu.Unlock()
+
+	if delay > 0 {
+		time.Sleep(delay)
+	}
 
 	if f.err != nil {
 		return nil, f.err
@@ -197,12 +203,34 @@ func TestBatchIndexer_FlushUsesTimeoutNotCallerContext(t *testing.T) {
 
 	// The caller's own context is already canceled, but the batch still
 	// flushes and succeeds because the flush uses its own bounded timeout
-	// rather than inheriting from any single caller.
+	// rather than inheriting from any single caller. Since this caller also
+	// fills the batch, its Index call returns as soon as its own ctx is
+	// done, racing ahead of the (now async) flush — so wait for the flush
+	// to actually happen rather than asserting immediately.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
 	_ = b.Index(ctx, "test-index", "doc-1", strings.NewReader(`{}`))
 
-	require.Equal(t, 1, fake.callCount())
+	require.Eventually(t, func() bool { return fake.callCount() == 1 }, time.Second, time.Millisecond)
 	assert.NoError(t, fake.ctxErrs[0], "flush's context should not be the caller's canceled context")
+}
+
+func TestBatchIndexer_BatchFillingCallerHonorsOwnContext(t *testing.T) {
+	logger := setupTestLogger(t)
+	fake := &fakeBulkIndexer{delay: 200 * time.Millisecond}
+	b := NewBatchIndexer(fake, logger, 1, time.Hour, 5*time.Second)
+
+	// This caller fills the batch itself (maxBatchSize=1), which previously
+	// flushed synchronously inline and blocked the caller for the full
+	// round trip regardless of its own context's deadline.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	err := b.Index(ctx, "test-index", "doc-1", strings.NewReader(`{}`))
+	elapsed := time.Since(start)
+
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, elapsed, 100*time.Millisecond, "the batch-filling caller should return once its own ctx expires, not wait for the full flush")
 }

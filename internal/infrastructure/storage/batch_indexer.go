@@ -97,11 +97,14 @@ func (b *BatchIndexer) Index(ctx context.Context, index string, docID string, bo
 }
 
 // enqueue adds op to the current batch, starting the flush timer if this is
-// the first operation in a new batch, and flushing immediately (on the
-// caller's own goroutine, which then pays for the round trip on behalf of
-// the rest of the batch) if the batch is now full. needsRefresh marks the
-// whole batch as needing refresh=wait_for if this op's caller does, since
-// the underlying bulk request's refresh mode is per-request, not per-item.
+// the first operation in a new batch, and flushing immediately on its own
+// goroutine (same as a timer-triggered flush, not the goroutine of whichever
+// caller happened to fill the batch) if the batch is now full. Flushing on a
+// separate goroutine lets every caller's Index race its own ctx.Done() against
+// the flush the same way, rather than the batch-filling caller being blocked
+// on the round trip regardless of its own context's deadline. needsRefresh
+// marks the whole batch as needing refresh=wait_for if this op's caller does,
+// since the underlying bulk request's refresh mode is per-request, not per-item.
 func (b *BatchIndexer) enqueue(op pendingIndexOp, needsRefresh bool) {
 	b.mu.Lock()
 	b.pending = append(b.pending, op)
@@ -117,7 +120,7 @@ func (b *BatchIndexer) enqueue(op pendingIndexOp, needsRefresh bool) {
 	b.mu.Unlock()
 
 	if full {
-		b.flush()
+		go b.flush()
 	}
 }
 
