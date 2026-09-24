@@ -62,10 +62,11 @@ func TestBulkIndex_EmptyOperations(t *testing.T) {
 	}
 
 	// Execute - Empty operations should be handled without external calls
-	err := repo.BulkIndex(context.TODO(), []contracts.BulkOperation{})
+	itemErrors, err := repo.BulkIndex(context.TODO(), []contracts.BulkOperation{})
 
 	// Verify
 	assert.NoError(t, err)
+	assert.Nil(t, itemErrors)
 }
 
 func TestStorageRepository_StructureValidation(t *testing.T) {
@@ -276,6 +277,68 @@ func TestStorageRepository_ParameterValidation(t *testing.T) {
 			assert.IsType(t, "", tc.docID, "DocID should be string type")
 		}
 	})
+}
+
+func TestBulkIndex_PartialFailure(t *testing.T) {
+	bulkRespBody := `{
+		"errors": true,
+		"items": [
+			{"index": {"status": 201}},
+			{"index": {"status": 400, "error": "mapper_parsing_exception"}}
+		]
+	}`
+
+	client, err := opensearch.NewClient(opensearch.Config{
+		Addresses: []string{"http://localhost:9200"},
+		Transport: &mockTransport{statusCode: 200, body: bulkRespBody},
+	})
+	require.NoError(t, err)
+
+	logger := setupTestLogger(t)
+	repo := NewStorageRepository(client, logger)
+
+	operations := []contracts.BulkOperation{
+		{Action: "index", Index: "test-index", DocID: "doc-1", Body: strings.NewReader(`{"field":"ok"}`)},
+		{Action: "index", Index: "test-index", DocID: "doc-2", Body: strings.NewReader(`{"field":"bad"}`)},
+	}
+
+	itemErrors, err := repo.BulkIndex(context.Background(), operations)
+
+	require.NoError(t, err, "top-level err is reserved for request-level failures, not per-item ones")
+	require.Len(t, itemErrors, 2)
+	assert.NoError(t, itemErrors[0])
+	assert.Error(t, itemErrors[1])
+}
+
+func TestBulkIndex_FewerItemsThanRequestedAreReportedAsErrors(t *testing.T) {
+	// Only one item returned for two requested operations.
+	bulkRespBody := `{
+		"errors": false,
+		"items": [
+			{"index": {"status": 201}}
+		]
+	}`
+
+	client, err := opensearch.NewClient(opensearch.Config{
+		Addresses: []string{"http://localhost:9200"},
+		Transport: &mockTransport{statusCode: 200, body: bulkRespBody},
+	})
+	require.NoError(t, err)
+
+	logger := setupTestLogger(t)
+	repo := NewStorageRepository(client, logger)
+
+	operations := []contracts.BulkOperation{
+		{Action: "index", Index: "test-index", DocID: "doc-1", Body: strings.NewReader(`{"field":"a"}`)},
+		{Action: "index", Index: "test-index", DocID: "doc-2", Body: strings.NewReader(`{"field":"b"}`)},
+	}
+
+	itemErrors, err := repo.BulkIndex(context.Background(), operations)
+
+	require.NoError(t, err)
+	require.Len(t, itemErrors, 2)
+	assert.NoError(t, itemErrors[0])
+	assert.Error(t, itemErrors[1], "the missing trailing item must not read as a silent success")
 }
 
 func TestIndex_LogsStructuredErrorOn400(t *testing.T) {

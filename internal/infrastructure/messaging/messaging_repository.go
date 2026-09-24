@@ -42,15 +42,24 @@ type MessagingRepository struct {
 	pendingMsgLimit   int
 	pendingBytesLimit int
 	sem               chan struct{}
+	// ackWait is the JetStream consumer AckWait, passed through from config
+	// so it can be kept decoupled from (and larger than) the OpenSearch
+	// client timeout rather than sharing a hardcoded constant with it.
+	ackWait time.Duration
 }
 
 // NewMessagingRepository creates a new NATS messaging repository with auth delegation
-func NewMessagingRepository(conn *nats.Conn, authRepo contracts.AuthRepository, logger *slog.Logger, drainTimeout time.Duration, pendingMsgLimit int, pendingBytesLimit int, workerCount int) *MessagingRepository {
+func NewMessagingRepository(conn *nats.Conn, authRepo contracts.AuthRepository, logger *slog.Logger, drainTimeout time.Duration, pendingMsgLimit int, pendingBytesLimit int, workerCount int, ackWait time.Duration) *MessagingRepository {
 	msgLogger := logging.WithComponent(logger, constants.ComponentNATS)
 
 	if workerCount <= 0 {
 		msgLogger.Warn("Invalid workerCount, falling back to default", "provided", workerCount, "default", constants.DefaultWorkerCount)
 		workerCount = constants.DefaultWorkerCount
+	}
+
+	if ackWait <= 0 {
+		msgLogger.Warn("Invalid ackWait, falling back to default", "provided", ackWait, "default", constants.DefaultAckWait)
+		ackWait = constants.DefaultAckWait
 	}
 
 	repo := &MessagingRepository{
@@ -63,6 +72,7 @@ func NewMessagingRepository(conn *nats.Conn, authRepo contracts.AuthRepository, 
 		pendingMsgLimit:   pendingMsgLimit,
 		pendingBytesLimit: pendingBytesLimit,
 		sem:               make(chan struct{}, workerCount),
+		ackWait:           ackWait,
 	}
 
 	// Log initialization
@@ -848,7 +858,7 @@ func (r *MessagingRepository) ConsumeWithJetStream(
 		// After 5 attempts JetStream stops redelivering to this consumer; the
 		// stream message stays until maxAge/maxBytes eviction (not deleted).
 		MaxDeliver:    5,
-		AckWait:       30 * time.Second,
+		AckWait:       r.ackWait,
 		MaxAckPending: 100,
 		// DeliverAllPolicy (the default) is intentionally used here rather than
 		// DeliverNewPolicy. DeliverNewPolicy would skip any messages that landed

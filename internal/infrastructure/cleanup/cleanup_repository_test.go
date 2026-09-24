@@ -42,9 +42,10 @@ func (m *MockTransactionRepository) Delete(ctx context.Context, index string, do
 	return args.Error(0)
 }
 
-func (m *MockTransactionRepository) BulkIndex(ctx context.Context, operations []contracts.BulkOperation) error {
+func (m *MockTransactionRepository) BulkIndex(ctx context.Context, operations []contracts.BulkOperation) ([]error, error) {
 	args := m.Called(ctx, operations)
-	return args.Error(0)
+	itemErrors, _ := args.Get(0).([]error)
+	return itemErrors, args.Error(1)
 }
 
 func (m *MockTransactionRepository) HealthCheck(ctx context.Context) error {
@@ -88,6 +89,9 @@ func TestCleanupRepository_CheckItem(t *testing.T) {
 
 	// Set up mock expectations
 	expectedQuery := map[string]any{
+		"size":    janitorMaxDuplicates,
+		"sort":    []map[string]any{{"updated_at": "desc"}},
+		"_source": []string{"created_at", "updated_at", "deleted_at"},
 		"query": map[string]any{
 			"bool": map[string]any{
 				"must": []map[string]any{
@@ -160,6 +164,9 @@ func TestCleanupRepository_ProcessMultipleHits(t *testing.T) {
 	objectRef := "test-object-ref"
 
 	expectedQuery := map[string]any{
+		"size":    janitorMaxDuplicates,
+		"sort":    []map[string]any{{"updated_at": "desc"}},
+		"_source": []string{"created_at", "updated_at", "deleted_at"},
 		"query": map[string]any{
 			"bool": map[string]any{
 				"must": []map[string]any{
@@ -242,6 +249,9 @@ func TestCleanupRepository_ProcessVersionConflict(t *testing.T) {
 	}
 
 	expectedQuery := map[string]any{
+		"size":    janitorMaxDuplicates,
+		"sort":    []map[string]any{{"updated_at": "desc"}},
+		"_source": []string{"created_at", "updated_at", "deleted_at"},
 		"query": map[string]any{
 			"bool": map[string]any{
 				"must": []map[string]any{
@@ -295,6 +305,9 @@ func TestCleanupRepository_ProcessWithMarshalError(t *testing.T) {
 	}
 
 	expectedQuery := map[string]any{
+		"size":    janitorMaxDuplicates,
+		"sort":    []map[string]any{{"updated_at": "desc"}},
+		"_source": []string{"created_at", "updated_at", "deleted_at"},
 		"query": map[string]any{
 			"bool": map[string]any{
 				"must": []map[string]any{

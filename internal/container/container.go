@@ -271,6 +271,7 @@ func (c *Container) initializeRepositories() error {
 		c.Config.NATS.PendingMsgLimit,
 		c.Config.NATS.PendingBytesLimit,
 		c.Config.NATS.WorkerCount,
+		c.Config.NATS.AckWait,
 	)
 
 	// Initialize cleanup repository (background operations)
@@ -291,6 +292,18 @@ func (c *Container) initializeServices() error {
 		c.MessagingRepository,
 		c.Logger,
 	)
+
+	// Coalesce concurrent single-document Index calls into OpenSearch bulk
+	// requests. workerCount concurrent NATS handlers can otherwise each pay
+	// for their own OpenSearch round trip; batching lets them share one.
+	c.IndexerService.SetDocIndexer(storage.NewBatchIndexer(
+		c.StorageRepository,
+		c.Logger,
+		c.Config.OpenSearch.BatchMaxSize,
+		c.Config.OpenSearch.BatchMaxWait,
+		c.Config.OpenSearch.Timeout,
+	))
+
 	return nil
 }
 

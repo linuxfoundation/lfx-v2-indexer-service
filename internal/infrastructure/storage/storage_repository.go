@@ -275,10 +275,11 @@ func (r *StorageRepository) Delete(ctx context.Context, index string, docID stri
 	return nil
 }
 
-// BulkIndex performs bulk indexing operations
-func (r *StorageRepository) BulkIndex(ctx context.Context, operations []contracts.BulkOperation) error {
+// BulkIndex performs bulk indexing operations. See the contracts.StorageRepository
+// interface doc for the itemErrors/err contract.
+func (r *StorageRepository) BulkIndex(ctx context.Context, operations []contracts.BulkOperation) ([]error, error) {
 	if len(operations) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	logger := logging.WithFields(
@@ -303,7 +304,7 @@ func (r *StorageRepository) BulkIndex(ctx context.Context, operations []contract
 		actionBytes, err := json.Marshal(action)
 		if err != nil {
 			logger.Error("Failed to marshal bulk action", "error", err.Error())
-			return fmt.Errorf("%s: %w", constants.ErrMarshalBulkAction, err)
+			return nil, fmt.Errorf("%s: %w", constants.ErrMarshalBulkAction, err)
 		}
 
 		buf.Write(actionBytes)
@@ -313,7 +314,7 @@ func (r *StorageRepository) BulkIndex(ctx context.Context, operations []contract
 		if op.Action != "delete" && op.Body != nil {
 			if _, err := buf.ReadFrom(op.Body); err != nil {
 				logger.Error("Failed to read bulk body", "error", err.Error())
-				return fmt.Errorf("%s: %w", constants.ErrReadBulkBody, err)
+				return nil, fmt.Errorf("%s: %w", constants.ErrReadBulkBody, err)
 			}
 			buf.WriteByte('\n')
 		}
@@ -321,19 +322,19 @@ func (r *StorageRepository) BulkIndex(ctx context.Context, operations []contract
 
 	req := opensearchapi.BulkRequest{
 		Body:    &buf,
-		Refresh: constants.RefreshFalse,
+		Refresh: refreshValue(ctx),
 	}
 
 	res, err := req.Do(ctx, r.client)
 	if err != nil {
 		logger.Error("Failed to execute bulk request", "error", err.Error(), "body_size", buf.Len())
-		return fmt.Errorf("%s: %w", constants.ErrBulkOperation, err)
+		return nil, fmt.Errorf("%s: %w", constants.ErrBulkOperation, err)
 	}
 	defer func() { _ = res.Body.Close() }()
 
 	if res.IsError() {
 		logger.Error("Bulk request failed", "status", res.Status(), "body_size", buf.Len())
-		return fmt.Errorf("%s: %s", constants.ErrBulkOperation, res.Status())
+		return nil, fmt.Errorf("%s: %s", constants.ErrBulkOperation, res.Status())
 	}
 
 	// Parse the response to check for individual operation errors
@@ -347,18 +348,25 @@ func (r *StorageRepository) BulkIndex(ctx context.Context, operations []contract
 
 	if err := json.NewDecoder(res.Body).Decode(&bulkResponse); err != nil {
 		logger.Error("Failed to decode bulk response", "error", err.Error())
-		return fmt.Errorf("%s: %w", constants.ErrDecodeBulkResponse, err)
+		return nil, fmt.Errorf("%s: %w", constants.ErrDecodeBulkResponse, err)
 	}
 
+	// Items are returned in the same order as the operations that were sent.
+	itemErrors := make([]error, len(operations))
 	if bulkResponse.Errors {
 		var successCount, errorCount int
-		for _, item := range bulkResponse.Items {
+		for i, item := range bulkResponse.Items {
+			if i >= len(itemErrors) {
+				break
+			}
 			for _, op := range item {
 				if op.Status >= 400 {
 					errorCount++
+					itemErrors[i] = fmt.Errorf("bulk operation failed with status %d: %s", op.Status, op.Error)
 					logger.Warn("Bulk operation item failed",
 						"status", op.Status,
-						"error", op.Error)
+						"error", op.Error,
+						"document_id", operations[i].DocID)
 				} else {
 					successCount++
 				}
@@ -366,14 +374,24 @@ func (r *StorageRepository) BulkIndex(ctx context.Context, operations []contract
 		}
 
 		logger.Error("Bulk operation completed with errors", "error_count", errorCount, "success_count", successCount)
-		return fmt.Errorf("bulk operation completed with %d errors", errorCount)
 	}
 
-	logger.Debug("Bulk index operation completed successfully",
+	if len(bulkResponse.Items) != len(operations) {
+		// OpenSearch is documented to return exactly one item per bulk action,
+		// in order. If it ever returns fewer, the missing trailing slots would
+		// otherwise stay nil and read as silent successes.
+		logger.Error("Bulk response item count did not match request",
+			"requested", len(operations), "returned", len(bulkResponse.Items))
+		for i := len(bulkResponse.Items); i < len(itemErrors); i++ {
+			itemErrors[i] = fmt.Errorf("%s: no result item returned for this operation", constants.ErrBulkOperation)
+		}
+	}
+
+	logger.Debug("Bulk index operation completed",
 		"operations_processed", len(operations),
 		"body_size", buf.Len(),
 		"status", res.Status())
-	return nil
+	return itemErrors, nil
 }
 
 // UpdateWithOptimisticLock updates a document with optimistic concurrency control

@@ -81,7 +81,7 @@ func TestTraceContextInjection(t *testing.T) {
 	logger := logging.NewLogger(true)
 	repo := NewMessagingRepository(conn, nil, logger, 5*time.Second,
 		constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit,
-		constants.DefaultWorkerCount)
+		constants.DefaultWorkerCount, constants.DefaultAckWait)
 	defer func() { _ = repo.Close() }()
 
 	ctx := context.Background()
@@ -135,7 +135,7 @@ func TestTraceContextExtraction(t *testing.T) {
 	logger := logging.NewLogger(true)
 	repo := NewMessagingRepository(conn, nil, logger, 5*time.Second,
 		constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit,
-		constants.DefaultWorkerCount)
+		constants.DefaultWorkerCount, constants.DefaultAckWait)
 	defer func() { _ = repo.Close() }()
 
 	ctx := context.Background()
@@ -204,7 +204,7 @@ func TestTraceContextPreservation(t *testing.T) {
 	logger := logging.NewLogger(true)
 	repo := NewMessagingRepository(conn, nil, logger, 5*time.Second,
 		constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit,
-		constants.DefaultWorkerCount)
+		constants.DefaultWorkerCount, constants.DefaultAckWait)
 	defer func() { _ = repo.Close() }()
 
 	t.Run("subscribe_preserves_context_deadline", func(t *testing.T) {
@@ -276,7 +276,7 @@ func TestReplyPublishTraceContext(t *testing.T) {
 	logger := logging.NewLogger(true)
 	repo := NewMessagingRepository(conn, nil, logger, 5*time.Second,
 		constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit,
-		constants.DefaultWorkerCount)
+		constants.DefaultWorkerCount, constants.DefaultAckWait)
 	defer func() { _ = repo.Close() }()
 
 	ctx := context.Background()

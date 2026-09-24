@@ -94,4 +94,5 @@ const (
 	DefaultPendingMsgLimit   = 1_000_000         // Maximum pending messages per subscription; tune down for memory-constrained deployments.
 	DefaultPendingBytesLimit = 512 * 1024 * 1024 // Maximum pending bytes per subscription (512 MiB); tune based on aggregate process memory budget.
 	DefaultWorkerCount       = 100               // concurrent message handlers
+	DefaultAckWait           = 40 * time.Second  // fallback only; production AckWait is derived from OpenSearch.Timeout in config
 )
