@@ -310,6 +310,37 @@ func TestBulkIndex_PartialFailure(t *testing.T) {
 	assert.Error(t, itemErrors[1])
 }
 
+func TestBulkIndex_FewerItemsThanRequestedAreReportedAsErrors(t *testing.T) {
+	// Only one item returned for two requested operations.
+	bulkRespBody := `{
+		"errors": false,
+		"items": [
+			{"index": {"status": 201}}
+		]
+	}`
+
+	client, err := opensearch.NewClient(opensearch.Config{
+		Addresses: []string{"http://localhost:9200"},
+		Transport: &mockTransport{statusCode: 200, body: bulkRespBody},
+	})
+	require.NoError(t, err)
+
+	logger := setupTestLogger(t)
+	repo := NewStorageRepository(client, logger)
+
+	operations := []contracts.BulkOperation{
+		{Action: "index", Index: "test-index", DocID: "doc-1", Body: strings.NewReader(`{"field":"a"}`)},
+		{Action: "index", Index: "test-index", DocID: "doc-2", Body: strings.NewReader(`{"field":"b"}`)},
+	}
+
+	itemErrors, err := repo.BulkIndex(context.Background(), operations)
+
+	require.NoError(t, err)
+	require.Len(t, itemErrors, 2)
+	assert.NoError(t, itemErrors[0])
+	assert.Error(t, itemErrors[1], "the missing trailing item must not read as a silent success")
+}
+
 func TestIndex_LogsStructuredErrorOn400(t *testing.T) {
 	osErrBody := `{"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [data.system_updated_at]"},"status":400}`
 

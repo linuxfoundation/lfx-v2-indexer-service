@@ -376,6 +376,17 @@ func (r *StorageRepository) BulkIndex(ctx context.Context, operations []contract
 		logger.Error("Bulk operation completed with errors", "error_count", errorCount, "success_count", successCount)
 	}
 
+	if len(bulkResponse.Items) != len(operations) {
+		// OpenSearch is documented to return exactly one item per bulk action,
+		// in order. If it ever returns fewer, the missing trailing slots would
+		// otherwise stay nil and read as silent successes.
+		logger.Error("Bulk response item count did not match request",
+			"requested", len(operations), "returned", len(bulkResponse.Items))
+		for i := len(bulkResponse.Items); i < len(itemErrors); i++ {
+			itemErrors[i] = fmt.Errorf("%s: no result item returned for this operation", constants.ErrBulkOperation)
+		}
+	}
+
 	logger.Debug("Bulk index operation completed",
 		"operations_processed", len(operations),
 		"body_size", buf.Len(),
