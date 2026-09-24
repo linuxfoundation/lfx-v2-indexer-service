@@ -41,9 +41,10 @@ type BatchIndexer struct {
 	maxWait      time.Duration
 	flushTimeout time.Duration
 
-	mu      sync.Mutex
-	pending []pendingIndexOp
-	timer   *time.Timer
+	mu           sync.Mutex
+	pending      []pendingIndexOp
+	timer        *time.Timer
+	needsRefresh bool // set if any queued op's caller is waiting on refresh=wait_for
 }
 
 // NewBatchIndexer creates a BatchIndexer wrapping repo. maxBatchSize and
@@ -72,6 +73,10 @@ func (b *BatchIndexer) Index(ctx context.Context, index string, docID string, bo
 		return err
 	}
 
+	// logging.NeedsRefreshWaitFor must be read from the caller's own ctx here,
+	// before flush replaces it with its own detached context.
+	needsRefresh := logging.NeedsRefreshWaitFor(ctx)
+
 	resultCh := make(chan error, 1)
 	b.enqueue(pendingIndexOp{
 		op: contracts.BulkOperation{
@@ -81,7 +86,7 @@ func (b *BatchIndexer) Index(ctx context.Context, index string, docID string, bo
 			Body:   bytes.NewReader(bodyBytes),
 		},
 		result: resultCh,
-	})
+	}, needsRefresh)
 
 	select {
 	case err := <-resultCh:
@@ -92,11 +97,17 @@ func (b *BatchIndexer) Index(ctx context.Context, index string, docID string, bo
 }
 
 // enqueue adds op to the current batch, starting the flush timer if this is
-// the first operation in a new batch, and flushing immediately (off the
-// caller's goroutine) if the batch is now full.
-func (b *BatchIndexer) enqueue(op pendingIndexOp) {
+// the first operation in a new batch, and flushing immediately (on the
+// caller's own goroutine, which then pays for the round trip on behalf of
+// the rest of the batch) if the batch is now full. needsRefresh marks the
+// whole batch as needing refresh=wait_for if this op's caller does, since
+// the underlying bulk request's refresh mode is per-request, not per-item.
+func (b *BatchIndexer) enqueue(op pendingIndexOp, needsRefresh bool) {
 	b.mu.Lock()
 	b.pending = append(b.pending, op)
+	if needsRefresh {
+		b.needsRefresh = true
+	}
 
 	if len(b.pending) == 1 {
 		b.timer = time.AfterFunc(b.maxWait, b.flush)
@@ -121,7 +132,9 @@ func (b *BatchIndexer) flush() {
 		b.timer = nil
 	}
 	batch := b.pending
+	needsRefresh := b.needsRefresh
 	b.pending = nil
+	b.needsRefresh = false
 	b.mu.Unlock()
 
 	if len(batch) == 0 {
@@ -135,6 +148,9 @@ func (b *BatchIndexer) flush() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), b.flushTimeout)
 	defer cancel()
+	if needsRefresh {
+		ctx = logging.WithRefreshWaitFor(ctx)
+	}
 
 	itemErrors, err := b.repo.BulkIndex(ctx, ops)
 	if err != nil {

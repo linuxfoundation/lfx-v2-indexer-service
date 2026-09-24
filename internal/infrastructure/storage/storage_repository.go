@@ -322,7 +322,7 @@ func (r *StorageRepository) BulkIndex(ctx context.Context, operations []contract
 
 	req := opensearchapi.BulkRequest{
 		Body:    &buf,
-		Refresh: constants.RefreshFalse,
+		Refresh: refreshValue(ctx),
 	}
 
 	res, err := req.Do(ctx, r.client)

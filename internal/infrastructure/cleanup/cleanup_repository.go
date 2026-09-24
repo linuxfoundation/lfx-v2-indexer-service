@@ -237,6 +237,10 @@ func (j *CleanupRepository) processItem(ctx context.Context, objectRef *string) 
 	// resolution below actually reads.
 	query := map[string]any{
 		"size": janitorMaxDuplicates,
+		// Sort so that if there are more than janitorMaxDuplicates hits, the
+		// truncated set still keeps the most-recently-updated documents —
+		// including the actual winner, since a delete also bumps updated_at.
+		"sort":    []map[string]any{{"updated_at": "desc"}},
 		"_source": []string{"created_at", "updated_at", "deleted_at"},
 		"query": map[string]any{
 			"bool": map[string]any{

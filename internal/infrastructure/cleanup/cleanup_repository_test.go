@@ -90,6 +90,7 @@ func TestCleanupRepository_CheckItem(t *testing.T) {
 	// Set up mock expectations
 	expectedQuery := map[string]any{
 		"size":    janitorMaxDuplicates,
+		"sort":    []map[string]any{{"updated_at": "desc"}},
 		"_source": []string{"created_at", "updated_at", "deleted_at"},
 		"query": map[string]any{
 			"bool": map[string]any{
@@ -164,6 +165,7 @@ func TestCleanupRepository_ProcessMultipleHits(t *testing.T) {
 
 	expectedQuery := map[string]any{
 		"size":    janitorMaxDuplicates,
+		"sort":    []map[string]any{{"updated_at": "desc"}},
 		"_source": []string{"created_at", "updated_at", "deleted_at"},
 		"query": map[string]any{
 			"bool": map[string]any{
@@ -248,6 +250,7 @@ func TestCleanupRepository_ProcessVersionConflict(t *testing.T) {
 
 	expectedQuery := map[string]any{
 		"size":    janitorMaxDuplicates,
+		"sort":    []map[string]any{{"updated_at": "desc"}},
 		"_source": []string{"created_at", "updated_at", "deleted_at"},
 		"query": map[string]any{
 			"bool": map[string]any{
@@ -303,6 +306,7 @@ func TestCleanupRepository_ProcessWithMarshalError(t *testing.T) {
 
 	expectedQuery := map[string]any{
 		"size":    janitorMaxDuplicates,
+		"sort":    []map[string]any{{"updated_at": "desc"}},
 		"_source": []string{"created_at", "updated_at", "deleted_at"},
 		"query": map[string]any{
 			"bool": map[string]any{

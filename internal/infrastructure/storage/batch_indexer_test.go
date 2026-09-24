@@ -15,14 +15,16 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
 )
 
 // fakeBulkIndexer is a test double for bulkIndexer that records every call
 // and lets tests control the returned itemErrors/err per call.
 type fakeBulkIndexer struct {
-	mu      sync.Mutex
-	calls   [][]contracts.BulkOperation
-	ctxErrs []error // ctx.Err() captured at call time, before flush's defer cancel() fires
+	mu            sync.Mutex
+	calls         [][]contracts.BulkOperation
+	ctxErrs       []error // ctx.Err() captured at call time, before flush's defer cancel() fires
+	neededRefresh []bool
 
 	itemErrorsFn func(ops []contracts.BulkOperation) []error
 	err          error
@@ -32,6 +34,7 @@ func (f *fakeBulkIndexer) BulkIndex(ctx context.Context, operations []contracts.
 	f.mu.Lock()
 	f.calls = append(f.calls, operations)
 	f.ctxErrs = append(f.ctxErrs, ctx.Err())
+	f.neededRefresh = append(f.neededRefresh, logging.NeedsRefreshWaitFor(ctx))
 	f.mu.Unlock()
 
 	if f.err != nil {
@@ -149,6 +152,42 @@ func TestBatchIndexer_CallerContextCancellation(t *testing.T) {
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, context.Canceled)
+}
+
+func TestBatchIndexer_RefreshWaitForPropagatesToWholeBatch(t *testing.T) {
+	logger := setupTestLogger(t)
+	fake := &fakeBulkIndexer{}
+	b := NewBatchIndexer(fake, logger, 2, time.Hour, 5*time.Second)
+
+	var wg sync.WaitGroup
+	// Only one of the two batched callers needs refresh=wait_for; the whole
+	// bulk request must still use it, since refresh is per-request, not per-item.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_ = b.Index(context.Background(), "test-index", "doc-no-wait", strings.NewReader(`{}`))
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ctx := logging.WithRefreshWaitFor(context.Background())
+		_ = b.Index(ctx, "test-index", "doc-waits", strings.NewReader(`{}`))
+	}()
+	wg.Wait()
+
+	require.Equal(t, 1, fake.callCount())
+	assert.True(t, fake.neededRefresh[0], "batch containing a wait_for caller must flush with refresh=wait_for")
+}
+
+func TestBatchIndexer_NoRefreshWaitForWhenNoCallerNeedsIt(t *testing.T) {
+	logger := setupTestLogger(t)
+	fake := &fakeBulkIndexer{}
+	b := NewBatchIndexer(fake, logger, 1, time.Hour, 5*time.Second)
+
+	_ = b.Index(context.Background(), "test-index", "doc-1", strings.NewReader(`{}`))
+
+	require.Equal(t, 1, fake.callCount())
+	assert.False(t, fake.neededRefresh[0])
 }
 
 func TestBatchIndexer_FlushUsesTimeoutNotCallerContext(t *testing.T) {
