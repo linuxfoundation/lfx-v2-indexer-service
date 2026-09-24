@@ -168,12 +168,14 @@ func LoadConfig() (*AppConfig, error) {
 		},
 	}
 
-	// AckWait must exceed OpenSearch.Timeout so a slow-but-in-flight OpenSearch
-	// call never causes JetStream to redeliver the message out from under it.
-	// A zero/unset NATS_ACK_WAIT derives the default from OpenSearch.Timeout
-	// plus a fixed margin, decoupling the two instead of hardcoding both to 30s.
+	// AckWait must exceed the worst-case time a message can spend in flight:
+	// queued in the BatchIndexer for up to BatchMaxWait, then the bulk flush
+	// itself for up to OpenSearch.Timeout. Otherwise JetStream can redeliver
+	// the message out from under a still-in-flight OpenSearch call. A
+	// zero/unset NATS_ACK_WAIT derives the default from that worst case plus
+	// a fixed margin, decoupling the two instead of hardcoding both to 30s.
 	if config.NATS.AckWait <= 0 {
-		config.NATS.AckWait = config.OpenSearch.Timeout + 10*time.Second
+		config.NATS.AckWait = config.OpenSearch.Timeout + config.OpenSearch.BatchMaxWait + 10*time.Second
 		defaultsUsed["NATS_ACK_WAIT"] = true
 	}
 
@@ -282,8 +284,13 @@ func (c *AppConfig) validateNATS() error {
 		return fmt.Errorf("NATS worker count must be positive, got: %d", c.NATS.WorkerCount)
 	}
 
-	if c.NATS.AckWait <= c.OpenSearch.Timeout {
-		return fmt.Errorf("NATS ack wait (%v) must exceed OpenSearch timeout (%v)", c.NATS.AckWait, c.OpenSearch.Timeout)
+	// A message can wait up to BatchMaxWait queued in the BatchIndexer before
+	// its flush even starts, then up to OpenSearch.Timeout for the flush
+	// itself — AckWait must exceed that combined worst case, not just the
+	// OpenSearch call in isolation.
+	maxInFlight := c.OpenSearch.Timeout + c.OpenSearch.BatchMaxWait
+	if c.NATS.AckWait <= maxInFlight {
+		return fmt.Errorf("NATS ack wait (%v) must exceed OpenSearch timeout plus batch max wait (%v)", c.NATS.AckWait, maxInFlight)
 	}
 
 	return nil

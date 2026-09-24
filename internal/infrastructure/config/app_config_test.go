@@ -107,6 +107,21 @@ func TestValidateNATS_AckWait(t *testing.T) {
 	}
 }
 
+func TestValidateNATS_AckWait_AccountsForBatchMaxWait(t *testing.T) {
+	// baseValidConfig has OpenSearch.Timeout=30s; with BatchMaxWait raised
+	// to 5s, an AckWait of 34s clears the old Timeout-only bound but not
+	// the combined Timeout+BatchMaxWait bound, and must still be rejected.
+	cfg := baseValidConfig()
+	cfg.OpenSearch.BatchMaxWait = 5 * time.Second
+	cfg.NATS.AckWait = 34 * time.Second
+
+	err := cfg.validateNATS()
+	assert.Error(t, err, "ack wait must exceed OpenSearch timeout plus batch max wait, not just the timeout")
+
+	cfg.NATS.AckWait = 36 * time.Second
+	assert.NoError(t, cfg.validateNATS())
+}
+
 func TestValidateOpenSearch_Timeout(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -190,4 +205,15 @@ func TestLoadConfig_NATSMaxReconnectsDefault(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, -1, cfg.NATS.MaxReconnects,
 		"NATS_MAX_RECONNECTS should default to -1 (infinite) when unset")
+}
+
+func TestLoadConfig_AckWaitDefaultIncludesBatchMaxWait(t *testing.T) {
+	t.Setenv("NATS_ACK_WAIT", "")
+	t.Setenv("OPENSEARCH_TIMEOUT", "30s")
+	t.Setenv("OPENSEARCH_BATCH_MAX_WAIT", "5s")
+
+	cfg, err := LoadConfig()
+	require.NoError(t, err)
+	assert.Equal(t, 45*time.Second, cfg.NATS.AckWait,
+		"default ack wait should be OpenSearch.Timeout + BatchMaxWait + 10s margin")
 }
