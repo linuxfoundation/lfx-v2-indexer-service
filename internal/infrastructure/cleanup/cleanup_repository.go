@@ -238,9 +238,17 @@ func (j *CleanupRepository) processItem(ctx context.Context, objectRef *string) 
 	query := map[string]any{
 		"size": janitorMaxDuplicates,
 		// Sort so that if there are more than janitorMaxDuplicates hits, the
-		// truncated set still keeps the most-recently-updated documents —
-		// including the actual winner, since a delete also bumps updated_at.
-		"sort":    []map[string]any{{"updated_at": "desc"}},
+		// truncated set still keeps the actual winner. A delete only sets
+		// deleted_at, not updated_at (see indexer_service.go's ActionDeleted
+		// handling), so sorting on updated_at alone can push a tombstone
+		// outside the cap while a live document with a newer updated_at
+		// stays in. Sort documents that have deleted_at first — matching
+		// the deletion-priority rule below — then break ties by updated_at
+		// so the normal (no-deletion) case still keeps the most recent hits.
+		"sort": []map[string]any{
+			{"deleted_at": map[string]any{"order": "desc", "missing": "_last"}},
+			{"updated_at": "desc"},
+		},
 		"_source": []string{"created_at", "updated_at", "deleted_at"},
 		"query": map[string]any{
 			"bool": map[string]any{

@@ -97,14 +97,24 @@ func (b *BatchIndexer) Index(ctx context.Context, index string, docID string, bo
 }
 
 // enqueue adds op to the current batch, starting the flush timer if this is
-// the first operation in a new batch, and flushing immediately on its own
-// goroutine (same as a timer-triggered flush, not the goroutine of whichever
-// caller happened to fill the batch) if the batch is now full. Flushing on a
-// separate goroutine lets every caller's Index race its own ctx.Done() against
-// the flush the same way, rather than the batch-filling caller being blocked
-// on the round trip regardless of its own context's deadline. needsRefresh
-// marks the whole batch as needing refresh=wait_for if this op's caller does,
-// since the underlying bulk request's refresh mode is per-request, not per-item.
+// the first operation in a new batch. If op fills the batch to maxBatchSize,
+// enqueue claims the batch itself — atomically, under the same lock
+// acquisition that observed the batch was full — and dispatches it on its
+// own goroutine (same as a timer-triggered flush, not the goroutine of
+// whichever caller happened to fill the batch). Claiming the batch here
+// rather than merely signaling "go flush" prevents a race where multiple
+// concurrent enqueue calls each observe a full batch and each schedule a
+// flush goroutine: since none of those goroutines would otherwise claim
+// their batch until they actually run, a late one can drain whatever batch
+// happens to be pending by then — including a brand new one that hasn't
+// reached maxBatchSize yet — flushing it prematurely and defeating both the
+// size bound and the wait-based coalescing. Flushing on a separate goroutine
+// (rather than inline here) still lets every caller's Index race its own
+// ctx.Done() against the flush the same way, rather than the batch-filling
+// caller being blocked on the round trip regardless of its own context's
+// deadline. needsRefresh marks the whole batch as needing refresh=wait_for
+// if this op's caller does, since the underlying bulk request's refresh mode
+// is per-request, not per-item.
 func (b *BatchIndexer) enqueue(op pendingIndexOp, needsRefresh bool) {
 	b.mu.Lock()
 	b.pending = append(b.pending, op)
@@ -116,20 +126,22 @@ func (b *BatchIndexer) enqueue(op pendingIndexOp, needsRefresh bool) {
 		b.timer = time.AfterFunc(b.maxWait, b.flush)
 	}
 
-	full := len(b.pending) >= b.maxBatchSize
+	var batch []pendingIndexOp
+	var batchNeedsRefresh bool
+	if len(b.pending) >= b.maxBatchSize {
+		batch, batchNeedsRefresh = b.drainLocked()
+	}
 	b.mu.Unlock()
 
-	if full {
-		go b.flush()
+	if batch != nil {
+		go b.flushBatch(batch, batchNeedsRefresh)
 	}
 }
 
-// flush sends the current batch to OpenSearch as a single bulk request and
-// delivers each operation's individual result back to its caller. Safe to
-// call concurrently (from the timer and from enqueue on a full batch) —
-// only the goroutine that actually drains a non-empty batch does the work.
-func (b *BatchIndexer) flush() {
-	b.mu.Lock()
+// drainLocked stops any pending flush timer and takes ownership of the
+// current batch, resetting BatchIndexer's state for the next one. b.mu must
+// be held by the caller.
+func (b *BatchIndexer) drainLocked() ([]pendingIndexOp, bool) {
 	if b.timer != nil {
 		b.timer.Stop()
 		b.timer = nil
@@ -138,8 +150,24 @@ func (b *BatchIndexer) flush() {
 	needsRefresh := b.needsRefresh
 	b.pending = nil
 	b.needsRefresh = false
-	b.mu.Unlock()
+	return batch, needsRefresh
+}
 
+// flush is the maxWait timer's callback: it claims whatever batch is
+// currently pending and flushes it. enqueue claims and flushes a
+// size-triggered batch itself rather than calling flush, so batch ownership
+// is always claimed atomically under the same lock acquisition that
+// detected the triggering condition (see enqueue).
+func (b *BatchIndexer) flush() {
+	b.mu.Lock()
+	batch, needsRefresh := b.drainLocked()
+	b.mu.Unlock()
+	b.flushBatch(batch, needsRefresh)
+}
+
+// flushBatch sends batch to OpenSearch as a single bulk request and delivers
+// each operation's individual result back to its caller.
+func (b *BatchIndexer) flushBatch(batch []pendingIndexOp, needsRefresh bool) {
 	if len(batch) == 0 {
 		return
 	}

@@ -16,6 +16,11 @@ import (
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 )
 
+// ackWaitSafetyMargin is added on top of OpenSearch.Timeout + OpenSearch.BatchMaxWait
+// both when deriving the default NATS AckWait and when validating an
+// explicitly-set one, so the two stay consistent with each other.
+const ackWaitSafetyMargin = 10 * time.Second
+
 // AppConfig represents the application configuration
 type AppConfig struct {
 	Server     ServerConfig     `json:"server"`
@@ -171,11 +176,16 @@ func LoadConfig() (*AppConfig, error) {
 	// AckWait must exceed the worst-case time a message can spend in flight:
 	// queued in the BatchIndexer for up to BatchMaxWait, then the bulk flush
 	// itself for up to OpenSearch.Timeout. Otherwise JetStream can redeliver
-	// the message out from under a still-in-flight OpenSearch call. A
-	// zero/unset NATS_ACK_WAIT derives the default from that worst case plus
-	// a fixed margin, decoupling the two instead of hardcoding both to 30s.
-	if config.NATS.AckWait <= 0 {
-		config.NATS.AckWait = config.OpenSearch.Timeout + config.OpenSearch.BatchMaxWait + 10*time.Second
+	// the message out from under a still-in-flight OpenSearch call. An
+	// unset/zero NATS_ACK_WAIT derives the default from that worst case plus
+	// ackWaitSafetyMargin, decoupling the two instead of hardcoding both to
+	// 30s. A negative value is rejected outright rather than silently
+	// defaulted, since that would mask an operator misconfiguration.
+	switch {
+	case config.NATS.AckWait < 0:
+		return nil, fmt.Errorf("NATS_ACK_WAIT must not be negative, got: %v", config.NATS.AckWait)
+	case config.NATS.AckWait == 0:
+		config.NATS.AckWait = config.OpenSearch.Timeout + config.OpenSearch.BatchMaxWait + ackWaitSafetyMargin
 		defaultsUsed["NATS_ACK_WAIT"] = true
 	}
 
@@ -286,11 +296,13 @@ func (c *AppConfig) validateNATS() error {
 
 	// A message can wait up to BatchMaxWait queued in the BatchIndexer before
 	// its flush even starts, then up to OpenSearch.Timeout for the flush
-	// itself — AckWait must exceed that combined worst case, not just the
-	// OpenSearch call in isolation.
-	maxInFlight := c.OpenSearch.Timeout + c.OpenSearch.BatchMaxWait
-	if c.NATS.AckWait <= maxInFlight {
-		return fmt.Errorf("NATS ack wait (%v) must exceed OpenSearch timeout plus batch max wait (%v)", c.NATS.AckWait, maxInFlight)
+	// itself — AckWait must exceed that combined worst case by at least
+	// ackWaitSafetyMargin, the same margin the derived default applies, so
+	// an explicitly-set AckWait can't pass validation with a margin thinner
+	// than what LoadConfig would have chosen itself.
+	minAckWait := c.OpenSearch.Timeout + c.OpenSearch.BatchMaxWait + ackWaitSafetyMargin
+	if c.NATS.AckWait <= minAckWait {
+		return fmt.Errorf("NATS ack wait (%v) must exceed OpenSearch timeout plus batch max wait plus safety margin (%v)", c.NATS.AckWait, minAckWait)
 	}
 
 	return nil

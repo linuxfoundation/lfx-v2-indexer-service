@@ -857,9 +857,15 @@ func (r *MessagingRepository) ConsumeWithJetStream(
 		// nakDelay caps at 1s, 2s, 4s, 8s — the 5-min ceiling needs delivery ≥10).
 		// After 5 attempts JetStream stops redelivering to this consumer; the
 		// stream message stays until maxAge/maxBytes eviction (not deleted).
-		MaxDeliver:    5,
-		AckWait:       r.ackWait,
-		MaxAckPending: 100,
+		MaxDeliver: 5,
+		AckWait:    r.ackWait,
+		// Bound outstanding deliveries to worker capacity (cap(r.sem)) rather
+		// than a fixed count: a delivered message blocks at r.sem <- struct{}{}
+		// until a worker is free, and its AckWait timer runs the whole time it
+		// waits. Letting JetStream deliver more messages than there are workers
+		// to pick them up lets a message sit queued behind AckWait's clock and
+		// get redelivered before its handler even starts.
+		MaxAckPending: cap(r.sem),
 		// DeliverAllPolicy (the default) is intentionally used here rather than
 		// DeliverNewPolicy. DeliverNewPolicy would skip any messages that landed
 		// in the stream between stream-CRD creation and pod startup — a real loss

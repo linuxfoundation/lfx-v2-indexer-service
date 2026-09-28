@@ -337,12 +337,17 @@ func (r *StorageRepository) BulkIndex(ctx context.Context, operations []contract
 		return nil, fmt.Errorf("%s: %s", constants.ErrBulkOperation, res.Status())
 	}
 
-	// Parse the response to check for individual operation errors
+	// Parse the response to check for individual operation errors. OpenSearch
+	// encodes a per-item error as an object ({"type": ..., "reason": ...}),
+	// the same shape Index (above) already parses — not a string.
 	var bulkResponse struct {
 		Errors bool `json:"errors"`
 		Items  []map[string]struct {
-			Status int    `json:"status"`
-			Error  string `json:"error,omitempty"`
+			Status int `json:"status"`
+			Error  *struct {
+				Type   string `json:"type"`
+				Reason string `json:"reason"`
+			} `json:"error,omitempty"`
 		} `json:"items"`
 	}
 
@@ -362,10 +367,17 @@ func (r *StorageRepository) BulkIndex(ctx context.Context, operations []contract
 			for _, op := range item {
 				if op.Status >= 400 {
 					errorCount++
-					itemErrors[i] = fmt.Errorf("bulk operation failed with status %d: %s", op.Status, op.Error)
+					errType, errReason := "unknown", "unknown"
+					if op.Error != nil {
+						errType = op.Error.Type
+						errReason = op.Error.Reason
+					}
+					itemErrors[i] = fmt.Errorf("bulk operation failed for document %s with status %d: %s: %s",
+						operations[i].DocID, op.Status, errType, errReason)
 					logger.Warn("Bulk operation item failed",
 						"status", op.Status,
-						"error", op.Error,
+						"error_type", errType,
+						"error_reason", errReason,
 						"document_id", operations[i].DocID)
 				} else {
 					successCount++

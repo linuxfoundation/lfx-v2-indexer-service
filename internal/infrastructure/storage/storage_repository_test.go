@@ -284,7 +284,7 @@ func TestBulkIndex_PartialFailure(t *testing.T) {
 		"errors": true,
 		"items": [
 			{"index": {"status": 201}},
-			{"index": {"status": 400, "error": "mapper_parsing_exception"}}
+			{"index": {"status": 400, "error": {"type": "mapper_parsing_exception", "reason": "failed to parse"}}}
 		]
 	}`
 
@@ -307,7 +307,9 @@ func TestBulkIndex_PartialFailure(t *testing.T) {
 	require.NoError(t, err, "top-level err is reserved for request-level failures, not per-item ones")
 	require.Len(t, itemErrors, 2)
 	assert.NoError(t, itemErrors[0])
-	assert.Error(t, itemErrors[1])
+	require.Error(t, itemErrors[1])
+	assert.ErrorContains(t, itemErrors[1], "mapper_parsing_exception")
+	assert.ErrorContains(t, itemErrors[1], "failed to parse")
 }
 
 func TestBulkIndex_FewerItemsThanRequestedAreReportedAsErrors(t *testing.T) {

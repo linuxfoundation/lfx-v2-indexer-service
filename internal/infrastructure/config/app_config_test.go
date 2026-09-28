@@ -31,7 +31,9 @@ func baseValidConfig() *AppConfig {
 			PendingMsgLimit:   1024,
 			PendingBytesLimit: 1024 * 1024,
 			WorkerCount:       10,
-			AckWait:           40 * time.Second,
+			// Must exceed OpenSearch.Timeout (30s) + OpenSearch.BatchMaxWait
+			// (200ms) + ackWaitSafetyMargin (10s) = 40.2s.
+			AckWait: 45 * time.Second,
 		},
 		OpenSearch: OpenSearchConfig{
 			URL:          "http://opensearch:9200",
@@ -91,7 +93,8 @@ func TestValidateNATS_AckWait(t *testing.T) {
 	}{
 		{"ack wait below opensearch timeout is rejected", 20 * time.Second, true},
 		{"ack wait equal to opensearch timeout is rejected", 30 * time.Second, true},
-		{"ack wait above opensearch timeout is allowed", 40 * time.Second, false},
+		{"ack wait above timeout but within safety margin is rejected", 40 * time.Second, true},
+		{"ack wait above timeout plus safety margin is allowed", 41 * time.Second, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -118,7 +121,12 @@ func TestValidateNATS_AckWait_AccountsForBatchMaxWait(t *testing.T) {
 	err := cfg.validateNATS()
 	assert.Error(t, err, "ack wait must exceed OpenSearch timeout plus batch max wait, not just the timeout")
 
-	cfg.NATS.AckWait = 36 * time.Second
+	// 44s clears Timeout+BatchMaxWait (35s) but not the +10s safety margin
+	// the derived default also applies (45s) — must still be rejected.
+	cfg.NATS.AckWait = 44 * time.Second
+	assert.Error(t, cfg.validateNATS(), "ack wait must also clear the safety margin used by the derived default")
+
+	cfg.NATS.AckWait = 46 * time.Second
 	assert.NoError(t, cfg.validateNATS())
 }
 
@@ -216,4 +224,14 @@ func TestLoadConfig_AckWaitDefaultIncludesBatchMaxWait(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 45*time.Second, cfg.NATS.AckWait,
 		"default ack wait should be OpenSearch.Timeout + BatchMaxWait + 10s margin")
+}
+
+func TestLoadConfig_NegativeAckWaitIsRejected(t *testing.T) {
+	// An operator-supplied negative NATS_ACK_WAIT must produce a config
+	// error rather than being silently replaced by the derived default.
+	t.Setenv("NATS_ACK_WAIT", "-1s")
+
+	_, err := LoadConfig()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "NATS_ACK_WAIT")
 }
