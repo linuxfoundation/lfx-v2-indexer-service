@@ -29,17 +29,18 @@ opensearch:
   auth:
     # enabled controls whether authentication is used
     enabled: false
-    # existingSecret is the name of an existing secret containing credentials
-    # The secret should have 'username' and 'password' keys
+    # existingSecret is the name of an existing secret containing credentials.
+    # Required when enabled is true; the secret must have 'username' and
+    # 'password' keys. Plaintext credentials are not accepted here to avoid
+    # committing secrets to VCS in GitOps workflows.
     existingSecret: ""
-    # username is the OpenSearch username (ignored if existingSecret is set)
-    username: ""
-    # password is the OpenSearch password (ignored if existingSecret is set)
-    password: ""
   # indexingJob is the configuration for the OpenSearch index creation job
   indexingJob:
-    # enabled is a boolean to determine if the indexing job should be created
-    enabled: true
+    # enabled is a boolean to determine if the indexing job should be created.
+    # Defaults to false because the hook Job/ConfigMap fail the Helm release
+    # if OpenSearch isn't reachable at hook execution time; enable only when
+    # OpenSearch availability is guaranteed during install/upgrade.
+    enabled: false
     # backoffLimit is the number of retries before marking the job as failed
     backoffLimit: 3
     # ttlSecondsAfterFinished is how long to keep the job after completion
@@ -51,7 +52,7 @@ opensearch:
     # image is the container image for the job
     image:
       repository: curlimages/curl
-      tag: "8.11.1"
+      tag: "8.12.0"
       pullPolicy: IfNotPresent
     # resources defines CPU and memory limits/requests for the job container
     resources:
@@ -61,6 +62,14 @@ opensearch:
       limits:
         cpu: 200m
         memory: 64Mi
+    # numberOfShards is the number_of_shards index setting used when creating
+    # the index
+    numberOfShards: 1
+    # numberOfReplicas is the number_of_replicas index setting used when
+    # creating the index. 0 is appropriate for single-node clusters; set to 1
+    # or more on multi-node clusters so a lost primary shard has a replica to
+    # promote.
+    numberOfReplicas: 0
 
 # heimdall is the configuration for the heimdall middleware
 heimdall:

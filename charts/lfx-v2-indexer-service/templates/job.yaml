@@ -34,25 +34,18 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           {{- if .Values.opensearch.auth.enabled }}
+          {{- $secretName := required "opensearch.auth.existingSecret is required when opensearch.auth.enabled is true" .Values.opensearch.auth.existingSecret }}
           env:
             - name: OPENSEARCH_USERNAME
-              {{- if .Values.opensearch.auth.existingSecret }}
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.opensearch.auth.existingSecret }}
+                  name: {{ $secretName }}
                   key: username
-              {{- else }}
-              value: {{ .Values.opensearch.auth.username | quote }}
-              {{- end }}
             - name: OPENSEARCH_PASSWORD
-              {{- if .Values.opensearch.auth.existingSecret }}
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.opensearch.auth.existingSecret }}
+                  name: {{ $secretName }}
                   key: password
-              {{- else }}
-              value: {{ .Values.opensearch.auth.password | quote }}
-              {{- end }}
           {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
