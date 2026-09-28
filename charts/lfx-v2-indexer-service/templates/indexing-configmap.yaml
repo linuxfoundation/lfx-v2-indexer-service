@@ -7,15 +7,12 @@ kind: ConfigMap
 metadata:
   name: {{ .Release.Name }}-opensearch-index-config
   namespace: {{ .Release.Namespace }}
-  annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    # Deliberately omits hook-succeeded: Helm can consider a non-Job hook
-    # resource like this ConfigMap "succeeded" as soon as it's created, and
-    # would delete it immediately, racing the hook Job (weight 1) that still
-    # needs to mount it. before-hook-creation is enough to clean up the prior
-    # release's ConfigMap before this one is (re)created.
-    "helm.sh/hook-delete-policy": before-hook-creation
-    "helm.sh/hook-weight": "0"
+  # Deliberately a normal, release-managed resource rather than a hook
+  # resource: Helm applies all normal resources before running any hooks, so
+  # this ConfigMap is guaranteed to exist before the post-install/post-upgrade
+  # index-setup Job (weight 1) mounts it, without needing hook annotations of
+  # its own. Being release-managed also means `helm uninstall` removes it,
+  # which a hook-only resource (no matching pre/post-delete hook) would not.
 data:
   resources-index.json: |
 {{- tpl (.Files.Get "files/opensearch-resources-index.json") . | nindent 4 }}
