@@ -15,5 +15,5 @@ metadata:
   # which a hook-only resource (no matching pre/post-delete hook) would not.
 data:
   resources-index.json: |
-{{- .Files.Get "files/opensearch-resources-index.json" | nindent 4 }}
+{{- tpl (.Files.Get "files/opensearch-resources-index.json") . | nindent 4 }}
 {{- end }}

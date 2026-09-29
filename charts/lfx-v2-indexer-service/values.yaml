@@ -95,6 +95,14 @@ opensearch:
       limits:
         cpu: 200m
         memory: 64Mi
+    # numberOfReplicas is the number_of_replicas index setting used when
+    # creating the index. Defaults to 1 (OpenSearch's own default) so a lost
+    # primary shard has a replica to promote in a real multi-node production
+    # cluster. Override to 0 for single-node deployments (e.g. local dev),
+    # where a replica can never be assigned and would leave the index stuck
+    # in "yellow" health. number_of_shards is left at OpenSearch's default of
+    # 1 and is not made configurable here.
+    numberOfReplicas: 1
 
 # heimdall is the configuration for the heimdall middleware
 heimdall:
