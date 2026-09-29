@@ -45,8 +45,6 @@
       "deleted_by": { "type": "keyword" },
       "deleted_by_principals": { "type": "keyword" },
       "deleted_by_emails": { "type": "keyword" },
-      "scheduled_start_time": { "type": "date" },
-      "scheduled_end_time": { "type": "date" },
       "data": {
         "type": "flat_object"
       },

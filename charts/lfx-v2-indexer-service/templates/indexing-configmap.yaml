@@ -5,7 +5,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ .Release.Name }}-opensearch-index-config
+  name: {{ include "lfx-v2-indexer-service.indexConfigMapName" . }}
   namespace: {{ .Release.Namespace }}
   # Deliberately a normal, release-managed resource rather than a hook
   # resource: Helm applies all normal resources before running any hooks, so
@@ -15,5 +15,5 @@ metadata:
   # which a hook-only resource (no matching pre/post-delete hook) would not.
 data:
   resources-index.json: |
-{{- tpl (.Files.Get "files/opensearch-resources-index.json") . | nindent 4 }}
+{{- tpl (.Files.Get "files/opensearch-resources-index.json.tpl") . | nindent 4 }}
 {{- end }}

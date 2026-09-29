@@ -6,7 +6,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ .Release.Name }}-opensearch-index-setup
+  name: {{ include "lfx-v2-indexer-service.indexJobName" . }}
   namespace: {{ .Release.Namespace }}
   annotations:
     "helm.sh/hook": post-install,post-upgrade
@@ -24,7 +24,7 @@ spec:
       volumes:
         - name: index-config
           configMap:
-            name: {{ .Release.Name }}-opensearch-index-config
+            name: {{ include "lfx-v2-indexer-service.indexConfigMapName" . }}
       containers:
         - name: curl
           image: {{ $job.image.repository }}:{{ $job.image.tag }}
@@ -65,7 +65,7 @@ spec:
               # applied, not once OpenSearch is actually accepting connections, so
               # wait for it to answer before checking/creating the index.
               for i in $(seq 1 30); do
-                curl -s -o /dev/null {{ if .Values.opensearch.auth.enabled }}-u "${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}" {{ end }}"${OPENSEARCH_URL}/" && break
+                curl -sf -o /dev/null {{ if .Values.opensearch.auth.enabled }}-u "${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}" {{ end }}"${OPENSEARCH_URL}/" && break
                 echo "waiting for opensearch at ${OPENSEARCH_URL} (${i}/30)"
                 sleep 5
               done
