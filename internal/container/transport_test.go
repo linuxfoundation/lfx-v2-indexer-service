@@ -1,0 +1,45 @@
+// Copyright The Linux Foundation and each contributor to LFX.
+// SPDX-License-Identifier: MIT
+
+package container
+
+import (
+	"errors"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	opensearchgo "github.com/opensearch-project/opensearch-go/v2"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// TestOpenSearchTransport_ResponseHeaderTimeout verifies that newOpenSearchTransport
+// (the same function used by initializeInfrastructure) fires its ResponseHeaderTimeout
+// — covering time waiting for the first response byte; body reads are not bounded.
+func TestOpenSearchTransport_ResponseHeaderTimeout(t *testing.T) {
+	// Server that accepts the connection but never writes response headers.
+	hangServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer hangServer.Close()
+
+	timeout := 150 * time.Millisecond
+	client, err := opensearchgo.NewClient(opensearchgo.Config{
+		Addresses: []string{hangServer.URL},
+		Transport: newOpenSearchTransport(timeout),
+	})
+	require.NoError(t, err)
+
+	start := time.Now()
+	_, err = client.Info()
+	elapsed := time.Since(start)
+
+	assert.Error(t, err, "expected timeout error from hanging server")
+	assert.GreaterOrEqual(t, elapsed, timeout/2, "request should not have failed before the timeout fired")
+	assert.Less(t, elapsed, 2*timeout, "request should have timed out within 2x the configured timeout")
+	var netErr net.Error
+	assert.True(t, errors.As(err, &netErr) && netErr.Timeout(), "expected a net.Error timeout, got: %v", err)
+}

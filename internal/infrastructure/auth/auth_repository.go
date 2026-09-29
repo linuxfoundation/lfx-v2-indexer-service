@@ -126,11 +126,6 @@ func (r *AuthRepository) ValidateToken(ctx context.Context, token string) (*cont
 	// Validate the token
 	validatedClaims, err := r.validator.ValidateToken(ctx, token)
 	if err != nil {
-		errorType := r.classifyAuthError(err)
-		r.logger.Error("Token validation failed",
-			"auth_id", authID,
-			"error", err.Error(),
-			"error_type", errorType)
 		return nil, fmt.Errorf("%s: %w", constants.ErrInvalidToken, err)
 	}
 
@@ -143,7 +138,7 @@ func (r *AuthRepository) ValidateToken(ctx context.Context, token string) (*cont
 		return nil, fmt.Errorf("failed to extract principal: %w", err)
 	}
 
-	r.logger.Info("Token validation completed",
+	r.logger.Debug("Token validation completed",
 		"auth_id", authID,
 		"principal", r.safePrincipalLog(principal.Principal),
 		"is_machine_user", r.isMachineUser(principal.Principal))
@@ -189,12 +184,12 @@ func (r *AuthRepository) ParsePrincipals(ctx context.Context, headers map[string
 			}
 			authorizedPrincipals = append(authorizedPrincipals, principalEntity)
 
-			if strings.HasPrefix(principal, constants.MachineUserPrefix) {
+			if r.isMachineUser(principal) {
 				isMachineUser = true
-				r.logger.Info("Machine user detected in authorization header",
+				r.logger.Debug("Machine user detected in authorization header",
 					"auth_id", authID,
 					"principal", r.safePrincipalLog(principal),
-					"machine_user_prefix", constants.MachineUserPrefix)
+					"machine_user_suffix", constants.MachineUserSuffix)
 			}
 
 			r.logger.Debug("Authorization principal parsed successfully",
@@ -276,7 +271,7 @@ func (r *AuthRepository) ParsePrincipals(ctx context.Context, headers map[string
 
 	// Authorization decision logging
 	if isMachineUser {
-		r.logger.Info("Machine user authorization: including on-behalf-of principals",
+		r.logger.Debug("Machine user authorization: including on-behalf-of principals",
 			"auth_id", authID,
 			"authorized_principals", len(authorizedPrincipals),
 			"on_behalf_of_principals", len(onBehalfOfPrincipals),
@@ -292,7 +287,7 @@ func (r *AuthRepository) ParsePrincipals(ctx context.Context, headers map[string
 			"ignored_on_behalf_of_principals", len(onBehalfOfPrincipals))
 	}
 
-	r.logger.Info("Multi-principal parsing completed",
+	r.logger.Debug("Multi-principal parsing completed",
 		"auth_id", authID,
 		"final_principals_count", len(authorizedPrincipals),
 		"is_machine_user", isMachineUser)
@@ -515,7 +510,11 @@ func (r *AuthRepository) safePrincipalLog(principal string) string {
 	if principal == "" {
 		return "<empty>"
 	}
-	// Don't log full email addresses for privacy
+	// Machine users are not personal information and should be logged in full for debugging.
+	if r.isMachineUser(principal) {
+		return principal
+	}
+	// Don't log full email addresses for privacy.
 	if strings.Contains(principal, "@") {
 		parts := strings.Split(principal, "@")
 		if len(parts) == 2 {
@@ -527,5 +526,5 @@ func (r *AuthRepository) safePrincipalLog(principal string) string {
 
 // isMachineUser checks if a principal is a machine user
 func (r *AuthRepository) isMachineUser(principal string) bool {
-	return strings.HasPrefix(principal, constants.MachineUserPrefix)
+	return len(principal) > len(constants.MachineUserSuffix) && strings.HasSuffix(principal, constants.MachineUserSuffix)
 }

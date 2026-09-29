@@ -6,8 +6,8 @@
 nats:
   # url is the URL of the NATS server
   url: nats://lfx-platform-nats.lfx.svc.cluster.local:4222
-  # maxReconnects is the maximum number of reconnection attempts
-  maxReconnects: 10
+  # maxReconnects is the maximum number of reconnection attempts. -1 means infinite (recommended for production).
+  maxReconnects: -1
   # reconnectWait is the time to wait between reconnection attempts
   reconnectWait: "2s"
   # connectionTimeout is the timeout for establishing a connection
@@ -19,12 +19,45 @@ nats:
   # drainTimeout is the timeout for draining NATS connections
   drainTimeout: "55s"
 
+  # stream_index_events persists indexing messages so the indexer-consumer
+  # can replay and retry failed deliveries.
+  # Stream subjects are derived from nats.indexingSubject and
+  # nats.v1IndexingSubject to keep them in sync with the consumer filters.
+  # Stream name is hardcoded in the template (must match
+  # constants.StreamNameIndexEvents = "index-events" in the application).
+  stream_index_events:
+    # creation controls whether the Stream CRD is provisioned by this chart
+    creation: true
+    # keep preserves the stream during helm uninstall to avoid message loss
+    keep: true
+    # storage is the storage backend for the stream
+    storage: file
+    # retention keeps messages up to maxAge
+    retention: limits
+    # maxAge bounds how long an undeliverable message stays in the stream.
+    # The consumer retries up to MaxDeliver=5 attempts (~15 s total window);
+    # messages still in the stream after that — or evicted by maxBytes —
+    # are not redelivered. Subject also to maxBytes eviction below.
+    maxAge: 24h
+    # maxBytes caps storage per stream; 10 GiB covers expected 24 h traffic
+    # with headroom. Quoted to prevent Helm from rendering as scientific notation.
+    # Adjust if average payload size or message rate changes significantly.
+    maxBytes: "10737418240"
+    # maxMsgs is unlimited; maxAge and maxBytes are the primary limits
+    maxMsgs: -1
+    # replicas matches the NATS cluster size for durability
+    replicas: 3
+    # compression reduces storage cost for JSON payloads
+    compression: s2
+
 # opensearch is the configuration for the OpenSearch server
 opensearch:
   # url is the URL of the OpenSearch server
   url: http://opensearch-cluster-master.lfx.svc.cluster.local:9200/
   # index is the index name for storing resources
   index: resources
+  # timeout is the ResponseHeaderTimeout for OpenSearch requests — covers time waiting for the first response byte; body reads are not bounded
+  timeout: "30s"
   # auth configures authentication for OpenSearch
   auth:
     # enabled controls whether authentication is used
@@ -62,14 +95,6 @@ opensearch:
       limits:
         cpu: 200m
         memory: 64Mi
-    # numberOfShards is the number_of_shards index setting used when creating
-    # the index
-    numberOfShards: 1
-    # numberOfReplicas is the number_of_replicas index setting used when
-    # creating the index. 0 is appropriate for single-node clusters; set to 1
-    # or more on multi-node clusters so a lost primary shard has a replica to
-    # promote.
-    numberOfReplicas: 0
 
 # heimdall is the configuration for the heimdall middleware
 heimdall:
@@ -134,10 +159,15 @@ app:
     # tracesExporter specifies the traces exporter: "otlp" or "none"
     # (default: "none")
     tracesExporter: "none"
-    # tracesSampleRatio specifies the sampling ratio for traces (0.0 to 1.0)
-    # A value of 1.0 means all traces are sampled, 0.5 means 50% are sampled
-    # (default: "1.0")
-    tracesSampleRatio: "1.0"
+    # tracesSampler specifies the OTEL_TRACES_SAMPLER type. Supported values:
+    # "always_on", "always_off", "traceidratio", "parentbased_always_on",
+    # "parentbased_always_off", "parentbased_traceidratio".
+    # When empty, the application defaults to parentbased_traceidratio.
+    tracesSampler: ""
+    # tracesSamplerArg specifies the OTEL_TRACES_SAMPLER_ARG (sampler ratio or parent_sampler_arg).
+    # Used by "traceidratio" and "parentbased_traceidratio" samplers (defaults to 1.0 if empty).
+    # (default: "")
+    tracesSamplerArg: ""
     # metricsExporter specifies the metrics exporter: "otlp" or "none"
     # (default: "none")
     metricsExporter: "none"
@@ -148,6 +178,11 @@ app:
     # Supported values: "tracecontext", "baggage", "jaeger"
     # (default: "tracecontext,baggage")
     propagators: "tracecontext,baggage,jaeger"
+
+# annotations are additional annotations applied to the Deployment itself.
+# Example:
+#   reloader.stakater.com/auto: "true"
+annotations: {}
 
 # podAnnotations are additional annotations applied to the pod template.
 # Example:
@@ -167,6 +202,16 @@ podDisruptionBudget:
   enabled: false
   # minAvailable: 1
   # maxUnavailable: 1
+
+# topologySpreadConstraints controls how pods are spread across nodes/zones.
+# Empty by default (no constraints). Example:
+#   - maxSkew: 1
+#     topologyKey: kubernetes.io/hostname
+#     whenUnsatisfiable: DoNotSchedule
+#     labelSelector:
+#       matchLabels:
+#         app: lfx-v2-indexer-service
+topologySpreadConstraints: []
 
 # image is the configuration for the container image
 image:

@@ -58,7 +58,7 @@ type ContactBody struct {
 //			"id":   "proj-123",
 //			"name": "My Project",
 //		},
-//		Tags: []string{"uid", "slug"},
+//		Tags: []string{"uid:proj-123", "slug:my-project"},
 //		IndexingConfig: &types.IndexingConfig{
 //			ObjectID:             "proj-123",
 //			AccessCheckObject:    "project:proj-123",
@@ -82,8 +82,8 @@ type IndexerMessageEnvelope struct {
 	// For "deleted" actions, this can be just the resource ID as a string.
 	Data any `json:"data"`
 
-	// Tags (optional) specifies which fields in the data should be indexed as searchable tags.
-	// These are separate from IndexingConfig.Tags which are additional static tags for the document.
+	// Tags (optional) specifies exact tags to merge with IndexingConfig.Tags.
+	// Prefer IndexingConfig.Tags for new publishers so access, search, and filter metadata stay together.
 	Tags []string `json:"tags,omitempty"`
 
 	// IndexingConfig provides indexing metadata required for create/update actions.

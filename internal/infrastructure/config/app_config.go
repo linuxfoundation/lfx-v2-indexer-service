@@ -104,7 +104,7 @@ func LoadConfig() (*AppConfig, error) {
 		},
 		NATS: NATSConfig{
 			URL:               getEnvStringWithLogging("NATS_URL", "nats://nats:4222", envVarsUsed, defaultsUsed, logger),
-			MaxReconnects:     getEnvIntWithLogging("NATS_MAX_RECONNECTS", 10, envVarsUsed, defaultsUsed, logger),
+			MaxReconnects:     getEnvIntWithLogging("NATS_MAX_RECONNECTS", -1, envVarsUsed, defaultsUsed, logger),
 			ReconnectWait:     getEnvDurationWithLogging("NATS_RECONNECT_WAIT", 2*time.Second, envVarsUsed, defaultsUsed, logger),
 			ConnectionTimeout: getEnvDurationWithLogging("NATS_CONNECTION_TIMEOUT", 10*time.Second, envVarsUsed, defaultsUsed, logger),
 			IndexingSubject:   getEnvStringWithLogging("NATS_INDEXING_SUBJECT", "lfx.index.>", envVarsUsed, defaultsUsed, logger),
@@ -116,8 +116,9 @@ func LoadConfig() (*AppConfig, error) {
 			WorkerCount:       getEnvIntWithLogging("NATS_WORKER_COUNT", constants.DefaultWorkerCount, envVarsUsed, defaultsUsed, logger),
 		},
 		OpenSearch: OpenSearchConfig{
-			URL:   getEnvStringWithLogging("OPENSEARCH_URL", "http://localhost:9200", envVarsUsed, defaultsUsed, logger),
-			Index: getEnvStringWithLogging("OPENSEARCH_INDEX", "resources", envVarsUsed, defaultsUsed, logger),
+			URL:     getEnvStringWithLogging("OPENSEARCH_URL", "http://localhost:9200", envVarsUsed, defaultsUsed, logger),
+			Index:   getEnvStringWithLogging("OPENSEARCH_INDEX", "resources", envVarsUsed, defaultsUsed, logger),
+			Timeout: getEnvDurationWithLogging("OPENSEARCH_TIMEOUT", 30*time.Second, envVarsUsed, defaultsUsed, logger),
 		},
 		JWT: JWTConfig{
 			Issuer: getEnvStringWithLogging("JWT_ISSUER", "heimdall", envVarsUsed, defaultsUsed, logger),
@@ -234,8 +235,10 @@ func (c *AppConfig) validateNATS() error {
 		return fmt.Errorf("NATS V1 indexing subject is required")
 	}
 
-	if c.NATS.MaxReconnects < 0 {
-		return fmt.Errorf("NATS max reconnects cannot be negative, got: %d", c.NATS.MaxReconnects)
+	// Negative values signal infinite reconnects to the nats.go library; -1 is the idiomatic sentinel.
+	// Reject anything below -1 as it is almost certainly a misconfiguration.
+	if c.NATS.MaxReconnects < -1 {
+		return fmt.Errorf("NATS max reconnects must be -1 (infinite) or a non-negative integer, got: %d", c.NATS.MaxReconnects)
 	}
 
 	if c.NATS.ReconnectWait <= 0 {
@@ -269,6 +272,10 @@ func (c *AppConfig) validateOpenSearch() error {
 
 	if c.OpenSearch.Index == "" {
 		return fmt.Errorf("OpenSearch index is required")
+	}
+
+	if c.OpenSearch.Timeout <= 0 {
+		return fmt.Errorf("OpenSearch timeout must be positive, got: %v", c.OpenSearch.Timeout)
 	}
 
 	return nil

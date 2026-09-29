@@ -31,8 +31,10 @@ type MessageProcessor struct {
 	logger            *slog.Logger
 
 	// Configuration
-	index string
-	queue string
+	index             string
+	queue             string
+	indexingSubject   string
+	v1IndexingSubject string
 }
 
 // NewMessageProcessor creates a new message processor
@@ -49,6 +51,24 @@ func NewMessageProcessor(
 		logger:            logging.WithComponent(logger, "message_processor"),
 		index:             constants.DefaultIndex,
 		queue:             constants.DefaultQueue,
+		indexingSubject:   constants.AllSubjects,
+		v1IndexingSubject: constants.AllV1Subjects,
+	}
+}
+
+// Configure applies runtime workflow settings loaded by the container.
+func (mp *MessageProcessor) Configure(index, queue, indexingSubject, v1IndexingSubject string) {
+	if index != "" {
+		mp.index = index
+	}
+	if queue != "" {
+		mp.queue = queue
+	}
+	if indexingSubject != "" {
+		mp.indexingSubject = indexingSubject
+	}
+	if v1IndexingSubject != "" {
+		mp.v1IndexingSubject = v1IndexingSubject
 	}
 }
 
@@ -61,28 +81,20 @@ func (mp *MessageProcessor) ProcessIndexingMessage(ctx context.Context, data []b
 	logger := logging.FromContext(ctx, mp.logger)
 	messageID := mp.generateMessageID()
 
-	logger.Info("Processing indexing message",
+	logger.Debug("Processing indexing message",
 		"message_id", messageID,
 		"subject", subject,
 		"message_type", "V2")
 
 	// Create transaction from message data
-	transaction, err := mp.createTransaction(ctx, data, subject)
+	transaction, err := mp.createTransaction(data, subject)
 	if err != nil {
-		logging.LogError(logger, constants.LogFailedCreateTransaction, err,
-			"message_id", messageID,
-			"subject", subject)
 		return fmt.Errorf("%s: %w", constants.ErrCreateTransaction, err)
 	}
 
 	// Process the transaction
 	result, err := mp.indexerService.ProcessTransaction(ctx, transaction, mp.index)
 	if err != nil {
-		logging.LogError(logger, "Failed to process transaction", err,
-			"message_id", messageID,
-			"action", transaction.Action,
-			"object_type", transaction.ObjectType,
-			"subject", subject)
 		return fmt.Errorf("failed to process transaction: %w", err)
 	}
 
@@ -112,28 +124,20 @@ func (mp *MessageProcessor) ProcessV1IndexingMessage(ctx context.Context, data [
 	logger := logging.FromContext(ctx, mp.logger)
 	messageID := mp.generateMessageID()
 
-	logger.Info("Processing V1 indexing message",
+	logger.Debug("Processing V1 indexing message",
 		"message_id", messageID,
 		"subject", subject,
 		"message_type", "V1")
 
 	// Create V1 transaction from message data
-	transaction, err := mp.createV1Transaction(ctx, data, subject)
+	transaction, err := mp.createV1Transaction(data, subject)
 	if err != nil {
-		logging.LogError(logger, constants.LogFailedCreateV1Transaction, err,
-			"message_id", messageID,
-			"subject", subject)
 		return fmt.Errorf("%s: %w", constants.ErrCreateV1Transaction, err)
 	}
 
 	// Process the transaction (same processing path)
 	result, err := mp.indexerService.ProcessTransaction(ctx, transaction, mp.index)
 	if err != nil {
-		logging.LogError(logger, "Failed to process V1 transaction", err,
-			"message_id", messageID,
-			"action", transaction.Action,
-			"object_type", transaction.ObjectType,
-			"subject", subject)
 		return fmt.Errorf("failed to process V1 transaction: %w", err)
 	}
 
@@ -164,34 +168,22 @@ func (mp *MessageProcessor) ProcessV1IndexingMessage(ctx context.Context, data [
 // =================
 
 // createTransaction creates an LFXTransaction from V2 message data
-func (mp *MessageProcessor) createTransaction(ctx context.Context, data []byte, subject string) (*contracts.LFXTransaction, error) {
-	logger := logging.FromContext(ctx, mp.logger)
-
+func (mp *MessageProcessor) createTransaction(data []byte, subject string) (*contracts.LFXTransaction, error) {
 	// Parse message data
 	var messageData map[string]any
 	if err := json.Unmarshal(data, &messageData); err != nil {
-		logger.Error("Failed to unmarshal V2 message data",
-			"subject", subject,
-			"error", err.Error())
 		return nil, fmt.Errorf("failed to unmarshal message data: %w", err)
 	}
 
 	// Extract object type from subject (V2: lfx.index.{object_type})
 	objectType, found := strings.CutPrefix(subject, constants.IndexPrefix)
 	if !found {
-		logger.Error("Invalid V2 subject format",
-			"subject", subject,
-			"expected_prefix", constants.IndexPrefix)
 		return nil, fmt.Errorf("invalid V2 subject format: %s", subject)
 	}
 
 	// Use service method for transaction creation
 	transaction, err := mp.indexerService.CreateTransactionFromMessage(messageData, objectType, false)
 	if err != nil {
-		logger.Error("Failed to create V2 transaction via service",
-			"subject", subject,
-			"object_type", objectType,
-			"error", err.Error())
 		return nil, fmt.Errorf("%s: %w", constants.ErrCreateV2Transaction, err)
 	}
 
@@ -199,34 +191,22 @@ func (mp *MessageProcessor) createTransaction(ctx context.Context, data []byte, 
 }
 
 // createV1Transaction creates an LFXTransaction from V1 message data
-func (mp *MessageProcessor) createV1Transaction(ctx context.Context, data []byte, subject string) (*contracts.LFXTransaction, error) {
-	logger := logging.FromContext(ctx, mp.logger)
-
+func (mp *MessageProcessor) createV1Transaction(data []byte, subject string) (*contracts.LFXTransaction, error) {
 	// Parse message data
 	var messageData map[string]any
 	if err := json.Unmarshal(data, &messageData); err != nil {
-		logger.Error("Failed to unmarshal V1 message data",
-			"subject", subject,
-			"error", err.Error())
 		return nil, fmt.Errorf("failed to unmarshal V1 message data: %w", err)
 	}
 
 	// Extract object type from subject (V1: lfx.v1.index.{object_type})
 	objectType, found := strings.CutPrefix(subject, constants.FromV1Prefix)
 	if !found {
-		logger.Error("Invalid V1 subject format",
-			"subject", subject,
-			"expected_prefix", constants.FromV1Prefix)
 		return nil, fmt.Errorf("invalid V1 subject format: %s", subject)
 	}
 
 	// Use service method for transaction creation
 	transaction, err := mp.indexerService.CreateTransactionFromMessage(messageData, objectType, true)
 	if err != nil {
-		logger.Error("Failed to create V1 transaction via service",
-			"subject", subject,
-			"object_type", objectType,
-			"error", err.Error())
 		return nil, fmt.Errorf("%s: %w", constants.ErrCreateV1Transaction, err)
 	}
 
@@ -246,34 +226,34 @@ func (mp *MessageProcessor) StartSubscriptions(ctx context.Context) error {
 		"index", mp.index)
 
 	// Subscribe to V2 indexing messages
-	if err := mp.subscribeTo(ctx, constants.AllSubjects, "V2 indexing messages"); err != nil {
+	if err := mp.subscribeTo(ctx, mp.indexingSubject, "V2 indexing messages"); err != nil {
 		logger.Error("Failed to subscribe to V2 messages",
-			"subjects", constants.AllSubjects,
+			"subjects", mp.indexingSubject,
 			"queue", mp.queue,
 			"error", err.Error())
 		return fmt.Errorf("failed to subscribe to V2 messages: %w", err)
 	}
 
 	logger.Info("V2 subscription successful",
-		"subjects", constants.AllSubjects,
+		"subjects", mp.indexingSubject,
 		"queue", mp.queue)
 
 	// Subscribe to V1 indexing messages
-	if err := mp.subscribeTo(ctx, constants.AllV1Subjects, "V1 indexing messages"); err != nil {
+	if err := mp.subscribeTo(ctx, mp.v1IndexingSubject, "V1 indexing messages"); err != nil {
 		logger.Error("Failed to subscribe to V1 messages",
-			"subjects", constants.AllV1Subjects,
+			"subjects", mp.v1IndexingSubject,
 			"queue", mp.queue,
 			"error", err.Error())
 		return fmt.Errorf("failed to subscribe to V1 messages: %w", err)
 	}
 
 	logger.Info("V1 subscription successful",
-		"subjects", constants.AllV1Subjects,
+		"subjects", mp.v1IndexingSubject,
 		"queue", mp.queue)
 
 	logger.Info("All NATS subscriptions started successfully",
-		"v2_subjects", constants.AllSubjects,
-		"v1_subjects", constants.AllV1Subjects,
+		"v2_subjects", mp.indexingSubject,
+		"v1_subjects", mp.v1IndexingSubject,
 		"queue", mp.queue)
 
 	return nil
@@ -283,7 +263,7 @@ func (mp *MessageProcessor) StartSubscriptions(ctx context.Context) error {
 func (mp *MessageProcessor) subscribeTo(ctx context.Context, subject, description string) error {
 	logger := logging.FromContext(ctx, mp.logger)
 
-	logger.Info("Subscribing to NATS subject",
+	logger.Debug("Subscribing to NATS subject",
 		"subject", subject,
 		"queue", mp.queue,
 		"description", description)
@@ -293,12 +273,6 @@ func (mp *MessageProcessor) subscribeTo(ctx context.Context, subject, descriptio
 
 	// Attempt subscription
 	if err := mp.messagingRepo.QueueSubscribeWithReply(ctx, subject, mp.queue, handler); err != nil {
-		logger.Error("Failed to subscribe to NATS subject",
-			"subject", subject,
-			"queue", mp.queue,
-			"description", description,
-			"error", err.Error())
-
 		logging.LogError(logger, "Failed to subscribe to NATS subject", err,
 			"subject", subject,
 			"queue", mp.queue,
@@ -307,7 +281,7 @@ func (mp *MessageProcessor) subscribeTo(ctx context.Context, subject, descriptio
 		return fmt.Errorf("failed to subscribe to %s: %w", subject, err)
 	}
 
-	logger.Info("Successfully subscribed to NATS subject",
+	logger.Debug("Successfully subscribed to NATS subject",
 		"subject", subject,
 		"queue", mp.queue,
 		"description", description)
@@ -343,14 +317,7 @@ func (h *indexingHandler) HandleWithReply(ctx context.Context, data []byte, subj
 		err = h.useCase.ProcessIndexingMessage(ctx, data, subject)
 	}
 
-	// Log processing results
-	if err != nil {
-		logger.Error("Message processing failed in handler",
-			"message_id", messageID,
-			"subject", subject,
-			"message_type", messageType,
-			"error", err.Error())
-	}
+	// Errors are logged at the top-level NATS handler
 
 	// Handle reply if function provided
 	if reply != nil {
@@ -382,7 +349,7 @@ func (h *indexingHandler) HandleWithReply(ctx context.Context, data []byte, subj
 		}
 	}
 
-	logger.Info("Message handler completed",
+	logger.Debug("Message handler completed",
 		"message_id", messageID,
 		"subject", subject,
 		"message_type", messageType,

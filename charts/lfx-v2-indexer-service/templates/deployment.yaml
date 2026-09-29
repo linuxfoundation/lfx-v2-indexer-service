@@ -6,11 +6,26 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: lfx-v2-indexer-service
-  namespace: lfx
+  namespace: {{ .Release.Namespace }}
   labels:
     app.kubernetes.io/name: {{ .Chart.Name }}
+  {{- with .Values.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   replicas: {{ .Values.app.replicas }}
+  # maxSurge: 0 / maxUnavailable: 100% eliminates the overlap window between
+  # old core-NATS pods and new JetStream pods during the migration: all old
+  # pods terminate before any new pod starts, preventing the same message
+  # from being processed twice and emitting duplicate domain events.
+  # TODO: revert to the default rollingUpdate values (maxSurge: 25%,
+  # maxUnavailable: 25%) once the JetStream migration is complete and no
+  # pre-JetStream release will be rolled back through this chart.
+  strategy:
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: "100%"
   selector:
     matchLabels:
       app: lfx-v2-indexer-service
@@ -55,6 +70,8 @@ spec:
               value: {{ .Values.opensearch.url }}
             - name: OPENSEARCH_INDEX
               value: {{ .Values.opensearch.index }}
+            - name: OPENSEARCH_TIMEOUT
+              value: {{ .Values.opensearch.timeout }}
             - name: JWKS_URL
               value: {{ .Values.heimdall.jwksUrl }}
             - name: JWT_ISSUER
@@ -116,10 +133,15 @@ spec:
             - name: OTEL_TRACES_EXPORTER
               value: {{ $otelTracesExporter | quote }}
             {{- end }}
-            {{- $otelTracesSampleRatio := .Values.app.otel.tracesSampleRatio | toString | trim }}
-            {{- if ne $otelTracesSampleRatio "" }}
-            - name: OTEL_TRACES_SAMPLE_RATIO
-              value: {{ $otelTracesSampleRatio | quote }}
+            {{- $otelTracesSampler := .Values.app.otel.tracesSampler | toString | trim }}
+            {{- if ne $otelTracesSampler "" }}
+            - name: OTEL_TRACES_SAMPLER
+              value: {{ $otelTracesSampler | quote }}
+            {{- end }}
+            {{- $otelTracesSamplerArg := .Values.app.otel.tracesSamplerArg | toString | trim }}
+            {{- if ne $otelTracesSamplerArg "" }}
+            - name: OTEL_TRACES_SAMPLER_ARG
+              value: {{ $otelTracesSamplerArg | quote }}
             {{- end }}
             {{- $otelMetricsExporter := .Values.app.otel.metricsExporter | toString | trim }}
             {{- if ne $otelMetricsExporter "" }}
@@ -159,3 +181,7 @@ spec:
               port: web
             failureThreshold: 30
             periodSeconds: 1
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

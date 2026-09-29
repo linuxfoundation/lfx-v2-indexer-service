@@ -136,11 +136,6 @@ func NeedsRefreshWaitFor(ctx context.Context) bool {
 	return v
 }
 
-// WithOperation adds operation field to logger
-func WithOperation(logger *slog.Logger, operation string) *slog.Logger {
-	return logger.With("operation", operation)
-}
-
 // WithFields adds multiple fields to logger
 func WithFields(logger *slog.Logger, fields map[string]any) *slog.Logger {
 	attrs := make([]any, 0, len(fields)*2)

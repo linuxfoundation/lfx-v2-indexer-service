@@ -5,7 +5,6 @@ package container
 
 import (
 	"context"
-	"os"
 	"strconv"
 	"sync"
 	"testing"
@@ -22,46 +21,31 @@ import (
 func TestContainer_NewContainer(t *testing.T) {
 	tests := []struct {
 		name        string
-		setupEnv    func()
-		cleanupEnv  func()
+		setupEnv    func(*testing.T)
 		cliConfig   *config.CLIConfig
 		expectError bool
 		skipReason  string
 	}{
 		{
 			name: "successful_creation_with_defaults",
-			setupEnv: func() {
-				os.Setenv("NATS_URL", "nats://localhost:4222")
-				os.Setenv("OPENSEARCH_URL", "http://localhost:9200")
-				os.Setenv("JWT_ISSUER", "test-issuer")
-				os.Setenv("JWT_AUDIENCES", "test-audience")
-				os.Setenv("JWT_JWKS_URL", "https://test.com/.well-known/jwks.json")
-			},
-			cleanupEnv: func() {
-				os.Unsetenv("NATS_URL")
-				os.Unsetenv("OPENSEARCH_URL")
-				os.Unsetenv("JWT_ISSUER")
-				os.Unsetenv("JWT_AUDIENCES")
-				os.Unsetenv("JWT_JWKS_URL")
+			setupEnv: func(t *testing.T) {
+				t.Setenv("NATS_URL", "nats://localhost:4222")
+				t.Setenv("OPENSEARCH_URL", "http://localhost:9200")
+				t.Setenv("JWT_ISSUER", "test-issuer")
+				t.Setenv("JWT_AUDIENCES", "test-audience")
+				t.Setenv("JWT_JWKS_URL", "https://test.com/.well-known/jwks.json")
 			},
 			cliConfig:   nil,
 			expectError: false,
 		},
 		{
 			name: "creation_with_cli_overrides",
-			setupEnv: func() {
-				os.Setenv("NATS_URL", "nats://localhost:4222")
-				os.Setenv("OPENSEARCH_URL", "http://localhost:9200")
-				os.Setenv("JWT_ISSUER", "test-issuer")
-				os.Setenv("JWT_AUDIENCES", "test-audience")
-				os.Setenv("JWT_JWKS_URL", "https://test.com/.well-known/jwks.json")
-			},
-			cleanupEnv: func() {
-				os.Unsetenv("NATS_URL")
-				os.Unsetenv("OPENSEARCH_URL")
-				os.Unsetenv("JWT_ISSUER")
-				os.Unsetenv("JWT_AUDIENCES")
-				os.Unsetenv("JWT_JWKS_URL")
+			setupEnv: func(t *testing.T) {
+				t.Setenv("NATS_URL", "nats://localhost:4222")
+				t.Setenv("OPENSEARCH_URL", "http://localhost:9200")
+				t.Setenv("JWT_ISSUER", "test-issuer")
+				t.Setenv("JWT_AUDIENCES", "test-audience")
+				t.Setenv("JWT_JWKS_URL", "https://test.com/.well-known/jwks.json")
 			},
 			cliConfig: &config.CLIConfig{
 				Port:         "8081",
@@ -73,20 +57,13 @@ func TestContainer_NewContainer(t *testing.T) {
 		},
 		{
 			name: "invalid_configuration",
-			setupEnv: func() {
+			setupEnv: func(t *testing.T) {
 				// Set invalid URLs to force connection failures
-				os.Setenv("NATS_URL", "nats://invalid-host:4222")
-				os.Setenv("OPENSEARCH_URL", "http://invalid-host:9200")
-				os.Setenv("JWT_ISSUER", "test-issuer")
-				os.Setenv("JWT_AUDIENCES", "test-audience")
-				os.Setenv("JWT_JWKS_URL", "https://test.com/.well-known/jwks.json")
-			},
-			cleanupEnv: func() {
-				os.Unsetenv("NATS_URL")
-				os.Unsetenv("OPENSEARCH_URL")
-				os.Unsetenv("JWT_ISSUER")
-				os.Unsetenv("JWT_AUDIENCES")
-				os.Unsetenv("JWT_JWKS_URL")
+				t.Setenv("NATS_URL", "nats://invalid-host:4222")
+				t.Setenv("OPENSEARCH_URL", "http://invalid-host:9200")
+				t.Setenv("JWT_ISSUER", "test-issuer")
+				t.Setenv("JWT_AUDIENCES", "test-audience")
+				t.Setenv("JWT_JWKS_URL", "https://test.com/.well-known/jwks.json")
 			},
 			cliConfig:   nil,
 			expectError: true,
@@ -100,8 +77,7 @@ func TestContainer_NewContainer(t *testing.T) {
 			}
 
 			// Setup environment
-			tt.setupEnv()
-			defer tt.cleanupEnv()
+			tt.setupEnv(t)
 
 			// Create logger
 			logger := logging.NewLogger(true)
@@ -276,18 +252,11 @@ func TestContainer_CLIConfigOverrides(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Setup environment with required values
-			os.Setenv("NATS_URL", "nats://test:4222")
-			os.Setenv("OPENSEARCH_URL", "http://test:9200")
-			os.Setenv("JWT_ISSUER", "test-issuer")
-			os.Setenv("JWT_AUDIENCES", "test-audience")
-			os.Setenv("JWT_JWKS_URL", "https://test.com/.well-known/jwks.json")
-			defer func() {
-				os.Unsetenv("NATS_URL")
-				os.Unsetenv("OPENSEARCH_URL")
-				os.Unsetenv("JWT_ISSUER")
-				os.Unsetenv("JWT_AUDIENCES")
-				os.Unsetenv("JWT_JWKS_URL")
-			}()
+			t.Setenv("NATS_URL", "nats://test:4222")
+			t.Setenv("OPENSEARCH_URL", "http://test:9200")
+			t.Setenv("JWT_ISSUER", "test-issuer")
+			t.Setenv("JWT_AUDIENCES", "test-audience")
+			t.Setenv("JWT_JWKS_URL", "https://test.com/.well-known/jwks.json")
 
 			logger := logging.NewLogger(true)
 
@@ -536,10 +505,7 @@ func TestContainer_ConfigValidation(t *testing.T) {
 		logger := logging.NewLogger(true)
 
 		// Set an invalid port to force validation failure
-		os.Setenv("PORT", "99999999") // Port out of valid range (> 65535)
-		defer func() {
-			os.Unsetenv("PORT")
-		}()
+		t.Setenv("PORT", "99999999") // Port out of valid range (> 65535)
 
 		// This should fail due to invalid port configuration
 		container, err := NewContainer(logger, nil)
@@ -591,18 +557,11 @@ func TestContainer_ErrorHandling(t *testing.T) {
 		}
 
 		// Setup minimal environment
-		os.Setenv("NATS_URL", "nats://test:4222")
-		os.Setenv("OPENSEARCH_URL", "http://test:9200")
-		os.Setenv("JWT_ISSUER", "test-issuer")
-		os.Setenv("JWT_AUDIENCES", "test-audience")
-		os.Setenv("JWT_JWKS_URL", "https://test.com/.well-known/jwks.json")
-		defer func() {
-			os.Unsetenv("NATS_URL")
-			os.Unsetenv("OPENSEARCH_URL")
-			os.Unsetenv("JWT_ISSUER")
-			os.Unsetenv("JWT_AUDIENCES")
-			os.Unsetenv("JWT_JWKS_URL")
-		}()
+		t.Setenv("NATS_URL", "nats://test:4222")
+		t.Setenv("OPENSEARCH_URL", "http://test:9200")
+		t.Setenv("JWT_ISSUER", "test-issuer")
+		t.Setenv("JWT_AUDIENCES", "test-audience")
+		t.Setenv("JWT_JWKS_URL", "https://test.com/.well-known/jwks.json")
 
 		container, err := NewContainer(logger, cliConfig)
 
@@ -615,18 +574,11 @@ func TestContainer_ErrorHandling(t *testing.T) {
 // BenchmarkContainer_Creation benchmarks container creation
 func BenchmarkContainer_Creation(b *testing.B) {
 	// Setup environment
-	os.Setenv("NATS_URL", "nats://test:4222")
-	os.Setenv("OPENSEARCH_URL", "http://test:9200")
-	os.Setenv("JWT_ISSUER", "test-issuer")
-	os.Setenv("JWT_AUDIENCES", "test-audience")
-	os.Setenv("JWT_JWKS_URL", "https://test.com/.well-known/jwks.json")
-	defer func() {
-		os.Unsetenv("NATS_URL")
-		os.Unsetenv("OPENSEARCH_URL")
-		os.Unsetenv("JWT_ISSUER")
-		os.Unsetenv("JWT_AUDIENCES")
-		os.Unsetenv("JWT_JWKS_URL")
-	}()
+	b.Setenv("NATS_URL", "nats://test:4222")
+	b.Setenv("OPENSEARCH_URL", "http://test:9200")
+	b.Setenv("JWT_ISSUER", "test-issuer")
+	b.Setenv("JWT_AUDIENCES", "test-audience")
+	b.Setenv("JWT_JWKS_URL", "https://test.com/.well-known/jwks.json")
 
 	logger := logging.NewLogger(true)
 
@@ -702,18 +654,11 @@ func TestContainer_EdgeCases(t *testing.T) {
 		emptyConfig := &config.CLIConfig{}
 
 		// Setup minimal environment
-		os.Setenv("NATS_URL", "nats://test:4222")
-		os.Setenv("OPENSEARCH_URL", "http://test:9200")
-		os.Setenv("JWT_ISSUER", "test-issuer")
-		os.Setenv("JWT_AUDIENCES", "test-audience")
-		os.Setenv("JWT_JWKS_URL", "https://test.com/.well-known/jwks.json")
-		defer func() {
-			os.Unsetenv("NATS_URL")
-			os.Unsetenv("OPENSEARCH_URL")
-			os.Unsetenv("JWT_ISSUER")
-			os.Unsetenv("JWT_AUDIENCES")
-			os.Unsetenv("JWT_JWKS_URL")
-		}()
+		t.Setenv("NATS_URL", "nats://test:4222")
+		t.Setenv("OPENSEARCH_URL", "http://test:9200")
+		t.Setenv("JWT_ISSUER", "test-issuer")
+		t.Setenv("JWT_AUDIENCES", "test-audience")
+		t.Setenv("JWT_JWKS_URL", "https://test.com/.well-known/jwks.json")
 
 		container, err := NewContainer(logger, emptyConfig)
 		if err != nil {
@@ -783,10 +728,7 @@ func TestContainer_ConfigurationValidation(t *testing.T) {
 		logger := logging.NewLogger(true)
 
 		// Set JWKS_URL to a single space which will be picked up but fails validation after trim
-		os.Setenv("JWKS_URL", " ")
-		defer func() {
-			os.Unsetenv("JWKS_URL")
-		}()
+		t.Setenv("JWKS_URL", " ")
 
 		container, err := NewContainer(logger, nil)
 		assert.Error(t, err)
@@ -800,18 +742,11 @@ func TestContainer_ConfigurationValidation(t *testing.T) {
 		}
 
 		// Setup minimal environment
-		os.Setenv("NATS_URL", "nats://test:4222")
-		os.Setenv("OPENSEARCH_URL", "http://test:9200")
-		os.Setenv("JWT_ISSUER", "test-issuer")
-		os.Setenv("JWT_AUDIENCES", "test-audience")
-		os.Setenv("JWT_JWKS_URL", "https://test.com/.well-known/jwks.json")
-		defer func() {
-			os.Unsetenv("NATS_URL")
-			os.Unsetenv("OPENSEARCH_URL")
-			os.Unsetenv("JWT_ISSUER")
-			os.Unsetenv("JWT_AUDIENCES")
-			os.Unsetenv("JWT_JWKS_URL")
-		}()
+		t.Setenv("NATS_URL", "nats://test:4222")
+		t.Setenv("OPENSEARCH_URL", "http://test:9200")
+		t.Setenv("JWT_ISSUER", "test-issuer")
+		t.Setenv("JWT_AUDIENCES", "test-audience")
+		t.Setenv("JWT_JWKS_URL", "https://test.com/.well-known/jwks.json")
 
 		container, err := NewContainer(logger, cliConfig)
 		// Should handle invalid port gracefully (port conversion fails silently)
@@ -942,22 +877,13 @@ func TestContainer_MemoryAndResourceManagement(t *testing.T) {
 func TestContainer_RealWorldScenarios(t *testing.T) {
 	t.Run("production_like_configuration", func(t *testing.T) {
 		// Test with production-like configuration
-		os.Setenv("NATS_URL", "nats://nats-cluster:4222")
-		os.Setenv("OPENSEARCH_URL", "https://opensearch-cluster:9200")
-		os.Setenv("JWT_ISSUER", "https://auth.example.com")
-		os.Setenv("JWT_AUDIENCES", "api,admin")
-		os.Setenv("JWT_JWKS_URL", "https://auth.example.com/.well-known/jwks.json")
-		os.Setenv("LOG_LEVEL", "warn")
-		os.Setenv("JANITOR_ENABLED", "true")
-		defer func() {
-			os.Unsetenv("NATS_URL")
-			os.Unsetenv("OPENSEARCH_URL")
-			os.Unsetenv("JWT_ISSUER")
-			os.Unsetenv("JWT_AUDIENCES")
-			os.Unsetenv("JWT_JWKS_URL")
-			os.Unsetenv("LOG_LEVEL")
-			os.Unsetenv("JANITOR_ENABLED")
-		}()
+		t.Setenv("NATS_URL", "nats://nats-cluster:4222")
+		t.Setenv("OPENSEARCH_URL", "https://opensearch-cluster:9200")
+		t.Setenv("JWT_ISSUER", "https://auth.example.com")
+		t.Setenv("JWT_AUDIENCES", "api,admin")
+		t.Setenv("JWT_JWKS_URL", "https://auth.example.com/.well-known/jwks.json")
+		t.Setenv("LOG_LEVEL", "warn")
+		t.Setenv("JANITOR_ENABLED", "true")
 
 		logger := logging.NewLogger(false) // Production logger
 		cliConfig := &config.CLIConfig{
@@ -983,18 +909,11 @@ func TestContainer_RealWorldScenarios(t *testing.T) {
 
 	t.Run("development_configuration", func(t *testing.T) {
 		// Test with development configuration
-		os.Setenv("NATS_URL", "nats://localhost:4222")
-		os.Setenv("OPENSEARCH_URL", "http://localhost:9200")
-		os.Setenv("JWT_ISSUER", "http://localhost:4457")
-		os.Setenv("JWT_AUDIENCES", "dev")
-		os.Setenv("JWT_JWKS_URL", "http://localhost:4457/.well-known/jwks.json")
-		defer func() {
-			os.Unsetenv("NATS_URL")
-			os.Unsetenv("OPENSEARCH_URL")
-			os.Unsetenv("JWT_ISSUER")
-			os.Unsetenv("JWT_AUDIENCES")
-			os.Unsetenv("JWT_JWKS_URL")
-		}()
+		t.Setenv("NATS_URL", "nats://localhost:4222")
+		t.Setenv("OPENSEARCH_URL", "http://localhost:9200")
+		t.Setenv("JWT_ISSUER", "http://localhost:4457")
+		t.Setenv("JWT_AUDIENCES", "dev")
+		t.Setenv("JWT_JWKS_URL", "http://localhost:4457/.well-known/jwks.json")
 
 		logger := logging.NewLogger(true) // Development logger
 		cliConfig := &config.CLIConfig{

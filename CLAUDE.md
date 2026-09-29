@@ -2,6 +2,14 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> **Central LFX skills:**
+> - Start with `/lfx-skills:lfx` for cross-repo tasks, "where does X live" questions, owner/peer repo routing, or missing checkouts.
+> - Use `/lfx-skills:lfx-platform-architecture` after routing when you need platform composition, V2 service classes, write/read/access-check/indexing flows, NATS/KV ownership, or handoff points across FGA, indexer, query, Heimdall, OpenFGA, Helm, or ArgoCD.
+> - The repo-local `indexer-service-dev` skill auto-attaches on Go paths (`cmd/`, `internal/`, `pkg/`, `**/*.go`, `Makefile`, `go.mod`, `go.sum`). It owns the layer boundaries, logging wrapper, NATS subscriber pattern, OpenSearch storage pattern, mocks layout, layer-specific test targets, errors, formatting, lint, and license headers for this repo.
+> - This repo OWNS the indexer event contract. Other V2 services route here to publish index events. The authoritative contract lives in `docs/indexer-contract.md`; the publisher workflow is the local `.claude/skills/indexer-publishing/` skill; contract-sensitive paths are covered by the local `.claude/rules/indexer-contract.md` rule.
+> - Repo-owned docs under `docs/` are canonical for the generic indexer contract and caller examples.
+> - If the plugin is missing, install with `/plugin marketplace add linuxfoundation/lfx-skills` then `/plugin install lfx-skills@lfx-skills`.
+
 ## Essential Commands
 
 ### Development Workflow
@@ -46,7 +54,35 @@ LOG_LEVEL=debug make run
 
 ## Architecture Overview
 
-This is a **Clean Architecture** implementation processing NATS messages into OpenSearch documents. The service handles both modern V2 messages (`lfx.index.*`) and legacy V1 messages (`lfx.v1.index.*`) with queue group load balancing.
+This is a **Clean Architecture** implementation processing NATS messages into OpenSearch documents. The service handles both modern V2 messages (`lfx.index.>`) and legacy V1 messages (`lfx.v1.index.>`) with queue group load balancing.
+
+## Agent Guidance
+
+Repo-owned guidance is split between contract docs and the local skills:
+
+- `docs/indexer-contract.md`: authoritative event contract (envelope, `IndexingConfig`, OpenSearch document fields, schema evolution policy). Other V2 services link here rather than copy.
+- `docs/client-guide.md`: publisher-facing usage walkthrough (for publishers in other services).
+- `.claude/skills/indexer-service-dev/`: repo-local Go conventions (auto-attaches on Go paths).
+- `.claude/skills/indexer-publishing/`: workflow for any change on the indexer write path (both indexer-internal and publishers in other repos).
+- `.claude/rules/indexer-contract.md`: enforced policy on contract-sensitive paths (action constants, additive envelope changes, no new top-level OpenSearch fields without coordination).
+
+Read the contract doc before changing index message handling or advising resource services on indexer publishing.
+
+## Consumed Cross-Repo Contracts
+
+This repo depends on contracts owned elsewhere. Do not copy or infer them from
+local examples. Read the owner file before changing access coordination, query
+coordination, or publisher guidance.
+
+- Generic FGA envelope and access-check contract:
+  `lfx-v2-fga-sync/docs/fga-sync-contract.md`
+- Query-service read behavior over indexed documents:
+  `lfx-v2-query-service/docs/query-service-contract.md`
+- Per-resource indexer emission contracts:
+  `<resource-service>/docs/indexer-contract.md`
+
+Use `/lfx-skills:lfx` if an owner repo is missing locally, the path has moved,
+or the task needs additional peer repos.
 
 ### Layer Boundaries (Dependency Rule: Inner layers cannot depend on outer layers)
 
@@ -78,45 +114,21 @@ NATS → MessagingRepository → IndexingMessageHandler → MessageProcessor →
 
 ### Domain Events (Outbound)
 
-After every successful OpenSearch write, the service publishes a NATS event. The subject is dynamic based on the object type and action — every object type the indexer handles (project, committee, meeting, etc.) automatically gets its own set of event subjects.
-
-**Subject format**: `lfx.{object_type}.{action}`
-
-Examples for `project` (same pattern applies to all object types):
-
-- `lfx.project.created`
-- `lfx.project.updated`
-- `lfx.project.deleted`
-
-Useful wildcard subscriptions:
-
-- `lfx.project.*` — all actions for a specific type
-- `lfx.*.created` — created events across all types
-
-**Payload** (`internal/domain/contracts/events.go` — `IndexingEvent`):
-
-```json
-{
-  "document_id": "project:abc-123",
-  "object_id":   "abc-123",
-  "object_type": "project",
-  "action":      "created",
-  "timestamp":   "2026-03-05T19:57:25.679Z",
-  "body": { ... }
-}
-```
-
-`body` is the full `TransactionBody` written to OpenSearch. Publish failures are **non-blocking** — the OpenSearch write is unaffected and the error is logged.
+After every successful OpenSearch write the service publishes a NATS event on
+`lfx.{object_type}.{action}`. Envelope shape, `IndexingEvent` payload, wildcard
+subscriptions, and failure semantics are documented in the authoritative
+`docs/indexer-contract.md`. Cross-service topology lives in the
+central `/lfx-skills:lfx-platform-architecture` skill.
 
 ### Critical Patterns
 
-**Message Routing**: Subject prefix determines version (`lfx.index.*` = V2, `lfx.v1.index.*` = V1)
+**Message Routing**: Subject prefix determines version (`lfx.index.` = V2, `lfx.v1.index.` = V1)
 
 **Authentication**:
 
-- V2: JWT tokens via `Authorization` header (validated against Heimdall)
-- V1: Simple `X-Username`/`X-Email` headers
-- Delegation: `X-On-Behalf-Of` support
+- V2: JWT tokens via the lower-case `authorization` header key in the NATS JSON envelope (validated against Heimdall)
+- V1: Simple `x-username`/`x-email` headers
+- Delegation: `x-on-behalf-of` support
 
 **Configuration**: CLI flags > Environment variables > Defaults
 
@@ -130,7 +142,9 @@ JWKS_URL=http://localhost:4457/.well-known/jwks
 
 # Message processing
 NATS_QUEUE=lfx.indexer.queue
+NATS_MAX_RECONNECTS=-1          # -1 = infinite reconnects (recommended for production)
 OPENSEARCH_INDEX=resources
+OPENSEARCH_TIMEOUT=30s          # ResponseHeaderTimeout: bounds first-byte wait; body reads are not bounded
 NATS_INDEXING_SUBJECT=lfx.index.>
 NATS_V1_INDEXING_SUBJECT=lfx.v1.index.>
 
@@ -142,38 +156,75 @@ JANITOR_ENABLED=true
 
 ## Development Guidelines
 
-### Clean Architecture Rules
+Layer boundaries, NATS handler patterns, OpenSearch storage patterns, logging, errors, tests, formatter, lint, and license headers are all owned by `.claude/skills/indexer-service-dev/SKILL.md` (auto-attaches on Go paths).
 
-- Domain layer cannot import from infrastructure/presentation layers
-- All external dependencies must use repository interfaces
-- Business logic stays in domain services
-- Dependency injection only in `cmd/lfx-indexer/main.go`
+### Go Toolchain Version
+
+Freely bump `go.mod`'s `go` directive to the latest available *patch*
+release (e.g. `1.X.Y` → `1.X.{Y+1}`) to pick up security fixes. Do **not**
+bump the *minor* version (e.g. `1.X.x` → `1.{X+1}.x`) unless the user
+explicitly asks for it, **and** you've validated it against the Go version
+MegaLinter itself bundles -- MegaLinter's `golangci-lint` binary is
+statically compiled against a specific Go version and refuses to analyze a
+module whose `go.mod` directive is newer than that. (This is a property of
+`golangci-lint` itself, not of MegaLinter's `osv-scanner`-based
+`REPOSITORY_OSV_SCANNER` check, which is a separate, unrelated linter.) A
+`go.mod` directive newer than what `golangci-lint` was built with breaks it
+outright. This is a hard ceiling with no environment-variable workaround --
+`GOTOOLCHAIN: auto` only affects invocations of the `go` command itself
+and does nothing for this precompiled binary's own internal version
+checks (confirmed empirically: setting it in both the workflow and
+`.mega-linter.yml` still failed).
+
+To find MegaLinter's bundled Go version:
+
+```bash
+# 1. Find the MegaLinter flavor and pinned version tag used in CI.
+grep -A1 'oxsecurity/megalinter' .github/workflows/*.yml
+# e.g. "uses: oxsecurity/megalinter/flavors/<flavor>@<sha>  # <tag>"
+
+# 2. Fetch that flavor's Dockerfile and read its GO_ALPINE_VERSION build
+#    arg -- this is what the final image installs as `go`, not
+#    GO_IMAGE_VERSION (which only applies to an intermediate builder
+#    stage).
+curl -s "https://raw.githubusercontent.com/oxsecurity/megalinter/<tag>/flavors/<flavor>/Dockerfile" \
+  | grep -i 'GO_ALPINE_VERSION'
+```
+
+`go.mod`'s `go` directive must never exceed that bundled version. Note this
+is a proxy for what `golangci-lint`'s own binary was built with, not a
+guarantee -- if a MegaLinter run still fails after following this
+procedure, check `golangci-lint --version` inside the pinned MegaLinter
+image directly to see the Go version it actually reports. Staying
+one minor version behind it (rather than matching its minor *and* patch
+exactly) leaves room to always take the latest patch release for security
+fixes without ever being blocked by MegaLinter's own bundled patch version
+lagging a newly disclosed vulnerability.
+
+There's no built-in `go` subcommand to look up the latest patch release for
+a given minor version -- query the official `go.dev/dl` JSON feed instead:
+
+```bash
+# Find the latest patch release for the minor version pinned in go.mod.
+MINOR=$(grep '^go ' go.mod | awk '{print $2}' | cut -d. -f1,2)
+curl -s "https://go.dev/dl/?mode=json&include=all" \
+  | jq -r --arg m "go${MINOR}." '.[].version | select(startswith($m))' \
+  | sort -V | tail -1
+```
 
 ### Adding New Object Types
 
-No indexer changes are needed for new object types. The indexer is data-agnostic — publishers send messages with any non-empty `object_type` and a valid `indexing_config` block; the indexer stores and indexes the document without resource-specific logic.
+No indexer changes are needed for new object types. The indexer is data-agnostic: publishers send messages with any non-empty `object_type` and a valid `indexing_config` block; the indexer stores and indexes the document without resource-specific logic. Domain events (`lfx.{object_type}.created/updated/deleted`) are emitted automatically.
 
-Domain events (`lfx.{object_type}.created/updated/deleted`) are emitted automatically for all object types — no additional work required.
-
-### Message Processing Requirements
-
-- Always reply to NATS messages with "OK" or "ERROR: details"
-- Log comprehensive context for debugging (action, object_type, message_id)
-- Handle both V2 (past-tense actions) and V1 (present-tense actions) formats
-- Support base64-encoded data fields
-
-### Testing Strategy
-
-- Use layer-specific make targets for focused testing
-- Mock external dependencies using interfaces in `internal/mocks/`
-- Test both V2 and V1 message formats where applicable
-- Include race detection in all test runs
+Adding a new object type lives on the publisher side. See the `indexer-publishing` skill and `docs/indexer-contract.md`.
 
 ## Key Files for Understanding the System
 
+- `README.md`: Full project-structure tree, mermaid sequence and data-flow diagrams, CLI flag reference, and troubleshooting guide. Read first when orienting in the repo.
 - `internal/domain/services/indexer_service.go`: Core business logic
 - `internal/application/message_processor.go`: Message workflow orchestration
-- `internal/domain/contracts/transaction.go`: Core business entities
-- `internal/domain/contracts/events.go`: `IndexingEvent` — the outbound domain event payload
+- `internal/domain/contracts/transaction.go`: Core business entities (`LFXTransaction`, `TransactionBody`)
+- `internal/domain/contracts/events.go`: `IndexingEvent`, the outbound domain event payload
+- `pkg/types/indexing_config.go`: Public client surface (`IndexerMessageEnvelope`, `IndexingConfig`)
 - `internal/infrastructure/config/app_config.go`: Configuration management
 - `cmd/lfx-indexer/main.go`: Dependency injection and service startup
