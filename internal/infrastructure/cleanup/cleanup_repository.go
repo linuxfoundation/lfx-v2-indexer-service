@@ -246,7 +246,13 @@ func (j *CleanupRepository) processItem(ctx context.Context, objectRef *string) 
 		// the deletion-priority rule below — then break ties by updated_at
 		// so the normal (no-deletion) case still keeps the most recent hits.
 		"sort": []map[string]any{
-			{"deleted_at": map[string]any{"order": "desc", "missing": "_last"}},
+			// unmapped_type is required alongside missing: "_last" — missing
+			// only controls where a doc that has no value for an otherwise
+			// *mapped* field sorts to; it does not by itself let OpenSearch
+			// sort when the field has no mapping at all yet (e.g. no document
+			// in this index has ever had a deleted_at value), which would
+			// otherwise fail the sort/query entirely.
+			{"deleted_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
 			{"updated_at": "desc"},
 		},
 		"_source": []string{"created_at", "updated_at", "deleted_at"},

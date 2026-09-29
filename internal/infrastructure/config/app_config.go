@@ -296,13 +296,17 @@ func (c *AppConfig) validateNATS() error {
 
 	// A message can wait up to BatchMaxWait queued in the BatchIndexer before
 	// its flush even starts, then up to OpenSearch.Timeout for the flush
-	// itself — AckWait must exceed that combined worst case by at least
+	// itself — AckWait must be at least that combined worst case plus
 	// ackWaitSafetyMargin, the same margin the derived default applies, so
 	// an explicitly-set AckWait can't pass validation with a margin thinner
 	// than what LoadConfig would have chosen itself.
+	// The derived default (LoadConfig, above) is exactly this sum, so the
+	// comparison must allow equality — only reject values strictly below
+	// the minimum, or every deployment relying on the default would fail
+	// this check immediately after LoadConfig sets it.
 	minAckWait := c.OpenSearch.Timeout + c.OpenSearch.BatchMaxWait + ackWaitSafetyMargin
-	if c.NATS.AckWait <= minAckWait {
-		return fmt.Errorf("NATS ack wait (%v) must exceed OpenSearch timeout plus batch max wait plus safety margin (%v)", c.NATS.AckWait, minAckWait)
+	if c.NATS.AckWait < minAckWait {
+		return fmt.Errorf("NATS ack wait (%v) must be at least OpenSearch timeout plus batch max wait plus safety margin (%v)", c.NATS.AckWait, minAckWait)
 	}
 
 	return nil

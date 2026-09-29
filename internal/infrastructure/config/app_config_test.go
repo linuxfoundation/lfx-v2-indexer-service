@@ -94,6 +94,7 @@ func TestValidateNATS_AckWait(t *testing.T) {
 		{"ack wait below opensearch timeout is rejected", 20 * time.Second, true},
 		{"ack wait equal to opensearch timeout is rejected", 30 * time.Second, true},
 		{"ack wait above timeout but within safety margin is rejected", 40 * time.Second, true},
+		{"ack wait exactly at the minimum is allowed", 30*time.Second + 200*time.Millisecond + 10*time.Second, false},
 		{"ack wait above timeout plus safety margin is allowed", 41 * time.Second, false},
 	}
 	for _, tc := range cases {
@@ -224,6 +225,18 @@ func TestLoadConfig_AckWaitDefaultIncludesBatchMaxWait(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 45*time.Second, cfg.NATS.AckWait,
 		"default ack wait should be OpenSearch.Timeout + BatchMaxWait + 10s margin")
+}
+
+func TestLoadConfig_DefaultAckWaitPassesValidation(t *testing.T) {
+	// NewContainer calls Validate immediately after LoadConfig. The derived
+	// default is exactly OpenSearch.Timeout + BatchMaxWait + ackWaitSafetyMargin,
+	// so validateNATS's minimum bound must accept that exact value — any
+	// deployment leaving NATS_ACK_WAIT unset must be able to start.
+	t.Setenv("NATS_ACK_WAIT", "")
+
+	cfg, err := LoadConfig()
+	require.NoError(t, err)
+	require.NoError(t, cfg.Validate(), "the derived default AckWait must pass validation")
 }
 
 func TestLoadConfig_NegativeAckWaitIsRejected(t *testing.T) {

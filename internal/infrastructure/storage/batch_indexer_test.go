@@ -158,6 +158,7 @@ func TestBatchIndexer_CallerContextCancellation(t *testing.T) {
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, 0, fake.callCount(), "op was removed from the queue before dispatch, so no write should have happened")
 }
 
 func TestBatchIndexer_RefreshWaitForPropagatesToWholeBatch(t *testing.T) {
@@ -216,14 +217,18 @@ func TestBatchIndexer_FlushUsesTimeoutNotCallerContext(t *testing.T) {
 	assert.NoError(t, fake.ctxErrs[0], "flush's context should not be the caller's canceled context")
 }
 
-func TestBatchIndexer_BatchFillingCallerHonorsOwnContext(t *testing.T) {
+func TestBatchIndexer_DispatchedOpWaitsForRealResultDespiteOwnCtxCancellation(t *testing.T) {
 	logger := setupTestLogger(t)
 	fake := &fakeBulkIndexer{delay: 200 * time.Millisecond}
 	b := NewBatchIndexer(fake, logger, 1, time.Hour, 5*time.Second)
 
-	// This caller fills the batch itself (maxBatchSize=1), which previously
-	// flushed synchronously inline and blocked the caller for the full
-	// round trip regardless of its own context's deadline.
+	// This caller fills the batch itself (maxBatchSize=1), so enqueue claims
+	// and dispatches its op to the fake OpenSearch client synchronously,
+	// before Index's select even runs. Once dispatch has begun, Index must
+	// not abandon the op just because its own ctx subsequently expires:
+	// doing so would let a write that goes on to succeed be reported to
+	// ProcessTransaction as a ctx-cancellation failure, causing it to skip
+	// publishIndexingEvent for a document that was actually committed.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 
@@ -231,6 +236,55 @@ func TestBatchIndexer_BatchFillingCallerHonorsOwnContext(t *testing.T) {
 	err := b.Index(ctx, "test-index", "doc-1", strings.NewReader(`{}`))
 	elapsed := time.Since(start)
 
-	assert.ErrorIs(t, err, context.DeadlineExceeded)
-	assert.Less(t, elapsed, 100*time.Millisecond, "the batch-filling caller should return once its own ctx expires, not wait for the full flush")
+	assert.NoError(t, err, "the dispatched write actually succeeded, so Index must report that outcome, not the caller's own ctx cancellation")
+	assert.GreaterOrEqual(t, elapsed, fake.delay, "Index should wait for the real result once dispatch has begun")
+}
+
+// TestBatchIndexer_StaleTimerGenerationSkipsDrain verifies the fix for the
+// timer/size-trigger race: if a maxWait timer's callback is still blocked on
+// b.mu when a concurrent size-triggered drain claims its batch and a
+// subsequent enqueue starts a new one, the stale callback must recognize
+// (via the generation it captured at schedule time) that its batch is gone
+// and must not drain the newer one — which hasn't waited out its own
+// maxWait yet. This drives the internals directly rather than relying on
+// goroutine scheduling to reproduce the race, since the interleaving is
+// otherwise not reliably reproducible in a unit test.
+func TestBatchIndexer_StaleTimerGenerationSkipsDrain(t *testing.T) {
+	logger := setupTestLogger(t)
+	fake := &fakeBulkIndexer{}
+	b := NewBatchIndexer(fake, logger, 100, time.Hour, 5*time.Second)
+
+	op1 := &pendingIndexOp{
+		op:     contracts.BulkOperation{Index: "test-index", DocID: "doc-1", Action: "index", Body: strings.NewReader(`{}`)},
+		result: make(chan error, 1),
+	}
+	b.enqueue(op1, false)
+
+	b.mu.Lock()
+	staleGen := b.generation
+	// Simulate a concurrent size-triggered drain claiming op1's batch before
+	// the maxWait timer callback captured with staleGen gets to run.
+	batch, needsRefresh := b.drainLocked()
+	b.mu.Unlock()
+	go b.flushBatch(batch, needsRefresh)
+	require.NoError(t, <-op1.result)
+
+	op2 := &pendingIndexOp{
+		op:     contracts.BulkOperation{Index: "test-index", DocID: "doc-2", Action: "index", Body: strings.NewReader(`{}`)},
+		result: make(chan error, 1),
+	}
+	b.enqueue(op2, false) // starts a new batch and bumps the generation
+
+	// The stale callback for staleGen must not drain doc-2's batch.
+	b.flush(staleGen)
+
+	b.mu.Lock()
+	stillPending := len(b.pending)
+	currentGen := b.generation
+	b.mu.Unlock()
+	assert.Equal(t, 1, stillPending, "a stale-generation flush must not drain a newer batch")
+
+	// The real callback for the current generation still drains normally.
+	b.flush(currentGen)
+	assert.NoError(t, <-op2.result)
 }
