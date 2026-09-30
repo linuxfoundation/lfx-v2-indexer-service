@@ -197,6 +197,40 @@ func TestBatchIndexer_NoRefreshWaitForWhenNoCallerNeedsIt(t *testing.T) {
 	assert.False(t, fake.neededRefresh[0])
 }
 
+func TestBatchIndexer_CanceledRefreshWaitForCallerDoesNotStickToLaterBatch(t *testing.T) {
+	logger := setupTestLogger(t)
+	fake := &fakeBulkIndexer{}
+	b := NewBatchIndexer(fake, logger, 2, time.Hour, 5*time.Second)
+
+	// op1 is the only caller in its (never-flushed) batch that needs
+	// refresh=wait_for. Its ctx is already canceled, so Index removes it
+	// from the pending queue before any flush claims it.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	waitCtx := logging.WithRefreshWaitFor(ctx)
+	err := b.Index(waitCtx, "test-index", "doc-canceled", strings.NewReader(`{}`))
+	require.Error(t, err)
+
+	// op2 and op3 form a new batch that reaches maxBatchSize; neither needs
+	// refresh=wait_for. If canceling op1 had not cleared BatchIndexer's
+	// needsRefresh flag, this later, unrelated batch would incorrectly
+	// flush with refresh=wait_for too.
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_ = b.Index(context.Background(), "test-index", "doc-2", strings.NewReader(`{}`))
+	}()
+	go func() {
+		defer wg.Done()
+		_ = b.Index(context.Background(), "test-index", "doc-3", strings.NewReader(`{}`))
+	}()
+	wg.Wait()
+
+	require.Equal(t, 1, fake.callCount())
+	assert.False(t, fake.neededRefresh[0], "canceling the only wait_for caller must clear needsRefresh for the batch that follows it")
+}
+
 func TestBatchIndexer_FlushUsesTimeoutNotCallerContext(t *testing.T) {
 	logger := setupTestLogger(t)
 	fake := &fakeBulkIndexer{}

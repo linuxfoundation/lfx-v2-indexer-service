@@ -25,8 +25,9 @@ type bulkIndexer interface {
 // always hold this by pointer so it can be located and removed from the
 // pending queue by identity if its own ctx is cancelled before dispatch.
 type pendingIndexOp struct {
-	op     contracts.BulkOperation
-	result chan error
+	op           contracts.BulkOperation
+	result       chan error
+	needsRefresh bool // this op's own caller is waiting on refresh=wait_for; used to recompute BatchIndexer.needsRefresh if this op is canceled before dispatch
 }
 
 // BatchIndexer coalesces individual Index calls into OpenSearch bulk
@@ -87,7 +88,8 @@ func (b *BatchIndexer) Index(ctx context.Context, index string, docID string, bo
 			Action: "index",
 			Body:   bytes.NewReader(bodyBytes),
 		},
-		result: make(chan error, 1),
+		result:       make(chan error, 1),
+		needsRefresh: needsRefresh,
 	}
 	b.enqueue(op, needsRefresh)
 
@@ -165,12 +167,22 @@ func (b *BatchIndexer) enqueue(op *pendingIndexOp, needsRefresh bool) {
 // claimed by a flush yet, reporting whether it did so. If op is no longer
 // present, a flush (size- or timer-triggered) has already claimed the batch
 // it was part of, and its result must be awaited instead of the op removed.
+// b.needsRefresh is recomputed from what remains: if the canceled op was the
+// only one whose caller wanted refresh=wait_for, the rest of the batch (and
+// any batch started after this one empties) should not pay for it.
 func (b *BatchIndexer) removeIfPending(op *pendingIndexOp) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for i, p := range b.pending {
 		if p == op {
 			b.pending = append(b.pending[:i], b.pending[i+1:]...)
+			b.needsRefresh = false
+			for _, remaining := range b.pending {
+				if remaining.needsRefresh {
+					b.needsRefresh = true
+					break
+				}
+			}
 			return true
 		}
 	}
