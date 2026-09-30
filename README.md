@@ -325,9 +325,18 @@ OPENSEARCH_INDEX=resources                   # OpenSearch index name
 NATS_MAX_RECONNECTS=-1                       # Max reconnection attempts (-1 = infinite, recommended for production)
 NATS_RECONNECT_WAIT=2s                       # Wait time between reconnects
 NATS_CONNECTION_TIMEOUT=10s                  # Initial connection timeout
+NATS_DRAIN_TIMEOUT=55s                       # Time to wait for in-flight handlers to finish on shutdown
+
+# NATS Consumer/Worker Settings
+NATS_ACK_WAIT=45s                            # JetStream redelivery wait; must exceed OPENSEARCH_TIMEOUT + OPENSEARCH_BATCH_MAX_WAIT plus a safety margin
+NATS_WORKER_COUNT=100                        # Concurrent message handlers per pod; also bounds the JetStream consumer's MaxAckPending (cluster-wide, shared across replicas)
+NATS_PENDING_MSG_LIMIT=1000000               # Max pending messages buffered per subscription
+NATS_PENDING_BYTES_LIMIT=536870912           # Max pending bytes buffered per subscription (512 MiB)
 
 # OpenSearch Connection Settings
-OPENSEARCH_TIMEOUT=30s                       # Response header timeout — covers time waiting for the first response byte; body reads are not bounded by this setting
+OPENSEARCH_TIMEOUT=30s                       # Response header timeout — covers time waiting for the first response byte; body reads are not bounded
+OPENSEARCH_BATCH_MAX_SIZE=50                 # Max documents buffered before a bulk flush
+OPENSEARCH_BATCH_MAX_WAIT=200ms              # Max time to wait before flushing a partial batch by this setting
 
 # JWT Configuration
 JWT_ISSUER=heimdall                          # JWT issuer validation

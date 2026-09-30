@@ -66,12 +66,24 @@ spec:
               value: {{ .Values.messaging.queue }}
             - name: NATS_DRAIN_TIMEOUT
               value: {{ .Values.nats.drainTimeout }}
+            - name: NATS_ACK_WAIT
+              value: {{ .Values.nats.ackWait }}
+            - name: NATS_WORKER_COUNT
+              value: {{ .Values.nats.workerCount | quote }}
+            - name: NATS_PENDING_MSG_LIMIT
+              value: {{ .Values.nats.pendingMsgLimit | quote }}
+            - name: NATS_PENDING_BYTES_LIMIT
+              value: {{ .Values.nats.pendingBytesLimit | quote }}
             - name: OPENSEARCH_URL
               value: {{ .Values.opensearch.url }}
             - name: OPENSEARCH_INDEX
               value: {{ .Values.opensearch.index }}
             - name: OPENSEARCH_TIMEOUT
               value: {{ .Values.opensearch.timeout }}
+            - name: OPENSEARCH_BATCH_MAX_SIZE
+              value: {{ .Values.opensearch.batchMaxSize | quote }}
+            - name: OPENSEARCH_BATCH_MAX_WAIT
+              value: {{ .Values.opensearch.batchMaxWait }}
             - name: JWKS_URL
               value: {{ .Values.heimdall.jwksUrl }}
             - name: JWT_ISSUER

@@ -18,6 +18,20 @@ nats:
   v1IndexingSubject: "lfx.v1.index.>"
   # drainTimeout is the timeout for draining NATS connections
   drainTimeout: "55s"
+  # ackWait is how long JetStream waits for an Ack before redelivering a
+  # message. Must exceed opensearch.timeout + opensearch.batchMaxWait plus a
+  # safety margin (validated at startup).
+  ackWait: "45s"
+  # workerCount is the number of concurrent message handlers per pod. Also
+  # bounds the JetStream consumer's MaxAckPending, which is a durable-consumer-
+  # wide (cluster-wide) limit shared across all app.replicas pods.
+  workerCount: 10
+  # pendingMsgLimit is the maximum pending messages buffered per subscription.
+  # Quoted to prevent Helm from rendering as scientific notation.
+  pendingMsgLimit: "1000000"
+  # pendingBytesLimit is the maximum pending bytes buffered per subscription.
+  # Quoted to prevent Helm from rendering as scientific notation.
+  pendingBytesLimit: "536870912"
 
   # stream_index_events persists indexing messages so the indexer-consumer
   # can replay and retry failed deliveries.
@@ -58,6 +72,10 @@ opensearch:
   index: resources
   # timeout is the ResponseHeaderTimeout for OpenSearch requests — covers time waiting for the first response byte; body reads are not bounded
   timeout: "30s"
+  # batchMaxSize is the maximum number of documents buffered before a bulk flush
+  batchMaxSize: 50
+  # batchMaxWait is the maximum time to wait before flushing a partial batch
+  batchMaxWait: "200ms"
 
 # heimdall is the configuration for the heimdall middleware
 heimdall:
