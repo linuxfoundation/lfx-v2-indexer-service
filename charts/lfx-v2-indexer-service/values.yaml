@@ -70,8 +70,8 @@ opensearch:
   # indexingJob is the configuration for the OpenSearch index creation job
   indexingJob:
     # enabled is a boolean to determine if the indexing job should be created.
-    # Defaults to false because the hook Job/ConfigMap fail the Helm release
-    # if OpenSearch isn't reachable at hook execution time; enable only when
+    # Defaults to false because the hook Job fails the Helm release if
+    # OpenSearch isn't reachable at hook execution time; enable only when
     # OpenSearch availability is guaranteed during install/upgrade.
     enabled: false
     # backoffLimit is the number of retries before marking the job as failed
