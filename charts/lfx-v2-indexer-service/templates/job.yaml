@@ -9,7 +9,7 @@ metadata:
   name: {{ include "lfx-v2-indexer-service.indexJobName" . }}
   namespace: {{ .Release.Namespace }}
   annotations:
-    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook": pre-install,pre-upgrade
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
     "helm.sh/hook-weight": "1"
 spec:
@@ -61,7 +61,7 @@ spec:
               OPENSEARCH_URL="{{ .Values.opensearch.url | trimSuffix "/" }}"
               INDEX_NAME="{{ .Values.opensearch.index }}"
 
-              # The post-install/post-upgrade hook fires once the Job manifest is
+              # The pre-install/pre-upgrade hook fires once the Job manifest is
               # applied, not once OpenSearch is actually accepting connections, so
               # wait for it to answer before checking/creating the index.
               for i in $(seq 1 30); do

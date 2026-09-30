@@ -7,12 +7,17 @@ kind: ConfigMap
 metadata:
   name: {{ include "lfx-v2-indexer-service.indexConfigMapName" . }}
   namespace: {{ .Release.Namespace }}
-  # Deliberately a normal, release-managed resource rather than a hook
-  # resource: Helm applies all normal resources before running any hooks, so
-  # this ConfigMap is guaranteed to exist before the post-install/post-upgrade
-  # index-setup Job (weight 1) mounts it, without needing hook annotations of
-  # its own. Being release-managed also means `helm uninstall` removes it,
-  # which a hook-only resource (no matching pre/post-delete hook) would not.
+  annotations:
+    # A pre-install/pre-upgrade hook, same as the index-setup Job it feeds
+    # (see job.yaml): the Job must run before any normal resource (the
+    # Deployment) exists, so OpenSearch never auto-creates the index without
+    # the intended mappings. Hooks in the same phase run in ascending
+    # hook-weight order with no weight defaulting to 0, so this ConfigMap
+    # (unweighted) is guaranteed to be applied before the Job (weight 1).
+    # hook-succeeded matches the Job's own delete policy: both are ephemeral,
+    # needed only for the duration of that single Job run.
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 data:
   resources-index.json: |
 {{- tpl (.Files.Get "files/opensearch-resources-index.json.tpl") . | nindent 4 }}
