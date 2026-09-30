@@ -21,6 +21,13 @@ import (
 // explicitly-set one, so the two stay consistent with each other.
 const ackWaitSafetyMargin = 10 * time.Second
 
+// drainTimeoutSafetyMargin is added on top of OpenSearch.Timeout +
+// OpenSearch.BatchMaxWait when validating NATS.DrainTimeout, so a detached
+// BatchIndexer flush that's already dispatched when shutdown begins has time
+// to finish (and publish its domain event / Ack) before the NATS connection
+// drains and closes out from under it.
+const drainTimeoutSafetyMargin = 5 * time.Second
+
 // AppConfig represents the application configuration
 type AppConfig struct {
 	Server     ServerConfig     `json:"server"`
@@ -307,6 +314,18 @@ func (c *AppConfig) validateNATS() error {
 	minAckWait := c.OpenSearch.Timeout + c.OpenSearch.BatchMaxWait + ackWaitSafetyMargin
 	if c.NATS.AckWait < minAckWait {
 		return fmt.Errorf("NATS ack wait (%v) must be at least OpenSearch timeout plus batch max wait plus safety margin (%v)", c.NATS.AckWait, minAckWait)
+	}
+
+	// On shutdown, DrainWithTimeout stops new deliveries and waits up to
+	// DrainTimeout for in-flight message handlers to finish. A handler can
+	// be blocked in a BatchIndexer flush for up to OpenSearch.Timeout after
+	// queuing for up to BatchMaxWait. If DrainTimeout is too short for that,
+	// drain returns (and the connection closes) while the flush is still
+	// running: a write that goes on to succeed afterward can no longer
+	// publish its domain event or Ack the message.
+	minDrainTimeout := c.OpenSearch.Timeout + c.OpenSearch.BatchMaxWait + drainTimeoutSafetyMargin
+	if c.NATS.DrainTimeout < minDrainTimeout {
+		return fmt.Errorf("NATS drain timeout (%v) must be at least OpenSearch timeout plus batch max wait plus safety margin (%v)", c.NATS.DrainTimeout, minDrainTimeout)
 	}
 
 	return nil

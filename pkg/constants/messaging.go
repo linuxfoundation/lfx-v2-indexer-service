@@ -94,5 +94,12 @@ const (
 	DefaultPendingMsgLimit   = 1_000_000         // Maximum pending messages per subscription; tune down for memory-constrained deployments.
 	DefaultPendingBytesLimit = 512 * 1024 * 1024 // Maximum pending bytes per subscription (512 MiB); tune based on aggregate process memory budget.
 	DefaultWorkerCount       = 100               // concurrent message handlers
-	DefaultAckWait           = 40 * time.Second  // fallback only; production AckWait is derived from OpenSearch.Timeout in config
+	// DefaultAckWait is a fallback only, used when a caller constructs the
+	// messaging repository directly with a non-positive ackWait, bypassing
+	// config.LoadConfig's validated derivation. It must stay >= the default
+	// OpenSearch.Timeout (30s) + OpenSearch.BatchMaxWait (200ms) +
+	// ackWaitSafetyMargin (10s) = 40.2s that LoadConfig enforces, plus
+	// headroom so a future bump to those defaults doesn't silently put this
+	// fallback back below the validated floor.
+	DefaultAckWait = 45 * time.Second
 )

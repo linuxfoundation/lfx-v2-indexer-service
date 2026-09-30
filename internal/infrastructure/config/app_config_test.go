@@ -131,6 +131,52 @@ func TestValidateNATS_AckWait_AccountsForBatchMaxWait(t *testing.T) {
 	assert.NoError(t, cfg.validateNATS())
 }
 
+func TestValidateNATS_DrainTimeout(t *testing.T) {
+	cases := []struct {
+		name         string
+		drainTimeout time.Duration
+		wantError    bool
+	}{
+		{"drain timeout below opensearch timeout is rejected", 20 * time.Second, true},
+		{"drain timeout equal to opensearch timeout is rejected", 30 * time.Second, true},
+		{"drain timeout above timeout but within safety margin is rejected", 33 * time.Second, true},
+		{"drain timeout exactly at the minimum is allowed", 30*time.Second + 200*time.Millisecond + 5*time.Second, false},
+		{"drain timeout above timeout plus safety margin is allowed", 55 * time.Second, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := baseValidConfig()
+			cfg.NATS.DrainTimeout = tc.drainTimeout
+			err := cfg.validateNATS()
+			if tc.wantError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidateNATS_DrainTimeout_AccountsForBatchMaxWait(t *testing.T) {
+	// baseValidConfig has OpenSearch.Timeout=30s; with BatchMaxWait raised
+	// to 5s, a DrainTimeout of 34s clears the old Timeout-only bound but not
+	// the combined Timeout+BatchMaxWait bound, and must still be rejected.
+	cfg := baseValidConfig()
+	cfg.OpenSearch.BatchMaxWait = 5 * time.Second
+	cfg.NATS.DrainTimeout = 34 * time.Second
+
+	err := cfg.validateNATS()
+	assert.Error(t, err, "drain timeout must exceed OpenSearch timeout plus batch max wait, not just the timeout")
+
+	// 39s clears Timeout+BatchMaxWait (35s) but not the +5s safety margin —
+	// must still be rejected.
+	cfg.NATS.DrainTimeout = 39 * time.Second
+	assert.Error(t, cfg.validateNATS(), "drain timeout must also clear the safety margin")
+
+	cfg.NATS.DrainTimeout = 41 * time.Second
+	assert.NoError(t, cfg.validateNATS())
+}
+
 func TestValidateOpenSearch_Timeout(t *testing.T) {
 	cases := []struct {
 		name      string
