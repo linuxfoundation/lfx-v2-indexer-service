@@ -14,10 +14,17 @@ metadata:
     # the intended mappings. Hooks in the same phase run in ascending
     # hook-weight order with no weight defaulting to 0, so this ConfigMap
     # (unweighted) is guaranteed to be applied before the Job (weight 1).
-    # hook-succeeded matches the Job's own delete policy: both are ephemeral,
-    # needed only for the duration of that single Job run.
+    #
+    # Delete policy is intentionally NOT hook-succeeded: unlike a Job/Pod, a
+    # ConfigMap has no success/failure state for Helm to wait on, so it is
+    # considered "succeeded" immediately upon creation. Adding
+    # hook-succeeded here would delete the ConfigMap right after it's
+    # created -- before the weight-1 Job hook even starts -- removing the
+    # volume the Job mounts it as. before-hook-creation is sufficient: it
+    # still cleans up the previous run's ConfigMap on the next install/
+    # upgrade.
     "helm.sh/hook": pre-install,pre-upgrade
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-delete-policy": before-hook-creation
 data:
   resources-index.json: |
 {{- tpl (.Files.Get "files/opensearch-resources-index.json.tpl") . | nindent 4 }}
