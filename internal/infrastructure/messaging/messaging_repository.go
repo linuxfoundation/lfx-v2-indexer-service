@@ -46,10 +46,14 @@ type MessagingRepository struct {
 	// so it can be kept decoupled from (and larger than) the OpenSearch
 	// client timeout rather than sharing a hardcoded constant with it.
 	ackWait time.Duration
+	// maxAckPending is the JetStream consumer's MaxAckPending — a
+	// durable-consumer-wide (cluster-wide) limit shared across every pod
+	// running this deployment, unlike workerCount which is per-pod.
+	maxAckPending int
 }
 
 // NewMessagingRepository creates a new NATS messaging repository with auth delegation
-func NewMessagingRepository(conn *nats.Conn, authRepo contracts.AuthRepository, logger *slog.Logger, drainTimeout time.Duration, pendingMsgLimit int, pendingBytesLimit int, workerCount int, ackWait time.Duration) *MessagingRepository {
+func NewMessagingRepository(conn *nats.Conn, authRepo contracts.AuthRepository, logger *slog.Logger, drainTimeout time.Duration, pendingMsgLimit int, pendingBytesLimit int, workerCount int, ackWait time.Duration, maxAckPending int) *MessagingRepository {
 	msgLogger := logging.WithComponent(logger, constants.ComponentNATS)
 
 	if workerCount <= 0 {
@@ -60,6 +64,14 @@ func NewMessagingRepository(conn *nats.Conn, authRepo contracts.AuthRepository, 
 	if ackWait <= 0 {
 		msgLogger.Warn("Invalid ackWait, falling back to default", "provided", ackWait, "default", constants.DefaultAckWait)
 		ackWait = constants.DefaultAckWait
+	}
+
+	// A non-positive maxAckPending (e.g. a caller bypassing config.LoadConfig's
+	// validated derivation) falls back to workerCount, the single-pod-
+	// equivalent behavior this knob replaced.
+	if maxAckPending <= 0 {
+		msgLogger.Warn("Invalid maxAckPending, falling back to workerCount", "provided", maxAckPending, "worker_count", workerCount)
+		maxAckPending = workerCount
 	}
 
 	repo := &MessagingRepository{
@@ -73,10 +85,11 @@ func NewMessagingRepository(conn *nats.Conn, authRepo contracts.AuthRepository, 
 		pendingBytesLimit: pendingBytesLimit,
 		sem:               make(chan struct{}, workerCount),
 		ackWait:           ackWait,
+		maxAckPending:     maxAckPending,
 	}
 
 	// Log initialization
-	msgLogger.Info("NATS messaging repository initialized", "drain_timeout", drainTimeout, "worker_count", workerCount, "auth_repo_configured", authRepo != nil)
+	msgLogger.Info("NATS messaging repository initialized", "drain_timeout", drainTimeout, "worker_count", workerCount, "max_ack_pending", maxAckPending, "auth_repo_configured", authRepo != nil)
 
 	return repo
 }
@@ -859,13 +872,16 @@ func (r *MessagingRepository) ConsumeWithJetStream(
 		// stream message stays until maxAge/maxBytes eviction (not deleted).
 		MaxDeliver: 5,
 		AckWait:    r.ackWait,
-		// Bound outstanding deliveries to worker capacity (cap(r.sem)) rather
-		// than a fixed count: a delivered message blocks at r.sem <- struct{}{}
-		// until a worker is free, and its AckWait timer runs the whole time it
-		// waits. Letting JetStream deliver more messages than there are workers
-		// to pick them up lets a message sit queued behind AckWait's clock and
-		// get redelivered before its handler even starts.
-		MaxAckPending: cap(r.sem),
+		// r.maxAckPending bounds outstanding deliveries across the whole
+		// durable consumer (cluster-wide, shared by every pod), not just this
+		// pod's worker capacity (cap(r.sem)). A delivered message blocks at
+		// r.sem <- struct{}{} until a local worker is free, and its AckWait
+		// timer runs the whole time it waits, so r.maxAckPending should be
+		// sized to the aggregate worker capacity across all replicas (e.g.
+		// workerCount * replica count) — not just this pod's — or messages
+		// can sit queued behind AckWait's clock and get redelivered before
+		// any handler even starts.
+		MaxAckPending: r.maxAckPending,
 		// DeliverAllPolicy (the default) is intentionally used here rather than
 		// DeliverNewPolicy. DeliverNewPolicy would skip any messages that landed
 		// in the stream between stream-CRD creation and pod startup — a real loss

@@ -272,6 +272,7 @@ func (c *Container) initializeRepositories() error {
 		c.Config.NATS.PendingBytesLimit,
 		c.Config.NATS.WorkerCount,
 		c.Config.NATS.AckWait,
+		c.Config.NATS.MaxAckPending,
 	)
 
 	// Initialize cleanup repository (background operations)

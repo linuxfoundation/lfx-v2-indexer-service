@@ -13,6 +13,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
@@ -276,6 +279,62 @@ func TestBatchIndexer_DispatchedOpWaitsForRealResultDespiteOwnCtxCancellation(t 
 
 	assert.NoError(t, err, "the dispatched write actually succeeded, so Index must report that outcome, not the caller's own ctx cancellation")
 	assert.GreaterOrEqual(t, elapsed, fake.delay, "Index should wait for the real result once dispatch has begun")
+}
+
+// TestBatchIndexer_FlushLinksBackToCallerSpans verifies that flushBatch's
+// span links back to each batched caller's span context, so a flush that
+// coalesces several independently-traced callers remains discoverable from
+// each of them despite detaching to context.Background() for the actual
+// bulk request.
+func TestBatchIndexer_FlushLinksBackToCallerSpans(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	tp := trace.NewTracerProvider(trace.WithBatcher(exporter))
+	defer func() { _ = tp.Shutdown(context.Background()) }()
+	prevTP := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	defer otel.SetTracerProvider(prevTP)
+
+	logger := setupTestLogger(t)
+	fake := &fakeBulkIndexer{}
+	b := NewBatchIndexer(fake, logger, 2, time.Hour, 5*time.Second)
+
+	callerTracer := otel.Tracer("test")
+	ctx1, span1 := callerTracer.Start(context.Background(), "caller-1")
+	ctx2, span2 := callerTracer.Start(context.Background(), "caller-2")
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		defer span1.End()
+		_ = b.Index(ctx1, "test-index", "doc-1", strings.NewReader(`{}`))
+	}()
+	go func() {
+		defer wg.Done()
+		defer span2.End()
+		_ = b.Index(ctx2, "test-index", "doc-2", strings.NewReader(`{}`))
+	}()
+	wg.Wait()
+
+	require.Equal(t, 1, fake.callCount())
+	require.NoError(t, tp.ForceFlush(context.Background()))
+
+	var flushSpan *tracetest.SpanStub
+	for i, s := range exporter.GetSpans() {
+		if s.Name == "batch_indexer.flush" {
+			flushSpan = &exporter.GetSpans()[i]
+			break
+		}
+	}
+	require.NotNil(t, flushSpan, "expected a batch_indexer.flush span")
+	assert.Len(t, flushSpan.Links, 2, "flush span should link back to both batched callers' spans")
+
+	linkedIDs := map[string]bool{}
+	for _, link := range flushSpan.Links {
+		linkedIDs[link.SpanContext.SpanID().String()] = true
+	}
+	assert.True(t, linkedIDs[span1.SpanContext().SpanID().String()], "flush span should link to caller-1's span")
+	assert.True(t, linkedIDs[span2.SpanContext().SpanID().String()], "flush span should link to caller-2's span")
 }
 
 // TestBatchIndexer_StaleTimerGenerationSkipsDrain verifies the fix for the

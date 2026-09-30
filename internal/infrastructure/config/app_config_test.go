@@ -33,7 +33,8 @@ func baseValidConfig() *AppConfig {
 			WorkerCount:       10,
 			// Must exceed OpenSearch.Timeout (30s) + OpenSearch.BatchMaxWait
 			// (200ms) + ackWaitSafetyMargin (10s) = 40.2s.
-			AckWait: 45 * time.Second,
+			AckWait:       45 * time.Second,
+			MaxAckPending: 10,
 		},
 		OpenSearch: OpenSearchConfig{
 			URL:          "http://opensearch:9200",
@@ -175,6 +176,48 @@ func TestValidateNATS_DrainTimeout_AccountsForBatchMaxWait(t *testing.T) {
 
 	cfg.NATS.DrainTimeout = 41 * time.Second
 	assert.NoError(t, cfg.validateNATS())
+}
+
+func TestValidateNATS_MaxAckPending(t *testing.T) {
+	cases := []struct {
+		name          string
+		maxAckPending int
+		wantError     bool
+	}{
+		{"zero is rejected", 0, true},
+		{"negative is rejected", -1, true},
+		{"positive is allowed", 10, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := baseValidConfig()
+			cfg.NATS.MaxAckPending = tc.maxAckPending
+			err := cfg.validateNATS()
+			if tc.wantError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestLoadConfig_MaxAckPendingDefaultsToWorkerCount(t *testing.T) {
+	t.Setenv("NATS_MAX_ACK_PENDING", "")
+	t.Setenv("NATS_WORKER_COUNT", "25")
+
+	cfg, err := LoadConfig()
+	require.NoError(t, err)
+	assert.Equal(t, 25, cfg.NATS.MaxAckPending,
+		"default max ack pending should fall back to worker count")
+}
+
+func TestLoadConfig_NegativeMaxAckPendingIsRejected(t *testing.T) {
+	t.Setenv("NATS_MAX_ACK_PENDING", "-1")
+
+	_, err := LoadConfig()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "NATS_MAX_ACK_PENDING")
 }
 
 func TestValidateOpenSearch_Timeout(t *testing.T) {

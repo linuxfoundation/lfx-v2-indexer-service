@@ -64,6 +64,12 @@ type NATSConfig struct {
 	// (plus margin) so a slow-but-in-flight OpenSearch call can't be redelivered
 	// mid-flight; see NATS_ACK_WAIT.
 	AckWait time.Duration `json:"ack_wait"`
+	// MaxAckPending bounds the JetStream consumer's MaxAckPending, a
+	// durable-consumer-wide (cluster-wide) limit shared across every pod
+	// running this deployment. Kept decoupled from WorkerCount (per-pod)
+	// so multi-replica deployments can size it to aggregate worker
+	// capacity; see NATS_MAX_ACK_PENDING.
+	MaxAckPending int `json:"max_ack_pending"`
 }
 
 // OpenSearchConfig contains OpenSearch configuration
@@ -136,6 +142,8 @@ func LoadConfig() (*AppConfig, error) {
 			WorkerCount:       getEnvIntWithLogging("NATS_WORKER_COUNT", constants.DefaultWorkerCount, envVarsUsed, defaultsUsed, logger),
 			// AckWait default is resolved below, once OpenSearch.Timeout is known.
 			AckWait: getEnvDurationWithLogging("NATS_ACK_WAIT", 0, envVarsUsed, defaultsUsed, logger),
+			// MaxAckPending default is resolved below, once WorkerCount is known.
+			MaxAckPending: getEnvIntWithLogging("NATS_MAX_ACK_PENDING", 0, envVarsUsed, defaultsUsed, logger),
 		},
 		OpenSearch: OpenSearchConfig{
 			URL:          getEnvStringWithLogging("OPENSEARCH_URL", "http://localhost:9200", envVarsUsed, defaultsUsed, logger),
@@ -194,6 +202,20 @@ func LoadConfig() (*AppConfig, error) {
 	case config.NATS.AckWait == 0:
 		config.NATS.AckWait = config.OpenSearch.Timeout + config.OpenSearch.BatchMaxWait + ackWaitSafetyMargin
 		defaultsUsed["NATS_ACK_WAIT"] = true
+	}
+
+	// MaxAckPending is a durable-consumer-wide (cluster-wide) limit, unlike
+	// WorkerCount which only bounds one pod. An unset/zero NATS_MAX_ACK_PENDING
+	// defaults to WorkerCount, preserving the single-pod-equivalent behavior
+	// this knob replaced; multi-replica deployments should set it explicitly
+	// (e.g. WorkerCount * replica count) via the Helm chart. A negative value
+	// is rejected outright rather than silently defaulted.
+	switch {
+	case config.NATS.MaxAckPending < 0:
+		return nil, fmt.Errorf("NATS_MAX_ACK_PENDING must not be negative, got: %d", config.NATS.MaxAckPending)
+	case config.NATS.MaxAckPending == 0:
+		config.NATS.MaxAckPending = config.NATS.WorkerCount
+		defaultsUsed["NATS_MAX_ACK_PENDING"] = true
 	}
 
 	// Log configuration summary
@@ -299,6 +321,10 @@ func (c *AppConfig) validateNATS() error {
 
 	if c.NATS.WorkerCount <= 0 {
 		return fmt.Errorf("NATS worker count must be positive, got: %d", c.NATS.WorkerCount)
+	}
+
+	if c.NATS.MaxAckPending <= 0 {
+		return fmt.Errorf("NATS max ack pending must be positive, got: %d", c.NATS.MaxAckPending)
 	}
 
 	// A message can wait up to BatchMaxWait queued in the BatchIndexer before

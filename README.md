@@ -329,7 +329,8 @@ NATS_DRAIN_TIMEOUT=55s                       # Time to wait for in-flight handle
 
 # NATS Consumer/Worker Settings
 NATS_ACK_WAIT=45s                            # JetStream redelivery wait; must exceed OPENSEARCH_TIMEOUT + OPENSEARCH_BATCH_MAX_WAIT plus a safety margin
-NATS_WORKER_COUNT=100                        # Concurrent message handlers per pod; also bounds the JetStream consumer's MaxAckPending (cluster-wide, shared across replicas)
+NATS_WORKER_COUNT=100                        # Concurrent message handlers per pod
+NATS_MAX_ACK_PENDING=100                     # JetStream consumer's MaxAckPending (cluster-wide, shared across replicas); size to aggregate worker capacity, e.g. NATS_WORKER_COUNT * replica count
 NATS_PENDING_MSG_LIMIT=1000000               # Max pending messages buffered per subscription
 NATS_PENDING_BYTES_LIMIT=536870912           # Max pending bytes buffered per subscription (512 MiB)
 

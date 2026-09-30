@@ -11,9 +11,19 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
 )
+
+// tracer is safe to initialize at package level — otel.Tracer() returns a
+// delegating tracer that forwards to whatever TracerProvider is registered at
+// call time, so otel.SetTracerProvider() updates it regardless of init order.
+var tracer = otel.Tracer("github.com/linuxfoundation/lfx-v2-indexer-service/internal/infrastructure/storage")
 
 // bulkIndexer is the subset of contracts.StorageRepository that BatchIndexer needs.
 type bulkIndexer interface {
@@ -28,6 +38,11 @@ type pendingIndexOp struct {
 	op           contracts.BulkOperation
 	result       chan error
 	needsRefresh bool // this op's own caller is waiting on refresh=wait_for; used to recompute BatchIndexer.needsRefresh if this op is canceled before dispatch
+	// spanCtx is this op's caller's span context, captured while the caller's
+	// own ctx is still live (flushBatch detaches to context.Background() and
+	// would otherwise lose it). Used to link the flush's bulk-request span
+	// back to every op batched into it.
+	spanCtx trace.SpanContext
 }
 
 // BatchIndexer coalesces individual Index calls into OpenSearch bulk
@@ -100,6 +115,7 @@ func (b *BatchIndexer) Index(ctx context.Context, index string, docID string, bo
 		},
 		result:       make(chan error, 1),
 		needsRefresh: needsRefresh,
+		spanCtx:      trace.SpanContextFromContext(ctx),
 	}
 	b.enqueue(op, needsRefresh)
 
@@ -242,24 +258,41 @@ func (b *BatchIndexer) flushBatch(batch []*pendingIndexOp, needsRefresh bool) {
 	}
 
 	ops := make([]contracts.BulkOperation, len(batch))
+	links := make([]trace.Link, 0, len(batch))
 	for i, p := range batch {
 		ops[i] = p.op
+		if p.spanCtx.IsValid() {
+			links = append(links, trace.Link{SpanContext: p.spanCtx})
+		}
 	}
 
+	// ctx is detached from any single caller (context.Background()), so this
+	// span cannot be a child of any one op's span. Linking every queued op's
+	// spanCtx instead keeps the bulk request traceable back to each of the
+	// messages that contributed to it, without re-coupling this flush's
+	// lifetime to any single caller's cancellation.
 	ctx, cancel := context.WithTimeout(context.Background(), b.flushTimeout)
 	defer cancel()
+	ctx, span := tracer.Start(ctx, "batch_indexer.flush",
+		trace.WithLinks(links...),
+		trace.WithAttributes(attribute.Int("batch_size", len(batch))),
+	)
+	defer span.End()
 	if needsRefresh {
 		ctx = logging.WithRefreshWaitFor(ctx)
 	}
 
 	itemErrors, err := b.repo.BulkIndex(ctx, ops)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		b.logger.Error("Batch flush failed", "error", err.Error(), "batch_size", len(batch))
 		for _, p := range batch {
 			p.result <- err
 		}
 		return
 	}
+	span.SetStatus(codes.Ok, "")
 
 	for i, p := range batch {
 		var itemErr error

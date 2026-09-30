@@ -70,6 +70,8 @@ spec:
               value: {{ .Values.nats.ackWait }}
             - name: NATS_WORKER_COUNT
               value: {{ .Values.nats.workerCount | quote }}
+            - name: NATS_MAX_ACK_PENDING
+              value: {{ .Values.nats.maxAckPending | quote }}
             - name: NATS_PENDING_MSG_LIMIT
               value: {{ .Values.nats.pendingMsgLimit | quote }}
             - name: NATS_PENDING_BYTES_LIMIT
