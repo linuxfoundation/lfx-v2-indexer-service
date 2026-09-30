@@ -251,9 +251,12 @@ func (j *CleanupRepository) processItem(ctx context.Context, objectRef *string) 
 			// *mapped* field sorts to; it does not by itself let OpenSearch
 			// sort when the field has no mapping at all yet (e.g. no document
 			// in this index has ever had a deleted_at value), which would
-			// otherwise fail the sort/query entirely.
+			// otherwise fail the sort/query entirely. updated_at needs the
+			// same handling: delete bodies never set updated_at (see
+			// indexer_service.go's ActionDeleted handling), so a fresh index
+			// populated first by tombstones has never mapped updated_at either.
 			{"deleted_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
-			{"updated_at": "desc"},
+			{"updated_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
 		},
 		"_source": []string{"created_at", "updated_at", "deleted_at"},
 		"query": map[string]any{

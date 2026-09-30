@@ -92,7 +92,7 @@ func TestCleanupRepository_CheckItem(t *testing.T) {
 		"size": janitorMaxDuplicates,
 		"sort": []map[string]any{
 			{"deleted_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
-			{"updated_at": "desc"},
+			{"updated_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
 		},
 		"_source": []string{"created_at", "updated_at", "deleted_at"},
 		"query": map[string]any{
@@ -170,7 +170,7 @@ func TestCleanupRepository_ProcessMultipleHits(t *testing.T) {
 		"size": janitorMaxDuplicates,
 		"sort": []map[string]any{
 			{"deleted_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
-			{"updated_at": "desc"},
+			{"updated_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
 		},
 		"_source": []string{"created_at", "updated_at", "deleted_at"},
 		"query": map[string]any{
@@ -258,7 +258,7 @@ func TestCleanupRepository_ProcessVersionConflict(t *testing.T) {
 		"size": janitorMaxDuplicates,
 		"sort": []map[string]any{
 			{"deleted_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
-			{"updated_at": "desc"},
+			{"updated_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
 		},
 		"_source": []string{"created_at", "updated_at", "deleted_at"},
 		"query": map[string]any{
@@ -317,7 +317,7 @@ func TestCleanupRepository_ProcessWithMarshalError(t *testing.T) {
 		"size": janitorMaxDuplicates,
 		"sort": []map[string]any{
 			{"deleted_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
-			{"updated_at": "desc"},
+			{"updated_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
 		},
 		"_source": []string{"created_at", "updated_at", "deleted_at"},
 		"query": map[string]any{
