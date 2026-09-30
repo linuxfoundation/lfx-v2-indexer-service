@@ -21,10 +21,6 @@ spec:
   template:
     spec:
       restartPolicy: {{ $job.restartPolicy }}
-      volumes:
-        - name: index-config
-          configMap:
-            name: {{ include "lfx-v2-indexer-service.indexConfigMapName" . }}
       containers:
         - name: curl
           image: {{ $job.image.repository }}:{{ $job.image.tag }}
@@ -49,10 +45,6 @@ spec:
           {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
-          volumeMounts:
-            - name: index-config
-              mountPath: /config
-              readOnly: true
           command:
             - sh
             - -c
@@ -60,6 +52,16 @@ spec:
               set -e
               OPENSEARCH_URL="{{ .Values.opensearch.url | trimSuffix "/" }}"
               INDEX_NAME="{{ .Values.opensearch.index }}"
+
+              # The index body is embedded here (base64, rather than mounted
+              # from a ConfigMap) because a pre-install/pre-upgrade hook
+              # ConfigMap is not tracked as part of the release and is never
+              # cleaned up on helm uninstall -- before-hook-creation only
+              # fires on the next install/upgrade's hook execution. Keeping
+              # the config inline with this already-hook-scoped, self-cleaning
+              # (ttlSecondsAfterFinished, hook-succeeded) Job avoids that
+              # orphaned-resource problem entirely.
+              echo "{{ tpl (.Files.Get "files/opensearch-resources-index.json.tpl") . | b64enc }}" | base64 -d > /tmp/resources-index.json
 
               # The pre-install/pre-upgrade hook fires once the Job manifest is
               # applied, not once OpenSearch is actually accepting connections, so
@@ -80,7 +82,7 @@ spec:
                 echo "Index '${INDEX_NAME}' does not exist, creating..."
                 curl -f {{ if .Values.opensearch.auth.enabled }}-u "${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}" {{ end }}-X PUT "${OPENSEARCH_URL}/${INDEX_NAME}" \
                   -H 'Content-Type: application/json' \
-                  -d @/config/resources-index.json
+                  -d @/tmp/resources-index.json
                 echo "Index '${INDEX_NAME}' created successfully"
               else
                 echo "Unexpected response checking index: HTTP ${HTTP_CODE}"
