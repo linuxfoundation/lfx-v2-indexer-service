@@ -72,6 +72,16 @@ func NewBatchIndexer(repo bulkIndexer, logger *slog.Logger, maxBatchSize int, ma
 // so it can be used as a drop-in replacement at call sites that index one
 // document at a time.
 func (b *BatchIndexer) Index(ctx context.Context, index string, docID string, body io.Reader) error {
+	// Reject an already-canceled ctx before it can ever be claimed by a
+	// flush. Once enqueue claims an op (e.g. it fills maxBatchSize), the
+	// write is dispatched and can no longer be abandoned safely — see the
+	// comment below. Checking here, rather than only in the select below,
+	// closes that window for a caller whose ctx died before Index was ever
+	// called.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	bodyBytes, err := io.ReadAll(body)
 	if err != nil {
 		return err

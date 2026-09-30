@@ -147,17 +147,21 @@ func TestBatchIndexer_TopLevelErrorFansOutToAllCallers(t *testing.T) {
 func TestBatchIndexer_CallerContextCancellation(t *testing.T) {
 	logger := setupTestLogger(t)
 	fake := &fakeBulkIndexer{}
-	// maxWait is long enough that the flush never fires within the test,
-	// isolating this test to ctx cancellation while the op is still queued.
+	// maxBatchSize=100 and maxWait is long enough that this lone op never
+	// gets claimed by a flush within the test, isolating this test to ctx
+	// cancellation while the op is still sitting in the pending queue. The
+	// ctx starts valid (passes Index's pre-check) and is only canceled via
+	// its own short deadline after enqueue, so this exercises removeIfPending
+	// rather than the pre-check added for an already-dead caller.
 	b := NewBatchIndexer(fake, logger, 100, time.Hour, 5*time.Second)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancel()
 
 	err := b.Index(ctx, "test-index", "doc-1", strings.NewReader(`{}`))
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, context.Canceled)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.Equal(t, 0, fake.callCount(), "op was removed from the queue before dispatch, so no write should have happened")
 }
 
@@ -202,9 +206,9 @@ func TestBatchIndexer_CanceledRefreshWaitForCallerDoesNotStickToLaterBatch(t *te
 	fake := &fakeBulkIndexer{}
 	b := NewBatchIndexer(fake, logger, 2, time.Hour, 5*time.Second)
 
-	// op1 is the only caller in its (never-flushed) batch that needs
-	// refresh=wait_for. Its ctx is already canceled, so Index removes it
-	// from the pending queue before any flush claims it.
+	// op1's ctx is already canceled, so Index rejects it before it is ever
+	// enqueued — it never has a chance to mark the batch as needing
+	// refresh=wait_for in the first place.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	waitCtx := logging.WithRefreshWaitFor(ctx)
@@ -212,7 +216,7 @@ func TestBatchIndexer_CanceledRefreshWaitForCallerDoesNotStickToLaterBatch(t *te
 	require.Error(t, err)
 
 	// op2 and op3 form a new batch that reaches maxBatchSize; neither needs
-	// refresh=wait_for. If canceling op1 had not cleared BatchIndexer's
+	// refresh=wait_for. If op1 had left any trace on BatchIndexer's
 	// needsRefresh flag, this later, unrelated batch would incorrectly
 	// flush with refresh=wait_for too.
 	var wg sync.WaitGroup
@@ -231,24 +235,24 @@ func TestBatchIndexer_CanceledRefreshWaitForCallerDoesNotStickToLaterBatch(t *te
 	assert.False(t, fake.neededRefresh[0], "canceling the only wait_for caller must clear needsRefresh for the batch that follows it")
 }
 
-func TestBatchIndexer_FlushUsesTimeoutNotCallerContext(t *testing.T) {
+func TestBatchIndexer_RejectsAlreadyCanceledContextBeforeDispatch(t *testing.T) {
 	logger := setupTestLogger(t)
 	fake := &fakeBulkIndexer{}
+	// maxBatchSize=1 means this caller's own op would otherwise fill and
+	// claim the batch immediately inside enqueue, before Index's select
+	// ever runs. The ctx.Err() check at the top of Index must reject the
+	// call before that happens, so an already-dead caller never causes a
+	// real OpenSearch write.
 	b := NewBatchIndexer(fake, logger, 1, time.Hour, 5*time.Second)
 
-	// The caller's own context is already canceled, but the batch still
-	// flushes and succeeds because the flush uses its own bounded timeout
-	// rather than inheriting from any single caller. Since this caller also
-	// fills the batch, its Index call returns as soon as its own ctx is
-	// done, racing ahead of the (now async) flush — so wait for the flush
-	// to actually happen rather than asserting immediately.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_ = b.Index(ctx, "test-index", "doc-1", strings.NewReader(`{}`))
+	err := b.Index(ctx, "test-index", "doc-1", strings.NewReader(`{}`))
 
-	require.Eventually(t, func() bool { return fake.callCount() == 1 }, time.Second, time.Millisecond)
-	assert.NoError(t, fake.ctxErrs[0], "flush's context should not be the caller's canceled context")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, 0, fake.callCount(), "an already-canceled ctx must be rejected before it can be claimed by a flush")
 }
 
 func TestBatchIndexer_DispatchedOpWaitsForRealResultDespiteOwnCtxCancellation(t *testing.T) {
