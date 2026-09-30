@@ -846,6 +846,39 @@ func (r *MessagingRepository) GetConnectionStatus() map[string]interface{} {
 // error the message is NAKed with exponential-backoff jitter; on success it
 // is ACKed. The consumer is stopped automatically when DrainWithTimeout is
 // called.
+// acquireWorkerSlot blocks until a local worker slot (r.sem) is free.
+// AckWait's redelivery timer starts at JetStream delivery — before this call
+// is ever reached — so under uneven per-pod load (rollout, replica outage) a
+// message can queue here for longer than AckWait while waiting for local
+// worker capacity, causing a premature redelivery before its handler even
+// starts. Sending periodic InProgress heartbeats while queued resets that
+// timer without acking, so slow-but-alive queueing no longer competes with
+// AckWait the way it did with a plain blocking send.
+func (r *MessagingRepository) acquireWorkerSlot(ctx context.Context, msg jetstream.Msg, subject string) {
+	select {
+	case r.sem <- struct{}{}:
+		return
+	default:
+	}
+
+	// A third of AckWait leaves two more chances to heartbeat before AckWait
+	// would otherwise expire, tolerating a missed or slow heartbeat.
+	heartbeat := time.NewTicker(r.ackWait / 3)
+	defer heartbeat.Stop()
+	for {
+		select {
+		case r.sem <- struct{}{}:
+			return
+		case <-heartbeat.C:
+			if err := msg.InProgress(); err != nil {
+				r.logger.WarnContext(ctx, "Failed to send JetStream InProgress heartbeat while queued for a worker slot",
+					"error", err,
+					"subject", subject)
+			}
+		}
+	}
+}
+
 func (r *MessagingRepository) ConsumeWithJetStream(
 	ctx context.Context,
 	streamName string,
@@ -945,7 +978,7 @@ func (r *MessagingRepository) ConsumeWithJetStream(
 		// connection (preventing domain-event publishes on a closed connection).
 		r.wg.Add(1)
 		r.jsWg.Add(1)
-		r.sem <- struct{}{}
+		r.acquireWorkerSlot(msgCtx, msg, subject)
 		go func() {
 			defer func() {
 				<-r.sem

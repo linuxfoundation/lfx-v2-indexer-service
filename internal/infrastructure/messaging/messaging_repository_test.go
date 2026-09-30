@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -541,8 +542,9 @@ func TestMessagingRepository_WithAuthRepo(t *testing.T) {
 // stubJSMsg is a minimal jetstream.Msg stub for nakDelay tests.
 // Only Metadata() returns real data; all other methods are unused.
 type stubJSMsg struct {
-	numDelivered uint64
-	metaErr      error
+	numDelivered    uint64
+	metaErr         error
+	inProgressCalls atomic.Int64
 }
 
 func (s *stubJSMsg) Metadata() (*jetstream.MsgMetadata, error) {
@@ -559,9 +561,12 @@ func (s *stubJSMsg) Ack() error                         { return nil }
 func (s *stubJSMsg) DoubleAck(_ context.Context) error  { return nil }
 func (s *stubJSMsg) Nak() error                         { return nil }
 func (s *stubJSMsg) NakWithDelay(_ time.Duration) error { return nil }
-func (s *stubJSMsg) InProgress() error                  { return nil }
-func (s *stubJSMsg) Term() error                        { return nil }
-func (s *stubJSMsg) TermWithReason(_ string) error      { return nil }
+func (s *stubJSMsg) InProgress() error {
+	s.inProgressCalls.Add(1)
+	return nil
+}
+func (s *stubJSMsg) Term() error                   { return nil }
+func (s *stubJSMsg) TermWithReason(_ string) error { return nil }
 
 // TestNakDelay pins the per-attempt delay ceiling that the MaxDeliver:5 +
 // nakDelay contract relies on. The function uses full jitter (rand in [0, cap])
@@ -599,6 +604,64 @@ func TestNakDelay(t *testing.T) {
 		d := nakDelay(msg)
 		assert.Equal(t, time.Second, d)
 	})
+}
+
+// TestAcquireWorkerSlot_HeartbeatsWhileQueued pins the behavior that keeps
+// AckWait from expiring while a message is queued behind a full local
+// worker semaphore: acquireWorkerSlot must send JetStream InProgress
+// heartbeats until a slot frees up, and must not return before one does.
+func TestAcquireWorkerSlot_HeartbeatsWhileQueued(t *testing.T) {
+	r := &MessagingRepository{
+		sem:     make(chan struct{}, 1),
+		ackWait: 30 * time.Millisecond,
+		logger:  slog.New(slog.NewTextHandler(os.Stderr, nil)),
+	}
+	r.sem <- struct{}{} // fill the only slot so acquireWorkerSlot must wait
+
+	msg := &stubJSMsg{}
+	done := make(chan struct{})
+	go func() {
+		r.acquireWorkerSlot(context.Background(), msg, "test.subject")
+		close(done)
+	}()
+
+	// Give the heartbeat ticker (ackWait/3 = 10ms) several chances to fire
+	// before freeing the slot.
+	require.Eventually(t, func() bool {
+		return msg.inProgressCalls.Load() >= 2
+	}, time.Second, 5*time.Millisecond, "expected InProgress heartbeats while queued")
+
+	select {
+	case <-done:
+		t.Fatal("acquireWorkerSlot returned before a slot was freed")
+	default:
+	}
+
+	<-r.sem // free the slot
+	require.Eventually(t, func() bool {
+		select {
+		case <-done:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 5*time.Millisecond, "expected acquireWorkerSlot to return once a slot freed")
+}
+
+// TestAcquireWorkerSlot_NoWaitNoHeartbeat pins the fast path: when a slot is
+// immediately available, acquireWorkerSlot must not send any heartbeat.
+func TestAcquireWorkerSlot_NoWaitNoHeartbeat(t *testing.T) {
+	r := &MessagingRepository{
+		sem:     make(chan struct{}, 1),
+		ackWait: 30 * time.Millisecond,
+		logger:  slog.New(slog.NewTextHandler(os.Stderr, nil)),
+	}
+
+	msg := &stubJSMsg{}
+	r.acquireWorkerSlot(context.Background(), msg, "test.subject")
+
+	assert.Equal(t, int64(0), msg.inProgressCalls.Load())
+	<-r.sem // consumed the slot
 }
 
 // Test runner setup

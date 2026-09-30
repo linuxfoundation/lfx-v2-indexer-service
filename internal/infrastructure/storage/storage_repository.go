@@ -372,8 +372,11 @@ func (r *StorageRepository) BulkIndex(ctx context.Context, operations []contract
 						errType = op.Error.Type
 						errReason = op.Error.Reason
 					}
-					itemErrors[i] = fmt.Errorf("bulk operation failed for document %s with status %d: %s: %s",
-						operations[i].DocID, op.Status, errType, errReason)
+					// errReason is excluded from the returned error — like the
+					// single-doc Index() path above, it may echo raw indexed
+					// field values (PII risk). Log it structurally only.
+					itemErrors[i] = fmt.Errorf("bulk operation failed for document %s with status %d: %s",
+						operations[i].DocID, op.Status, errType)
 					logger.Warn("Bulk operation item failed",
 						"status", op.Status,
 						"error_type", errType,

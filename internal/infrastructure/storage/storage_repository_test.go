@@ -309,7 +309,10 @@ func TestBulkIndex_PartialFailure(t *testing.T) {
 	assert.NoError(t, itemErrors[0])
 	require.Error(t, itemErrors[1])
 	assert.ErrorContains(t, itemErrors[1], "mapper_parsing_exception")
-	assert.ErrorContains(t, itemErrors[1], "failed to parse")
+	assert.ErrorContains(t, itemErrors[1], "doc-2")
+	// The raw OpenSearch "reason" field may echo indexed field values (PII
+	// risk) and must never appear in the returned error, only in logs.
+	assert.NotContains(t, itemErrors[1].Error(), "failed to parse")
 }
 
 func TestBulkIndex_FewerItemsThanRequestedAreReportedAsErrors(t *testing.T) {
