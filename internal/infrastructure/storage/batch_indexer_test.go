@@ -209,11 +209,14 @@ func TestBatchIndexer_CanceledRefreshWaitForCallerDoesNotStickToLaterBatch(t *te
 	fake := &fakeBulkIndexer{}
 	b := NewBatchIndexer(fake, logger, 2, time.Hour, 5*time.Second)
 
-	// op1's ctx is already canceled, so Index rejects it before it is ever
-	// enqueued — it never has a chance to mark the batch as needing
-	// refresh=wait_for in the first place.
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	// op1's ctx is valid at call time (unlike a pre-canceled ctx, which
+	// Index would reject before ever enqueuing it) and only expires via its
+	// own short deadline after it is already sitting in the pending queue
+	// (maxBatchSize=2 means a lone op never gets claimed by a flush). This
+	// exercises removeIfPending's actual recompute of needsRefresh, not just
+	// the pre-check for an already-dead caller.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancel()
 	waitCtx := logging.WithRefreshWaitFor(ctx)
 	err := b.Index(waitCtx, "test-index", "doc-canceled", strings.NewReader(`{}`))
 	require.Error(t, err)

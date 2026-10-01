@@ -335,7 +335,7 @@ NATS_PENDING_MSG_LIMIT=1000000               # Max pending messages buffered per
 NATS_PENDING_BYTES_LIMIT=536870912           # Max pending bytes buffered per subscription (512 MiB)
 
 # OpenSearch Connection Settings
-OPENSEARCH_TIMEOUT=30s                       # Response header timeout — covers time waiting for the first response byte; body reads are not bounded
+OPENSEARCH_TIMEOUT=30s                       # Response header timeout for direct (non-batched) calls — body reads are not bounded there. Batch flushes (BatchIndexer) apply it as an end-to-end deadline covering the whole bulk request, body reads included
 OPENSEARCH_BATCH_MAX_SIZE=50                 # Max documents buffered before a bulk flush
 OPENSEARCH_BATCH_MAX_WAIT=200ms              # Max time to wait before flushing a partial batch by this setting
 

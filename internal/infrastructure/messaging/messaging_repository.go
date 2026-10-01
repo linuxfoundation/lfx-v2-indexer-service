@@ -846,18 +846,23 @@ func (r *MessagingRepository) GetConnectionStatus() map[string]interface{} {
 // error the message is NAKed with exponential-backoff jitter; on success it
 // is ACKed. The consumer is stopped automatically when DrainWithTimeout is
 // called.
-// acquireWorkerSlot blocks until a local worker slot (r.sem) is free.
-// AckWait's redelivery timer starts at JetStream delivery — before this call
-// is ever reached — so under uneven per-pod load (rollout, replica outage) a
-// message can queue here for longer than AckWait while waiting for local
-// worker capacity, causing a premature redelivery before its handler even
-// starts. Sending periodic InProgress heartbeats while queued resets that
-// timer without acking, so slow-but-alive queueing no longer competes with
-// AckWait the way it did with a plain blocking send.
-func (r *MessagingRepository) acquireWorkerSlot(ctx context.Context, msg jetstream.Msg, subject string) {
+// acquireWorkerSlot blocks until a local worker slot (r.sem) is free or ctx
+// is canceled, reporting whether it acquired a slot. AckWait's redelivery
+// timer starts at JetStream delivery — before this call is ever reached —
+// so under uneven per-pod load (rollout, replica outage) a message can
+// queue here for longer than AckWait while waiting for local worker
+// capacity, causing a premature redelivery before its handler even starts.
+// Sending periodic InProgress heartbeats while queued resets that timer
+// without acking, so slow-but-alive queueing no longer competes with
+// AckWait the way it did with a plain blocking send. ctx is canceled during
+// shutdown (DrainWithTimeout cancels the subscription context before
+// draining), so this must stop waiting rather than start a handler with an
+// already-canceled context; the caller must not release a slot it never
+// acquired.
+func (r *MessagingRepository) acquireWorkerSlot(ctx context.Context, msg jetstream.Msg, subject string) bool {
 	select {
 	case r.sem <- struct{}{}:
-		return
+		return true
 	default:
 	}
 
@@ -868,7 +873,11 @@ func (r *MessagingRepository) acquireWorkerSlot(ctx context.Context, msg jetstre
 	for {
 		select {
 		case r.sem <- struct{}{}:
-			return
+			return true
+		case <-ctx.Done():
+			r.logger.WarnContext(ctx, "Abandoning wait for a worker slot, context canceled",
+				"subject", subject)
+			return false
 		case <-heartbeat.C:
 			if err := msg.InProgress(); err != nil {
 				r.logger.WarnContext(ctx, "Failed to send JetStream InProgress heartbeat while queued for a worker slot",
@@ -978,7 +987,15 @@ func (r *MessagingRepository) ConsumeWithJetStream(
 		// connection (preventing domain-event publishes on a closed connection).
 		r.wg.Add(1)
 		r.jsWg.Add(1)
-		r.acquireWorkerSlot(msgCtx, msg, subject)
+		if !r.acquireWorkerSlot(msgCtx, msg, subject) {
+			// ctx was canceled while queued; no slot was acquired, so none
+			// must be released. Leave msg un-acked — it is redelivered once
+			// AckWait or MaxDeliver run their course, or handled by a
+			// surviving replica.
+			r.jsWg.Done()
+			r.wg.Done()
+			return
+		}
 		go func() {
 			defer func() {
 				<-r.sem

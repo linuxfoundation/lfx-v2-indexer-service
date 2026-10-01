@@ -658,10 +658,43 @@ func TestAcquireWorkerSlot_NoWaitNoHeartbeat(t *testing.T) {
 	}
 
 	msg := &stubJSMsg{}
-	r.acquireWorkerSlot(context.Background(), msg, "test.subject")
+	acquired := r.acquireWorkerSlot(context.Background(), msg, "test.subject")
 
+	assert.True(t, acquired)
 	assert.Equal(t, int64(0), msg.inProgressCalls.Load())
 	<-r.sem // consumed the slot
+}
+
+// TestAcquireWorkerSlot_CtxCanceledWhileQueuedReturnsFalse pins shutdown
+// behavior: if ctx is canceled while waiting for a worker slot (e.g.
+// DrainWithTimeout canceling the subscription context), acquireWorkerSlot
+// must stop waiting and report that it did not acquire a slot, rather than
+// blocking forever or handing the caller a slot to start a handler with an
+// already-canceled context.
+func TestAcquireWorkerSlot_CtxCanceledWhileQueuedReturnsFalse(t *testing.T) {
+	r := &MessagingRepository{
+		sem:     make(chan struct{}, 1),
+		ackWait: 30 * time.Millisecond,
+		logger:  slog.New(slog.NewTextHandler(os.Stderr, nil)),
+	}
+	r.sem <- struct{}{} // fill the only slot so acquireWorkerSlot must wait
+
+	ctx, cancel := context.WithCancel(context.Background())
+	msg := &stubJSMsg{}
+	done := make(chan bool, 1)
+	go func() {
+		done <- r.acquireWorkerSlot(ctx, msg, "test.subject")
+	}()
+
+	time.Sleep(20 * time.Millisecond) // let it queue and heartbeat at least once
+	cancel()
+
+	select {
+	case acquired := <-done:
+		assert.False(t, acquired, "a canceled ctx must not report an acquired slot")
+	case <-time.After(time.Second):
+		t.Fatal("acquireWorkerSlot did not return after ctx was canceled")
+	}
 }
 
 // Test runner setup
