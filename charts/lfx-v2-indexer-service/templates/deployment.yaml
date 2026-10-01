@@ -1,11 +1,37 @@
 # Copyright The Linux Foundation and each contributor to LFX.
 #
 # SPDX-License-Identifier: MIT
+{{- /*
+nats.drainTimeout is rendered verbatim into NATS_DRAIN_TIMEOUT and parsed
+Go-side with time.ParseDuration, which accepts combinations of integer h/m/s/ms
+components (e.g. "55s", "1m", "90000ms", "1m30s"). The grace-period check below
+needs that value in whole seconds, so it's decomposed component-by-component
+(ms extracted and stripped first, since "m" would otherwise also match the
+"m" in "ms" — Go's RE2 regexp engine has no lookahead to disambiguate them
+in a single pass) rather than requiring a single-unit "<N>s" string, which
+would reject those other equally valid overrides.
+*/}}
 {{- $drainTimeout := .Values.nats.drainTimeout }}
-{{- if not (regexMatch "^[0-9]+s$" $drainTimeout) }}
-{{- fail (printf "nats.drainTimeout %q must be a whole-second duration like \"55s\" for the terminationGracePeriodSeconds check below" $drainTimeout) }}
+{{- $durationPattern := "^([0-9]+h)?([0-9]+m)?([0-9]+s)?([0-9]+ms)?$" }}
+{{- $durationError := printf "nats.drainTimeout %q must be a duration composed of integer h/m/s/ms components (e.g. \"55s\", \"1m\", \"90000ms\", \"1m30s\") for the terminationGracePeriodSeconds check below" $drainTimeout }}
+{{- if or (eq $drainTimeout "") (not (regexMatch $durationPattern $drainTimeout)) }}
+{{- fail $durationError }}
 {{- end }}
-{{- $drainSeconds := trimSuffix "s" $drainTimeout | int }}
+{{- $msPart := regexFind "[0-9]+ms" $drainTimeout }}
+{{- $remainder := regexReplaceAll "[0-9]+ms" $drainTimeout "" }}
+{{- $hPart := regexFind "[0-9]+h" $remainder }}
+{{- $mPart := regexFind "[0-9]+m" $remainder }}
+{{- $sPart := regexFind "[0-9]+s" $remainder }}
+{{- $matchedLen := add (add (add (len $hPart) (len $mPart)) (len $sPart)) (len $msPart) }}
+{{- if ne $matchedLen (len $drainTimeout) }}
+{{- fail $durationError }}
+{{- end }}
+{{- $drainSecondsFloat := 0.0 }}
+{{- if $hPart }}{{- $drainSecondsFloat = add $drainSecondsFloat (mulf ($hPart | trimSuffix "h" | float64) 3600.0) }}{{- end }}
+{{- if $mPart }}{{- $drainSecondsFloat = add $drainSecondsFloat (mulf ($mPart | trimSuffix "m" | float64) 60.0) }}{{- end }}
+{{- if $sPart }}{{- $drainSecondsFloat = add $drainSecondsFloat ($sPart | trimSuffix "s" | float64) }}{{- end }}
+{{- if $msPart }}{{- $drainSecondsFloat = add $drainSecondsFloat (divf ($msPart | trimSuffix "ms" | float64) 1000.0) }}{{- end }}
+{{- $drainSeconds := ceil $drainSecondsFloat | int }}
 {{- $minGracePeriod := add $drainSeconds 5 }}
 {{- if lt (int .Values.app.terminationGracePeriodSeconds) $minGracePeriod }}
 {{- fail (printf "app.terminationGracePeriodSeconds (%d) must be at least nats.drainTimeout (%s) + 5s margin for the health server's own shutdown delay (= %ds), or the pod is SIGKILLed mid-drain before DrainWithTimeout returns" (int .Values.app.terminationGracePeriodSeconds) $drainTimeout $minGracePeriod) }}
