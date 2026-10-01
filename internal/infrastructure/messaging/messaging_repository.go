@@ -979,29 +979,34 @@ func (r *MessagingRepository) ConsumeWithJetStream(
 		data := append([]byte(nil), msg.Data()...)
 		subject := msg.Subject()
 
-		// Acquire a worker slot; this blocks the consumer callback goroutine
-		// until a slot is free, which provides back-pressure alongside
-		// MaxAckPending and keeps OpenSearch write concurrency bounded.
 		// Track in r.wg (all handlers) AND r.jsWg (JetStream-only) so
 		// DrainWithTimeout can wait for JetStream workers before draining the
 		// connection (preventing domain-event publishes on a closed connection).
 		r.wg.Add(1)
 		r.jsWg.Add(1)
-		if !r.acquireWorkerSlot(msgCtx, msg, subject) {
-			// ctx was canceled while queued; no slot was acquired, so none
-			// must be released. Leave msg un-acked — it is redelivered once
-			// AckWait or MaxDeliver run their course, or handled by a
-			// surviving replica.
-			r.jsWg.Done()
-			r.wg.Done()
-			return
-		}
+		// Acquiring the worker slot happens inside this goroutine, not the
+		// callback, so the callback returns immediately and nats.go can keep
+		// delivering. nats.go's client buffers and invokes this callback
+		// serially: if acquiring instead blocked the callback itself, every
+		// message still sitting in that client-side buffer behind the one
+		// currently waiting would receive no InProgress heartbeat and could
+		// hit AckWait and redeliver before this callback ever reached it.
+		// Spawning per-message means every delivered message heartbeats on
+		// its own while queued for a slot, regardless of how many others are
+		// ahead of it.
 		go func() {
 			defer func() {
-				<-r.sem
 				r.jsWg.Done()
 				r.wg.Done()
 			}()
+			if !r.acquireWorkerSlot(msgCtx, msg, subject) {
+				// ctx was canceled while queued; no slot was acquired, so
+				// none must be released. Leave msg un-acked — it is
+				// redelivered once AckWait or MaxDeliver run their course,
+				// or handled by a surviving replica.
+				return
+			}
+			defer func() { <-r.sem }()
 
 			spanCtx, span := tracer.Start(msgCtx, "jetstream.process",
 				trace.WithSpanKind(trace.SpanKindConsumer),
