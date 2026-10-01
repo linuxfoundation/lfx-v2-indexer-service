@@ -860,8 +860,19 @@ func (r *MessagingRepository) GetConnectionStatus() map[string]interface{} {
 // already-canceled context; the caller must not release a slot it never
 // acquired.
 func (r *MessagingRepository) acquireWorkerSlot(ctx context.Context, msg jetstream.Msg, subject string) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+
 	select {
 	case r.sem <- struct{}{}:
+		// select does not favor one ready case over another, so a slot send
+		// can still win a race against an already-canceled ctx; recheck
+		// before honoring it.
+		if ctx.Err() != nil {
+			<-r.sem
+			return false
+		}
 		return true
 	default:
 	}
@@ -873,6 +884,12 @@ func (r *MessagingRepository) acquireWorkerSlot(ctx context.Context, msg jetstre
 	for {
 		select {
 		case r.sem <- struct{}{}:
+			if ctx.Err() != nil {
+				<-r.sem
+				r.logger.WarnContext(ctx, "Abandoning wait for a worker slot, context canceled",
+					"subject", subject)
+				return false
+			}
 			return true
 		case <-ctx.Done():
 			r.logger.WarnContext(ctx, "Abandoning wait for a worker slot, context canceled",
