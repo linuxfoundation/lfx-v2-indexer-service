@@ -311,7 +311,7 @@ func TestBulkIndex_PartialFailure(t *testing.T) {
 	assert.ErrorContains(t, itemErrors[1], "mapper_parsing_exception")
 	assert.ErrorContains(t, itemErrors[1], "doc-2")
 	// The raw OpenSearch "reason" field may echo indexed field values (PII
-	// risk) and must never appear in the returned error, only in logs.
+	// risk) and must never appear in the returned error or any log.
 	assert.NotContains(t, itemErrors[1].Error(), "failed to parse")
 }
 
@@ -362,9 +362,11 @@ func TestIndex_LogsStructuredErrorOn400(t *testing.T) {
 
 	assert.Error(t, indexErr)
 	logging.AssertLogContains(t, buf, "mapper_parsing_exception")
-	logging.AssertLogContains(t, buf, "failed to parse field")
 	logging.AssertLogContains(t, buf, "error_type")
-	logging.AssertLogContains(t, buf, "error_reason")
+	// The raw OpenSearch "reason" field may echo indexed field values (PII
+	// risk) and must never appear in logs or the returned error.
+	assert.NotContains(t, buf.String(), "failed to parse field")
+	assert.NotContains(t, buf.String(), "error_reason")
 }
 
 // Note: Integration tests that require actual OpenSearch connections should be placed

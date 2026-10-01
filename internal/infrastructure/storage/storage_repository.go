@@ -67,24 +67,25 @@ func (r *StorageRepository) Index(ctx context.Context, index string, docID strin
 	if res.IsError() {
 		// Cap read to avoid unbounded allocation on large proxy error bodies.
 		body, readErr := io.ReadAll(io.LimitReader(res.Body, 4096))
-		// Parse structured fields only — the raw body may echo field values containing PII.
+		// Parse structured fields only — the raw body may echo field values
+		// containing PII. The reason field is deliberately never captured:
+		// it may echo raw indexed field values and must not reach the
+		// returned error or any log.
 		var osErr struct {
 			Error struct {
-				Type   string `json:"type"`
-				Reason string `json:"reason"`
+				Type string `json:"type"`
 			} `json:"error"`
 		}
-		errType, errReason := "unknown", "unknown"
+		errType := "unknown"
 		if readErr == nil {
 			if err := json.Unmarshal(body, &osErr); err == nil && osErr.Error.Type != "" {
 				errType = osErr.Error.Type
-				errReason = osErr.Error.Reason
 			}
 		}
 		if readErr != nil {
-			logger.Error("Index request failed", "status", res.Status(), "error_type", errType, "error_reason", errReason, "body_read_error", readErr)
+			logger.Error("Index request failed", "status", res.Status(), "error_type", errType, "body_read_error", readErr)
 		} else {
-			logger.Error("Index request failed", "status", res.Status(), "error_type", errType, "error_reason", errReason)
+			logger.Error("Index request failed", "status", res.Status(), "error_type", errType)
 		}
 		return fmt.Errorf("%s: %s", constants.ErrIndexDocument, res.Status())
 	}
@@ -367,20 +368,19 @@ func (r *StorageRepository) BulkIndex(ctx context.Context, operations []contract
 			for _, op := range item {
 				if op.Status >= 400 {
 					errorCount++
-					errType, errReason := "unknown", "unknown"
+					// The OpenSearch error's reason field is excluded from
+					// both the returned error and the log below — like the
+					// single-doc Index() path above, it may echo raw indexed
+					// field values (PII risk). Only the error type is kept.
+					errType := "unknown"
 					if op.Error != nil {
 						errType = op.Error.Type
-						errReason = op.Error.Reason
 					}
-					// errReason is excluded from the returned error — like the
-					// single-doc Index() path above, it may echo raw indexed
-					// field values (PII risk). Log it structurally only.
 					itemErrors[i] = fmt.Errorf("bulk operation failed for document %s with status %d: %s",
 						operations[i].DocID, op.Status, errType)
 					logger.Warn("Bulk operation item failed",
 						"status", op.Status,
 						"error_type", errType,
-						"error_reason", errReason,
 						"document_id", operations[i].DocID)
 				} else {
 					successCount++
