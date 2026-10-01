@@ -325,10 +325,10 @@ OPENSEARCH_INDEX=resources                   # OpenSearch index name
 NATS_MAX_RECONNECTS=-1                       # Max reconnection attempts (-1 = infinite, recommended for production)
 NATS_RECONNECT_WAIT=2s                       # Wait time between reconnects
 NATS_CONNECTION_TIMEOUT=10s                  # Initial connection timeout
-NATS_DRAIN_TIMEOUT=55s                       # Time to wait for in-flight handlers to finish on shutdown
+NATS_DRAIN_TIMEOUT=55s                       # Time to wait for in-flight handlers to finish on shutdown; must be at least OPENSEARCH_TIMEOUT + OPENSEARCH_BATCH_MAX_WAIT + 5s safety margin (validated at startup), and below the deployment's terminationGracePeriodSeconds with headroom for the health server's own shutdown delay, or the pod is SIGKILLed mid-drain
 
 # NATS Consumer/Worker Settings
-NATS_ACK_WAIT=45s                            # JetStream redelivery wait; must exceed OPENSEARCH_TIMEOUT + OPENSEARCH_BATCH_MAX_WAIT plus a safety margin
+NATS_ACK_WAIT=45s                            # JetStream redelivery wait; this is the chart's shipped value, not the code default — unset, LoadConfig derives OPENSEARCH_TIMEOUT + OPENSEARCH_BATCH_MAX_WAIT + 10s safety margin (40.2s with defaults). Must be at least that derived minimum (validated at startup)
 NATS_WORKER_COUNT=100                        # Concurrent message handlers per pod
 NATS_MAX_ACK_PENDING=100                     # JetStream consumer's MaxAckPending (cluster-wide, shared across replicas); size to aggregate worker capacity, e.g. NATS_WORKER_COUNT * replica count
 NATS_PENDING_MSG_LIMIT=1000000               # Max pending messages buffered per subscription
@@ -337,7 +337,7 @@ NATS_PENDING_BYTES_LIMIT=536870912           # Max pending bytes buffered per su
 # OpenSearch Connection Settings
 OPENSEARCH_TIMEOUT=30s                       # Response header timeout for direct (non-batched) calls — body reads are not bounded there. Batch flushes (BatchIndexer) apply it as an end-to-end deadline covering the whole bulk request, body reads included
 OPENSEARCH_BATCH_MAX_SIZE=50                 # Max documents buffered before a bulk flush
-OPENSEARCH_BATCH_MAX_WAIT=200ms              # Max time to wait before flushing a partial batch by this setting
+OPENSEARCH_BATCH_MAX_WAIT=200ms              # Max time to wait before flushing a partial batch
 
 # JWT Configuration
 JWT_ISSUER=heimdall                          # JWT issuer validation

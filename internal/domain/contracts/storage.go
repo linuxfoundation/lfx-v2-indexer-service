@@ -37,6 +37,14 @@ func (e *VersionConflictError) Error() string {
 		e.DocumentID, e.CurrentSeq, e.ExpectedSeq, e.Err)
 }
 
+// DocumentIndexer indexes one document at a time. StorageRepository satisfies
+// it directly; a batching wrapper (see internal/infrastructure/storage.BatchIndexer)
+// can satisfy it too, so a caller's single-document writes can be coalesced
+// into bulk OpenSearch requests without the caller knowing about it.
+type DocumentIndexer interface {
+	Index(ctx context.Context, index string, docID string, body io.Reader) error
+}
+
 // BulkOperation represents a bulk operation for indexing
 type BulkOperation struct {
 	Index  string

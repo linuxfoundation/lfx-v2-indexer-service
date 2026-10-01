@@ -1,6 +1,15 @@
 # Copyright The Linux Foundation and each contributor to LFX.
 #
 # SPDX-License-Identifier: MIT
+{{- $drainTimeout := .Values.nats.drainTimeout }}
+{{- if not (regexMatch "^[0-9]+s$" $drainTimeout) }}
+{{- fail (printf "nats.drainTimeout %q must be a whole-second duration like \"55s\" for the terminationGracePeriodSeconds check below" $drainTimeout) }}
+{{- end }}
+{{- $drainSeconds := trimSuffix "s" $drainTimeout | int }}
+{{- $minGracePeriod := add $drainSeconds 5 }}
+{{- if lt (int .Values.app.terminationGracePeriodSeconds) $minGracePeriod }}
+{{- fail (printf "app.terminationGracePeriodSeconds (%d) must be at least nats.drainTimeout (%s) + 5s margin for the health server's own shutdown delay (= %ds), or the pod is SIGKILLed mid-drain before DrainWithTimeout returns" (int .Values.app.terminationGracePeriodSeconds) $drainTimeout $minGracePeriod) }}
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment

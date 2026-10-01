@@ -236,7 +236,16 @@ func (j *CleanupRepository) processItem(ctx context.Context, objectRef *string) 
 	// pull them all into memory; _source is limited to the fields conflict
 	// resolution below actually reads.
 	query := map[string]any{
-		"size": janitorMaxDuplicates,
+		// Requesting one more than the cap lets the truncation check below
+		// tell "exactly janitorMaxDuplicates, fully resolved" apart from
+		// "truncated" instead of treating both as the same count.
+		"size": janitorMaxDuplicates + 1,
+		// OpenSearch omits _seq_no/_primary_term from hits unless explicitly
+		// requested; without this, every VersionedDocument below comes back
+		// with nil SeqNo/PrimaryTerm, which the optimistic-lock update then
+		// silently skips and the conflict-resolution logging below would
+		// otherwise dereference unconditionally.
+		"seq_no_primary_term": true,
 		// Sort so that if there are more than janitorMaxDuplicates hits, the
 		// truncated set still keeps the actual winner. A delete only sets
 		// deleted_at, not updated_at (see indexer_service.go's ActionDeleted
@@ -282,17 +291,20 @@ func (j *CleanupRepository) processItem(ctx context.Context, objectRef *string) 
 		return "error"
 	}
 
+	// docs was requested with size janitorMaxDuplicates+1; truncate to the
+	// cap now that the extra hit has told us whether the result was cut off.
+	if len(docs) > janitorMaxDuplicates {
+		j.logger.Warn("Janitor search hit the duplicate cap; some duplicates may not have been resolved",
+			"object_ref", safeLogString(objectRef),
+			"cap", janitorMaxDuplicates)
+		docs = docs[:janitorMaxDuplicates]
+	}
+
 	// Log the number of hits with analysis
 	hitCount := len(docs)
 	j.logger.Debug("Janitor search completed",
 		"object_ref", safeLogString(objectRef),
 		"hits", hitCount)
-
-	if hitCount == janitorMaxDuplicates {
-		j.logger.Warn("Janitor search hit the duplicate cap; some duplicates may not have been resolved",
-			"object_ref", safeLogString(objectRef),
-			"cap", janitorMaxDuplicates)
-	}
 
 	if hitCount == 0 {
 		j.logger.Debug("No documents found for janitor processing",
@@ -326,8 +338,8 @@ func (j *CleanupRepository) processItem(ctx context.Context, objectRef *string) 
 		j.logger.Debug("Analyzing document for conflict resolution",
 			"object_ref", safeLogString(objectRef),
 			"document_id", doc.ID,
-			"seq_no", *doc.SeqNo,
-			"primary_term", *doc.PrimaryTerm)
+			"seq_no", safeLogInt64(doc.SeqNo),
+			"primary_term", safeLogInt64(doc.PrimaryTerm))
 
 		// Unmarshal the source into a TransactionBodyStub
 		hitBody := new(TransactionBodyStub)
@@ -456,8 +468,8 @@ func (j *CleanupRepository) updateLatestFlag(ctx context.Context, doc contracts.
 		"object_ref", objectRef,
 		"document_id", doc.ID,
 		"latest", latest,
-		"seq_no", *doc.SeqNo,
-		"primary_term", *doc.PrimaryTerm)
+		"seq_no", safeLogInt64(doc.SeqNo),
+		"primary_term", safeLogInt64(doc.PrimaryTerm))
 
 	updateBody := map[string]any{
 		"doc": map[string]any{
@@ -613,6 +625,15 @@ func (j *CleanupRepository) IsRunning() bool {
 }
 
 // Helper functions for safe logging
+
+// safeLogInt64 safely logs an int64 pointer, such as a possibly-absent
+// OpenSearch _seq_no/_primary_term value, without dereferencing a nil.
+func safeLogInt64(i *int64) any {
+	if i == nil {
+		return "<nil>"
+	}
+	return *i
+}
 
 // safeLogString safely logs a string pointer without exposing sensitive data
 func safeLogString(s *string) string {

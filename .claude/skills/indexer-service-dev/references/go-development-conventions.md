@@ -34,7 +34,7 @@ Quick checklist form. The narrative lives in `../SKILL.md`. Use this file in a c
 ## OpenSearch storage
 
 - [ ] Storage code goes through the storage repository interface, not the OpenSearch client directly.
-- [ ] Indexer writes go through `StorageRepository.Index` with `object_ref` as the OpenSearch document ID and `latest: true`.
+- [ ] Indexer writes go through `contracts.DocumentIndexer.Index` (`StorageRepository` or a `BatchIndexer` wrapper) with `object_ref` as the OpenSearch document ID and `latest: true`.
 - [ ] Search-shaped fields come from `IndexingConfig`. New keys inside `data` are free; new top-level fields are not.
 
 ## Domain events

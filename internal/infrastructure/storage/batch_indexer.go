@@ -6,6 +6,7 @@ package storage
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"sync"
@@ -17,6 +18,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
 )
 
@@ -295,7 +297,12 @@ func (b *BatchIndexer) flushBatch(batch []*pendingIndexOp, needsRefresh bool) {
 	span.SetStatus(codes.Ok, "")
 
 	for i, p := range batch {
-		var itemErr error
+		// A BulkIndex implementation returning a shorter (or nil) itemErrors
+		// slice than ops is a contract violation; treat the missing entries
+		// as failures rather than defaulting to success, so a broken
+		// implementation can't make ProcessTransaction publish events for
+		// documents that were never confirmed written.
+		itemErr := fmt.Errorf("%s: bulk index response missing result for item %d", constants.ErrBulkOperation, i)
 		if i < len(itemErrors) {
 			itemErr = itemErrors[i]
 		}

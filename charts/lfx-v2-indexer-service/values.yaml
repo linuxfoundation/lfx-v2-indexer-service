@@ -16,7 +16,13 @@ nats:
   indexingSubject: "lfx.index.>"
   # v1IndexingSubject is the NATS subject for v1 indexing messages
   v1IndexingSubject: "lfx.v1.index.>"
-  # drainTimeout is the timeout for draining NATS connections
+  # drainTimeout is the timeout for draining NATS connections. Must exceed
+  # opensearch.timeout + opensearch.batchMaxWait plus a safety margin
+  # (validated at startup) — a handler can be blocked in a BatchIndexer
+  # flush for up to opensearch.timeout after queuing for up to
+  # opensearch.batchMaxWait. Must also stay below app.terminationGracePeriodSeconds
+  # with headroom for the health server's own shutdown delay, or the pod is
+  # SIGKILLed mid-drain before drainTimeout elapses.
   drainTimeout: "55s"
   # ackWait is how long JetStream waits for an Ack before redelivering a
   # message. Must exceed opensearch.timeout + opensearch.batchMaxWait plus a
@@ -79,7 +85,10 @@ opensearch:
   url: http://opensearch-cluster-master.lfx.svc.cluster.local:9200/
   # index is the index name for storing resources
   index: resources
-  # timeout is the ResponseHeaderTimeout for OpenSearch requests — covers time waiting for the first response byte; body reads are not bounded
+  # timeout is the ResponseHeaderTimeout for direct (non-batched) OpenSearch
+  # requests — covers time waiting for the first response byte; body reads
+  # are not bounded there. BatchIndexer flushes apply it as an end-to-end
+  # deadline for the whole bulk request, body reads included.
   timeout: "30s"
   # batchMaxSize is the maximum number of documents buffered before a bulk flush
   batchMaxSize: 50

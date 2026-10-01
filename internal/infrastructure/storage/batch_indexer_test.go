@@ -126,6 +126,23 @@ func TestBatchIndexer_PerItemErrorRouting(t *testing.T) {
 	assert.Error(t, results["doc-bad"])
 }
 
+// TestBatchIndexer_TruncatedItemErrorsDefaultToFailure guards against a
+// BulkIndex implementation (real or faked in a test) that returns an
+// itemErrors slice shorter than ops: every op beyond the slice's length must
+// be treated as failed, never silently reported as a success.
+func TestBatchIndexer_TruncatedItemErrorsDefaultToFailure(t *testing.T) {
+	logger := setupTestLogger(t)
+	fake := &fakeBulkIndexer{
+		itemErrorsFn: func(_ []contracts.BulkOperation) []error {
+			return nil // shorter than ops — simulates a broken/mocked BulkIndex
+		},
+	}
+	b := NewBatchIndexer(fake, logger, 1, time.Hour, 5*time.Second)
+
+	err := b.Index(context.Background(), "test-index", "doc-1", strings.NewReader(`{}`))
+	require.Error(t, err, "a missing itemErrors entry must not be reported as success")
+}
+
 func TestBatchIndexer_TopLevelErrorFansOutToAllCallers(t *testing.T) {
 	logger := setupTestLogger(t)
 	fake := &fakeBulkIndexer{err: fmt.Errorf("bulk request failed")}

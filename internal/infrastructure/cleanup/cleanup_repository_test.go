@@ -89,7 +89,8 @@ func TestCleanupRepository_CheckItem(t *testing.T) {
 
 	// Set up mock expectations
 	expectedQuery := map[string]any{
-		"size": janitorMaxDuplicates,
+		"size":                janitorMaxDuplicates + 1,
+		"seq_no_primary_term": true,
 		"sort": []map[string]any{
 			{"deleted_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
 			{"updated_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
@@ -167,7 +168,8 @@ func TestCleanupRepository_ProcessMultipleHits(t *testing.T) {
 	objectRef := "test-object-ref"
 
 	expectedQuery := map[string]any{
-		"size": janitorMaxDuplicates,
+		"size":                janitorMaxDuplicates + 1,
+		"seq_no_primary_term": true,
 		"sort": []map[string]any{
 			{"deleted_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
 			{"updated_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
@@ -255,7 +257,8 @@ func TestCleanupRepository_ProcessVersionConflict(t *testing.T) {
 	}
 
 	expectedQuery := map[string]any{
-		"size": janitorMaxDuplicates,
+		"size":                janitorMaxDuplicates + 1,
+		"seq_no_primary_term": true,
 		"sort": []map[string]any{
 			{"deleted_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
 			{"updated_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
@@ -314,7 +317,8 @@ func TestCleanupRepository_ProcessWithMarshalError(t *testing.T) {
 	}
 
 	expectedQuery := map[string]any{
-		"size": janitorMaxDuplicates,
+		"size":                janitorMaxDuplicates + 1,
+		"seq_no_primary_term": true,
 		"sort": []map[string]any{
 			{"deleted_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
 			{"updated_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},

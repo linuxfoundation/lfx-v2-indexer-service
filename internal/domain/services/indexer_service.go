@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"regexp"
 	"strconv"
@@ -25,19 +24,11 @@ import (
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/types"
 )
 
-// singleDocIndexer indexes one document at a time. contracts.StorageRepository
-// satisfies it directly; a batching wrapper (see internal/infrastructure/storage.BatchIndexer)
-// can satisfy it too, so ProcessTransaction's single-document writes can be
-// coalesced into bulk OpenSearch requests without this service knowing about it.
-type singleDocIndexer interface {
-	Index(ctx context.Context, index string, docID string, body io.Reader) error
-}
-
 // IndexerService handles transaction processing and health checking
 type IndexerService struct {
 	// Core dependencies
 	storageRepo   contracts.StorageRepository
-	docIndexer    singleDocIndexer // defaults to storageRepo; see SetDocIndexer
+	docIndexer    contracts.DocumentIndexer // defaults to storageRepo; see SetDocIndexer
 	messagingRepo contracts.MessagingRepository
 	logger        *slog.Logger
 
@@ -95,7 +86,7 @@ func NewIndexerService(
 // e.g. to install a batching wrapper around storageRepo. Defaults to storageRepo
 // itself if never called. Not safe to call concurrently with ProcessTransaction —
 // intended for one-time wiring during service startup, before traffic begins.
-func (s *IndexerService) SetDocIndexer(docIndexer singleDocIndexer) {
+func (s *IndexerService) SetDocIndexer(docIndexer contracts.DocumentIndexer) {
 	s.docIndexer = docIndexer
 }
 
