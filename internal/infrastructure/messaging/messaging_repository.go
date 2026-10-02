@@ -1029,11 +1029,20 @@ func (r *MessagingRepository) ConsumeWithJetStream(
 			if !r.acquireWorkerSlot(msgCtx, msg, subject) {
 				// ctx was canceled while queued; no slot was acquired, so
 				// none must be released. The connection is still open during
-				// drain, so Nak immediately instead of leaving the message
-				// un-acked: it was recently heartbeated, so waiting out a
-				// full AckWait would otherwise delay handoff to a surviving
-				// replica for no benefit, at the same delivery-count cost.
-				if err := msg.Nak(); err != nil {
+				// drain, so Nak instead of leaving the message un-acked: it
+				// was recently heartbeated, so waiting out a full AckWait
+				// would otherwise delay handoff to a surviving replica for
+				// no benefit, at the same delivery-count cost.
+				//
+				// Delay the Nak by the full drainTimeout rather than Nak'ing
+				// immediately: this pod's pull consumer is only guaranteed
+				// stopped once DrainWithTimeout's Phase 1 (cc.Stop() +
+				// cc.Closed()) completes, up to drainTimeout later. An
+				// immediate Nak risks the server redelivering straight back
+				// to this same still-pulling consumer — or to another
+				// replica that's also mid-drain during a rolling update —
+				// burning a MaxDeliver attempt for no chance of success.
+				if err := msg.NakWithDelay(r.drainTimeout); err != nil {
 					r.logger.WarnContext(msgCtx, "Failed to Nak message abandoned while queued for a worker slot",
 						"error", err,
 						"subject", subject)

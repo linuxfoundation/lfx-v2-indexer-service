@@ -344,6 +344,126 @@ func TestCleanupRepository_ProcessWithMarshalError(t *testing.T) {
 	mockRepo.AssertNotCalled(t, "UpdateWithOptimisticLock")
 }
 
+func TestCleanupRepository_ProcessTruncatesAtDuplicateCap(t *testing.T) {
+	mockRepo := &MockTransactionRepository{}
+	logger, _ := logging.TestLogger(t)
+	service := NewCleanupRepository(mockRepo, logger, "test-index")
+
+	ctx := context.Background()
+	objectRef := "test-object-ref"
+
+	// janitorMaxDuplicates+1 hits (the cap-probing size requested by the
+	// query) with the winner first, janitorMaxDuplicates-1 losers next, and
+	// one more hit appended past the cap. If truncation didn't actually
+	// drop that last hit, it would need its own latest=false update since
+	// it's older than the winner; this test confirms it's silently dropped
+	// at the search-result boundary and never reaches conflict resolution.
+	mockDocs := make([]contracts.VersionedDocument, 0, janitorMaxDuplicates+1)
+	winnerSeqNo, winnerPrimaryTerm := int64(0), int64(1)
+	mockDocs = append(mockDocs, contracts.VersionedDocument{
+		ID:          "doc-winner",
+		SeqNo:       &winnerSeqNo,
+		PrimaryTerm: &winnerPrimaryTerm,
+		Source:      map[string]any{"updated_at": "2023-06-01T00:00:00Z"},
+	})
+	for i := 1; i < janitorMaxDuplicates; i++ {
+		seqNo, primaryTerm := int64(i), int64(1)
+		mockDocs = append(mockDocs, contracts.VersionedDocument{
+			ID:          fmt.Sprintf("doc-loser-%d", i),
+			SeqNo:       &seqNo,
+			PrimaryTerm: &primaryTerm,
+			Source:      map[string]any{"updated_at": "2023-01-01T00:00:00Z"},
+		})
+	}
+	excludedSeqNo, excludedPrimaryTerm := int64(999), int64(1)
+	mockDocs = append(mockDocs, contracts.VersionedDocument{
+		ID:          "doc-excluded",
+		SeqNo:       &excludedSeqNo,
+		PrimaryTerm: &excludedPrimaryTerm,
+		Source:      map[string]any{"updated_at": "2022-01-01T00:00:00Z"},
+	})
+
+	expectedQuery := map[string]any{
+		"size":                janitorMaxDuplicates + 1,
+		"seq_no_primary_term": true,
+		"sort": []map[string]any{
+			{"deleted_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
+			{"updated_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
+		},
+		"_source": []string{"created_at", "updated_at", "deleted_at"},
+		"query": map[string]any{
+			"bool": map[string]any{
+				"must": []map[string]any{
+					{"term": map[string]any{"object_ref": objectRef}},
+					{"term": map[string]any{"latest": true}},
+				},
+			},
+		},
+	}
+	mockRepo.On("SearchWithVersions", ctx, "test-index", expectedQuery).Return(mockDocs, nil)
+	mockRepo.On("UpdateWithOptimisticLock", ctx, "test-index", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil)
+
+	service.processItem(ctx, &objectRef)
+
+	// Exactly the capped losers (janitorMaxDuplicates - 1) are updated; the
+	// hit past the cap never gets attempted.
+	mockRepo.AssertNumberOfCalls(t, "UpdateWithOptimisticLock", janitorMaxDuplicates-1)
+	mockRepo.AssertNotCalled(t, "UpdateWithOptimisticLock", ctx, "test-index", "doc-excluded", mock.Anything, mock.Anything)
+}
+
+func TestCleanupRepository_ProcessWithNilSeqNoAndPrimaryTerm(t *testing.T) {
+	mockRepo := &MockTransactionRepository{}
+	logger, _ := logging.TestLogger(t)
+	service := NewCleanupRepository(mockRepo, logger, "test-index")
+
+	ctx := context.Background()
+	objectRef := "test-object-ref"
+
+	// Both hits are missing _seq_no/_primary_term (e.g. OpenSearch omitted
+	// them despite seq_no_primary_term:true). safeLogInt64 must not panic
+	// dereferencing these, and the resulting OptimisticUpdateParams must
+	// carry the nil pointers through unchanged rather than synthesizing a
+	// fake value that would defeat the optimistic lock.
+	mockDocs := []contracts.VersionedDocument{
+		{
+			ID:     "doc-winner",
+			Source: map[string]any{"updated_at": "2023-01-02T00:00:00Z"},
+		},
+		{
+			ID:     "doc-loser",
+			Source: map[string]any{"updated_at": "2023-01-01T00:00:00Z"},
+		},
+	}
+
+	expectedQuery := map[string]any{
+		"size":                janitorMaxDuplicates + 1,
+		"seq_no_primary_term": true,
+		"sort": []map[string]any{
+			{"deleted_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
+			{"updated_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
+		},
+		"_source": []string{"created_at", "updated_at", "deleted_at"},
+		"query": map[string]any{
+			"bool": map[string]any{
+				"must": []map[string]any{
+					{"term": map[string]any{"object_ref": objectRef}},
+					{"term": map[string]any{"latest": true}},
+				},
+			},
+		},
+	}
+	mockRepo.On("SearchWithVersions", ctx, "test-index", expectedQuery).Return(mockDocs, nil)
+
+	nilParams := &contracts.OptimisticUpdateParams{SeqNo: nil, PrimaryTerm: nil}
+	mockRepo.On("UpdateWithOptimisticLock", ctx, "test-index", "doc-loser", mock.Anything, nilParams).Return(nil)
+
+	assert.NotPanics(t, func() {
+		service.processItem(ctx, &objectRef)
+	})
+
+	mockRepo.AssertExpectations(t)
+}
+
 func TestCleanupRepository_StartStopItemLoop(t *testing.T) {
 	mockRepo := &MockTransactionRepository{}
 	logger, _ := logging.TestLogger(t)
