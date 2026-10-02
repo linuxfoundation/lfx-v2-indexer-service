@@ -16,6 +16,18 @@ import (
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 )
 
+// ackWaitSafetyMargin is added on top of OpenSearch.Timeout + OpenSearch.BatchMaxWait
+// both when deriving the default NATS AckWait and when validating an
+// explicitly-set one, so the two stay consistent with each other.
+const ackWaitSafetyMargin = 10 * time.Second
+
+// drainTimeoutSafetyMargin is added on top of OpenSearch.Timeout +
+// OpenSearch.BatchMaxWait when validating NATS.DrainTimeout, so a detached
+// BatchIndexer flush that's already dispatched when shutdown begins has time
+// to finish (and publish its domain event / Ack) before the NATS connection
+// drains and closes out from under it.
+const drainTimeoutSafetyMargin = 5 * time.Second
+
 // AppConfig represents the application configuration
 type AppConfig struct {
 	Server     ServerConfig     `json:"server"`
@@ -48,6 +60,16 @@ type NATSConfig struct {
 	PendingMsgLimit   int           `json:"pending_msg_limit"`
 	PendingBytesLimit int           `json:"pending_bytes_limit"`
 	WorkerCount       int           `json:"worker_count"`
+	// AckWait is the JetStream consumer AckWait. It must exceed OpenSearch.Timeout
+	// (plus margin) so a slow-but-in-flight OpenSearch call can't be redelivered
+	// mid-flight; see NATS_ACK_WAIT.
+	AckWait time.Duration `json:"ack_wait"`
+	// MaxAckPending bounds the JetStream consumer's MaxAckPending, a
+	// durable-consumer-wide (cluster-wide) limit shared across every pod
+	// running this deployment. Kept decoupled from WorkerCount (per-pod)
+	// so multi-replica deployments can size it to aggregate worker
+	// capacity; see NATS_MAX_ACK_PENDING.
+	MaxAckPending int `json:"max_ack_pending"`
 }
 
 // OpenSearchConfig contains OpenSearch configuration
@@ -57,6 +79,10 @@ type OpenSearchConfig struct {
 	Password string        `json:"password"` // #nosec G101 - This is a configuration field, not a hardcoded password
 	Index    string        `json:"index"`
 	Timeout  time.Duration `json:"timeout"`
+	// BatchMaxSize and BatchMaxWait bound the BatchIndexer that coalesces
+	// concurrent single-document Index calls into OpenSearch bulk requests.
+	BatchMaxSize int           `json:"batch_max_size"`
+	BatchMaxWait time.Duration `json:"batch_max_wait"`
 }
 
 // JWTConfig contains JWT configuration
@@ -114,11 +140,17 @@ func LoadConfig() (*AppConfig, error) {
 			PendingMsgLimit:   getEnvIntWithLogging("NATS_PENDING_MSG_LIMIT", constants.DefaultPendingMsgLimit, envVarsUsed, defaultsUsed, logger),
 			PendingBytesLimit: getEnvIntWithLogging("NATS_PENDING_BYTES_LIMIT", constants.DefaultPendingBytesLimit, envVarsUsed, defaultsUsed, logger),
 			WorkerCount:       getEnvIntWithLogging("NATS_WORKER_COUNT", constants.DefaultWorkerCount, envVarsUsed, defaultsUsed, logger),
+			// AckWait default is resolved below, once OpenSearch.Timeout is known.
+			AckWait: getEnvDurationWithLogging("NATS_ACK_WAIT", 0, envVarsUsed, defaultsUsed, logger),
+			// MaxAckPending default is resolved below, once WorkerCount is known.
+			MaxAckPending: getEnvIntWithLogging("NATS_MAX_ACK_PENDING", 0, envVarsUsed, defaultsUsed, logger),
 		},
 		OpenSearch: OpenSearchConfig{
-			URL:     getEnvStringWithLogging("OPENSEARCH_URL", "http://localhost:9200", envVarsUsed, defaultsUsed, logger),
-			Index:   getEnvStringWithLogging("OPENSEARCH_INDEX", "resources", envVarsUsed, defaultsUsed, logger),
-			Timeout: getEnvDurationWithLogging("OPENSEARCH_TIMEOUT", 30*time.Second, envVarsUsed, defaultsUsed, logger),
+			URL:          getEnvStringWithLogging("OPENSEARCH_URL", "http://localhost:9200", envVarsUsed, defaultsUsed, logger),
+			Index:        getEnvStringWithLogging("OPENSEARCH_INDEX", "resources", envVarsUsed, defaultsUsed, logger),
+			Timeout:      getEnvDurationWithLogging("OPENSEARCH_TIMEOUT", 30*time.Second, envVarsUsed, defaultsUsed, logger),
+			BatchMaxSize: getEnvIntWithLogging("OPENSEARCH_BATCH_MAX_SIZE", 50, envVarsUsed, defaultsUsed, logger),
+			BatchMaxWait: getEnvDurationWithLogging("OPENSEARCH_BATCH_MAX_WAIT", 200*time.Millisecond, envVarsUsed, defaultsUsed, logger),
 		},
 		JWT: JWTConfig{
 			Issuer: getEnvStringWithLogging("JWT_ISSUER", "heimdall", envVarsUsed, defaultsUsed, logger),
@@ -154,6 +186,36 @@ func LoadConfig() (*AppConfig, error) {
 			CacheDuration:          getEnvDurationWithLogging("HEALTH_CACHE_DURATION", 5*time.Second, envVarsUsed, defaultsUsed, logger),
 			EnableDetailedResponse: getEnvBoolWithLogging("HEALTH_DETAILED_RESPONSE", true, envVarsUsed, defaultsUsed, logger),
 		},
+	}
+
+	// AckWait must exceed the worst-case time a message can spend in flight:
+	// queued in the BatchIndexer for up to BatchMaxWait, then the bulk flush
+	// itself for up to OpenSearch.Timeout. Otherwise JetStream can redeliver
+	// the message out from under a still-in-flight OpenSearch call. An
+	// unset/zero NATS_ACK_WAIT derives the default from that worst case plus
+	// ackWaitSafetyMargin, decoupling the two instead of hardcoding both to
+	// 30s. A negative value is rejected outright rather than silently
+	// defaulted, since that would mask an operator misconfiguration.
+	switch {
+	case config.NATS.AckWait < 0:
+		return nil, fmt.Errorf("NATS_ACK_WAIT must not be negative, got: %v", config.NATS.AckWait)
+	case config.NATS.AckWait == 0:
+		config.NATS.AckWait = config.OpenSearch.Timeout + config.OpenSearch.BatchMaxWait + ackWaitSafetyMargin
+		defaultsUsed["NATS_ACK_WAIT"] = true
+	}
+
+	// MaxAckPending is a durable-consumer-wide (cluster-wide) limit, unlike
+	// WorkerCount which only bounds one pod. An unset/zero NATS_MAX_ACK_PENDING
+	// defaults to WorkerCount, preserving the single-pod-equivalent behavior
+	// this knob replaced; multi-replica deployments should set it explicitly
+	// (e.g. WorkerCount * replica count) via the Helm chart. A negative value
+	// is rejected outright rather than silently defaulted.
+	switch {
+	case config.NATS.MaxAckPending < 0:
+		return nil, fmt.Errorf("NATS_MAX_ACK_PENDING must not be negative, got: %d", config.NATS.MaxAckPending)
+	case config.NATS.MaxAckPending == 0:
+		config.NATS.MaxAckPending = config.NATS.WorkerCount
+		defaultsUsed["NATS_MAX_ACK_PENDING"] = true
 	}
 
 	// Log configuration summary
@@ -261,6 +323,37 @@ func (c *AppConfig) validateNATS() error {
 		return fmt.Errorf("NATS worker count must be positive, got: %d", c.NATS.WorkerCount)
 	}
 
+	if c.NATS.MaxAckPending <= 0 {
+		return fmt.Errorf("NATS max ack pending must be positive, got: %d", c.NATS.MaxAckPending)
+	}
+
+	// A message can wait up to BatchMaxWait queued in the BatchIndexer before
+	// its flush even starts, then up to OpenSearch.Timeout for the flush
+	// itself — AckWait must be at least that combined worst case plus
+	// ackWaitSafetyMargin, the same margin the derived default applies, so
+	// an explicitly-set AckWait can't pass validation with a margin thinner
+	// than what LoadConfig would have chosen itself.
+	// The derived default (LoadConfig, above) is exactly this sum, so the
+	// comparison must allow equality — only reject values strictly below
+	// the minimum, or every deployment relying on the default would fail
+	// this check immediately after LoadConfig sets it.
+	minAckWait := c.OpenSearch.Timeout + c.OpenSearch.BatchMaxWait + ackWaitSafetyMargin
+	if c.NATS.AckWait < minAckWait {
+		return fmt.Errorf("NATS ack wait (%v) must be at least OpenSearch timeout plus batch max wait plus safety margin (%v)", c.NATS.AckWait, minAckWait)
+	}
+
+	// On shutdown, DrainWithTimeout stops new deliveries and waits up to
+	// DrainTimeout for in-flight message handlers to finish. A handler can
+	// be blocked in a BatchIndexer flush for up to OpenSearch.Timeout after
+	// queuing for up to BatchMaxWait. If DrainTimeout is too short for that,
+	// drain returns (and the connection closes) while the flush is still
+	// running: a write that goes on to succeed afterward can no longer
+	// publish its domain event or Ack the message.
+	minDrainTimeout := c.OpenSearch.Timeout + c.OpenSearch.BatchMaxWait + drainTimeoutSafetyMargin
+	if c.NATS.DrainTimeout < minDrainTimeout {
+		return fmt.Errorf("NATS drain timeout (%v) must be at least OpenSearch timeout plus batch max wait plus safety margin (%v)", c.NATS.DrainTimeout, minDrainTimeout)
+	}
+
 	return nil
 }
 
@@ -276,6 +369,14 @@ func (c *AppConfig) validateOpenSearch() error {
 
 	if c.OpenSearch.Timeout <= 0 {
 		return fmt.Errorf("OpenSearch timeout must be positive, got: %v", c.OpenSearch.Timeout)
+	}
+
+	if c.OpenSearch.BatchMaxSize <= 0 {
+		return fmt.Errorf("OpenSearch batch max size must be positive, got: %d", c.OpenSearch.BatchMaxSize)
+	}
+
+	if c.OpenSearch.BatchMaxWait <= 0 {
+		return fmt.Errorf("OpenSearch batch max wait must be positive, got: %v", c.OpenSearch.BatchMaxWait)
 	}
 
 	return nil

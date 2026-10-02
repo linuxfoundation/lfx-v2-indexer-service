@@ -213,12 +213,23 @@ fields without coordination with this service.
 
 ### Current-document and janitor behavior
 
-The current write path uses the OpenSearch Index API with `object_ref` as the document ID.
-Each create, update, or delete writes the current document for that object reference and
-sets `latest: true`; deletes write a tombstone-shaped document with `deleted_at` and
-delete principals. The janitor still scans for duplicate `latest: true` hits with the
-same `object_ref` and flips older duplicates to `latest: false` using optimistic update
-parameters. Queries must filter `latest: true` to see current data.
+The current write path uses the OpenSearch Bulk API, with `object_ref` as the document ID
+of each item. Concurrent single-document writes from multiple NATS handlers are coalesced
+into one bulk request by `internal/infrastructure/storage.BatchIndexer`: a batch flushes as
+soon as either `OpenSearch.BatchMaxSize` operations have queued or `OpenSearch.BatchMaxWait`
+has elapsed since the first operation in the batch queued, whichever comes first. Each
+caller still only sees its own item's result from the bulk response — one document's failure
+in a batch does not fail the others sharing that request. A flush is detached from any single
+caller's request context (it may be batching operations from several callers at once), so it
+runs under its own bounded timeout (`OpenSearch.Timeout`) instead of inheriting a deadline
+from one of them; `NATS.AckWait`'s derived default and validation both account for a message
+being queued up to `BatchMaxWait` before its batch's flush even starts, on top of that flush
+timeout (see `internal/infrastructure/config/app_config.go`). None of this changes the
+per-document write shape: each create, update, or delete still writes the current document
+for that object reference and sets `latest: true`; deletes still write a tombstone-shaped
+document with `deleted_at` and delete principals. The janitor still scans for duplicate
+`latest: true` hits with the same `object_ref` and flips older duplicates to `latest: false`
+using optimistic update parameters. Queries must filter `latest: true` to see current data.
 
 ### Domain events emitted after a successful write
 

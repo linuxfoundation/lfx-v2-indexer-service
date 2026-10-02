@@ -16,8 +16,37 @@ nats:
   indexingSubject: "lfx.index.>"
   # v1IndexingSubject is the NATS subject for v1 indexing messages
   v1IndexingSubject: "lfx.v1.index.>"
-  # drainTimeout is the timeout for draining NATS connections
+  # drainTimeout is the timeout for draining NATS connections. Must exceed
+  # opensearch.timeout + opensearch.batchMaxWait plus a safety margin
+  # (validated at startup) — a handler can be blocked in a BatchIndexer
+  # flush for up to opensearch.timeout after queuing for up to
+  # opensearch.batchMaxWait. Must also stay below app.terminationGracePeriodSeconds
+  # with headroom for the health server's own shutdown delay, or the pod is
+  # SIGKILLed mid-drain before drainTimeout elapses.
   drainTimeout: "55s"
+  # ackWait is how long JetStream waits for an Ack before redelivering a
+  # message. Must exceed opensearch.timeout + opensearch.batchMaxWait plus a
+  # safety margin (validated at startup).
+  ackWait: "45s"
+  # workerCount is the number of concurrent message handlers per pod. Must be
+  # at least opensearch.batchMaxSize, or a handler blocked in BatchIndexer.Index
+  # holds its worker slot for the whole batch wait, making batchMaxSize
+  # unreachable by the size trigger and forcing every batch to pay the full
+  # batchMaxWait.
+  workerCount: 50
+  # maxAckPending bounds the JetStream consumer's MaxAckPending, a
+  # durable-consumer-wide (cluster-wide) limit shared across every app pod,
+  # unlike workerCount (per-pod). Sized here as workerCount * app.replicas
+  # so the cluster-wide limit reflects the deployment's aggregate worker
+  # capacity rather than a single pod's. Update this if workerCount or
+  # app.replicas changes.
+  maxAckPending: 150
+  # pendingMsgLimit is the maximum pending messages buffered per subscription.
+  # Quoted to prevent Helm from rendering as scientific notation.
+  pendingMsgLimit: "1000000"
+  # pendingBytesLimit is the maximum pending bytes buffered per subscription.
+  # Quoted to prevent Helm from rendering as scientific notation.
+  pendingBytesLimit: "536870912"
 
   # stream_index_events persists indexing messages so the indexer-consumer
   # can replay and retry failed deliveries.
@@ -56,8 +85,15 @@ opensearch:
   url: http://opensearch-cluster-master.lfx.svc.cluster.local:9200/
   # index is the index name for storing resources
   index: resources
-  # timeout is the ResponseHeaderTimeout for OpenSearch requests — covers time waiting for the first response byte; body reads are not bounded
+  # timeout is the ResponseHeaderTimeout for direct (non-batched) OpenSearch
+  # requests — covers time waiting for the first response byte; body reads
+  # are not bounded there. BatchIndexer flushes apply it as an end-to-end
+  # deadline for the whole bulk request, body reads included.
   timeout: "30s"
+  # batchMaxSize is the maximum number of documents buffered before a bulk flush
+  batchMaxSize: 50
+  # batchMaxWait is the maximum time to wait before flushing a partial batch
+  batchMaxWait: "200ms"
 
 # heimdall is the configuration for the heimdall middleware
 heimdall:

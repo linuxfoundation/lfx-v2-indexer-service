@@ -31,11 +31,17 @@ func baseValidConfig() *AppConfig {
 			PendingMsgLimit:   1024,
 			PendingBytesLimit: 1024 * 1024,
 			WorkerCount:       10,
+			// Must exceed OpenSearch.Timeout (30s) + OpenSearch.BatchMaxWait
+			// (200ms) + ackWaitSafetyMargin (10s) = 40.2s.
+			AckWait:       45 * time.Second,
+			MaxAckPending: 10,
 		},
 		OpenSearch: OpenSearchConfig{
-			URL:     "http://opensearch:9200",
-			Index:   "resources",
-			Timeout: 30 * time.Second,
+			URL:          "http://opensearch:9200",
+			Index:        "resources",
+			Timeout:      30 * time.Second,
+			BatchMaxSize: 50,
+			BatchMaxWait: 200 * time.Millisecond,
 		},
 		JWT: JWTConfig{
 			Issuer:    "heimdall",
@@ -80,6 +86,140 @@ func TestValidateNATS_MaxReconnects(t *testing.T) {
 	}
 }
 
+func TestValidateNATS_AckWait(t *testing.T) {
+	cases := []struct {
+		name      string
+		ackWait   time.Duration
+		wantError bool
+	}{
+		{"ack wait below opensearch timeout is rejected", 20 * time.Second, true},
+		{"ack wait equal to opensearch timeout is rejected", 30 * time.Second, true},
+		{"ack wait above timeout but within safety margin is rejected", 40 * time.Second, true},
+		{"ack wait exactly at the minimum is allowed", 30*time.Second + 200*time.Millisecond + 10*time.Second, false},
+		{"ack wait above timeout plus safety margin is allowed", 41 * time.Second, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := baseValidConfig()
+			cfg.NATS.AckWait = tc.ackWait
+			err := cfg.validateNATS()
+			if tc.wantError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidateNATS_AckWait_AccountsForBatchMaxWait(t *testing.T) {
+	// baseValidConfig has OpenSearch.Timeout=30s; with BatchMaxWait raised
+	// to 5s, an AckWait of 34s clears the old Timeout-only bound but not
+	// the combined Timeout+BatchMaxWait bound, and must still be rejected.
+	cfg := baseValidConfig()
+	cfg.OpenSearch.BatchMaxWait = 5 * time.Second
+	cfg.NATS.AckWait = 34 * time.Second
+
+	err := cfg.validateNATS()
+	assert.Error(t, err, "ack wait must exceed OpenSearch timeout plus batch max wait, not just the timeout")
+
+	// 44s clears Timeout+BatchMaxWait (35s) but not the +10s safety margin
+	// the derived default also applies (45s) — must still be rejected.
+	cfg.NATS.AckWait = 44 * time.Second
+	assert.Error(t, cfg.validateNATS(), "ack wait must also clear the safety margin used by the derived default")
+
+	cfg.NATS.AckWait = 46 * time.Second
+	assert.NoError(t, cfg.validateNATS())
+}
+
+func TestValidateNATS_DrainTimeout(t *testing.T) {
+	cases := []struct {
+		name         string
+		drainTimeout time.Duration
+		wantError    bool
+	}{
+		{"drain timeout below opensearch timeout is rejected", 20 * time.Second, true},
+		{"drain timeout equal to opensearch timeout is rejected", 30 * time.Second, true},
+		{"drain timeout above timeout but within safety margin is rejected", 33 * time.Second, true},
+		{"drain timeout exactly at the minimum is allowed", 30*time.Second + 200*time.Millisecond + 5*time.Second, false},
+		{"drain timeout above timeout plus safety margin is allowed", 55 * time.Second, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := baseValidConfig()
+			cfg.NATS.DrainTimeout = tc.drainTimeout
+			err := cfg.validateNATS()
+			if tc.wantError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidateNATS_DrainTimeout_AccountsForBatchMaxWait(t *testing.T) {
+	// baseValidConfig has OpenSearch.Timeout=30s; with BatchMaxWait raised
+	// to 5s, a DrainTimeout of 34s clears the old Timeout-only bound but not
+	// the combined Timeout+BatchMaxWait bound, and must still be rejected.
+	cfg := baseValidConfig()
+	cfg.OpenSearch.BatchMaxWait = 5 * time.Second
+	cfg.NATS.DrainTimeout = 34 * time.Second
+
+	err := cfg.validateNATS()
+	assert.Error(t, err, "drain timeout must exceed OpenSearch timeout plus batch max wait, not just the timeout")
+
+	// 39s clears Timeout+BatchMaxWait (35s) but not the +5s safety margin —
+	// must still be rejected.
+	cfg.NATS.DrainTimeout = 39 * time.Second
+	assert.Error(t, cfg.validateNATS(), "drain timeout must also clear the safety margin")
+
+	cfg.NATS.DrainTimeout = 41 * time.Second
+	assert.NoError(t, cfg.validateNATS())
+}
+
+func TestValidateNATS_MaxAckPending(t *testing.T) {
+	cases := []struct {
+		name          string
+		maxAckPending int
+		wantError     bool
+	}{
+		{"zero is rejected", 0, true},
+		{"negative is rejected", -1, true},
+		{"positive is allowed", 10, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := baseValidConfig()
+			cfg.NATS.MaxAckPending = tc.maxAckPending
+			err := cfg.validateNATS()
+			if tc.wantError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestLoadConfig_MaxAckPendingDefaultsToWorkerCount(t *testing.T) {
+	t.Setenv("NATS_MAX_ACK_PENDING", "")
+	t.Setenv("NATS_WORKER_COUNT", "25")
+
+	cfg, err := LoadConfig()
+	require.NoError(t, err)
+	assert.Equal(t, 25, cfg.NATS.MaxAckPending,
+		"default max ack pending should fall back to worker count")
+}
+
+func TestLoadConfig_NegativeMaxAckPendingIsRejected(t *testing.T) {
+	t.Setenv("NATS_MAX_ACK_PENDING", "-1")
+
+	_, err := LoadConfig()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "NATS_MAX_ACK_PENDING")
+}
+
 func TestValidateOpenSearch_Timeout(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -104,6 +244,54 @@ func TestValidateOpenSearch_Timeout(t *testing.T) {
 	}
 }
 
+func TestValidateOpenSearch_BatchMaxSize(t *testing.T) {
+	cases := []struct {
+		name      string
+		value     int
+		wantError bool
+	}{
+		{"zero is rejected", 0, true},
+		{"negative is rejected", -1, true},
+		{"positive is allowed", 50, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := baseValidConfig()
+			cfg.OpenSearch.BatchMaxSize = tc.value
+			err := cfg.validateOpenSearch()
+			if tc.wantError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidateOpenSearch_BatchMaxWait(t *testing.T) {
+	cases := []struct {
+		name      string
+		value     time.Duration
+		wantError bool
+	}{
+		{"zero is rejected", 0, true},
+		{"negative is rejected", -1 * time.Millisecond, true},
+		{"positive is allowed", 200 * time.Millisecond, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := baseValidConfig()
+			cfg.OpenSearch.BatchMaxWait = tc.value
+			err := cfg.validateOpenSearch()
+			if tc.wantError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestValidate_FullConfig(t *testing.T) {
 	cfg := baseValidConfig()
 	require.NoError(t, cfg.Validate(), "base valid config should pass full validation")
@@ -115,4 +303,37 @@ func TestLoadConfig_NATSMaxReconnectsDefault(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, -1, cfg.NATS.MaxReconnects,
 		"NATS_MAX_RECONNECTS should default to -1 (infinite) when unset")
+}
+
+func TestLoadConfig_AckWaitDefaultIncludesBatchMaxWait(t *testing.T) {
+	t.Setenv("NATS_ACK_WAIT", "")
+	t.Setenv("OPENSEARCH_TIMEOUT", "30s")
+	t.Setenv("OPENSEARCH_BATCH_MAX_WAIT", "5s")
+
+	cfg, err := LoadConfig()
+	require.NoError(t, err)
+	assert.Equal(t, 45*time.Second, cfg.NATS.AckWait,
+		"default ack wait should be OpenSearch.Timeout + BatchMaxWait + 10s margin")
+}
+
+func TestLoadConfig_DefaultAckWaitPassesValidation(t *testing.T) {
+	// NewContainer calls Validate immediately after LoadConfig. The derived
+	// default is exactly OpenSearch.Timeout + BatchMaxWait + ackWaitSafetyMargin,
+	// so validateNATS's minimum bound must accept that exact value — any
+	// deployment leaving NATS_ACK_WAIT unset must be able to start.
+	t.Setenv("NATS_ACK_WAIT", "")
+
+	cfg, err := LoadConfig()
+	require.NoError(t, err)
+	require.NoError(t, cfg.Validate(), "the derived default AckWait must pass validation")
+}
+
+func TestLoadConfig_NegativeAckWaitIsRejected(t *testing.T) {
+	// An operator-supplied negative NATS_ACK_WAIT must produce a config
+	// error rather than being silently replaced by the derived default.
+	t.Setenv("NATS_ACK_WAIT", "-1s")
+
+	_, err := LoadConfig()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "NATS_ACK_WAIT")
 }
