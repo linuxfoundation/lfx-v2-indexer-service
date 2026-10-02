@@ -26,11 +26,19 @@ import (
 // errNonJWTToken is returned when a token does not have the structure of a JWT.
 var errNonJWTToken = errors.New("token is not a JWT")
 
-// jwksHTTPTimeout bounds the JWKS provider's HTTP client so a stalled
-// fetch can't exceed the ackWaitSafetyMargin (10s) that app_config.go's
-// AckWait derivation reserves for everything outside the OpenSearch flush
-// path, including principal/JWKS resolution.
+// jwksHTTPTimeout bounds a single JWKS HTTP fetch.
 const jwksHTTPTimeout = 5 * time.Second
+
+// parsePrincipalsTimeout bounds the total time ParsePrincipals may spend
+// across all of its JWT validations. A single jwksHTTPTimeout only caps one
+// fetch; go-jwt-middleware's CachingProvider.KeyFunc serializes refreshes on
+// a cache miss, so an Authorization token plus several on-behalf-of tokens
+// can each trigger their own fetch and queue behind one another, letting the
+// cumulative wait exceed jwksHTTPTimeout many times over. This matches the
+// ackWaitSafetyMargin (10s) that app_config.go's AckWait derivation reserves
+// for everything outside the OpenSearch flush path, including principal/JWKS
+// resolution.
+const parsePrincipalsTimeout = 10 * time.Second
 
 // HeimdallClaims contains extra custom claims we want to parse from the JWT token
 type HeimdallClaims struct {
@@ -77,11 +85,9 @@ func NewAuthRepository(issuer string, audiences []string, jwksURL string, clockS
 	}
 
 	// Set up JWKS provider with 5 minute cache and traced HTTP client.
-	// Timeout bounds a stalled JWKS fetch (cache miss/refresh) so it can
-	// never silently run longer than ackWaitSafetyMargin (10s, see
-	// app_config.go) — without this, ParsePrincipals could block past
-	// AckWait while the message handler is already past the worker-slot
-	// heartbeat phase, triggering a premature JetStream redelivery.
+	// jwksHTTPTimeout bounds each individual fetch; ParsePrincipals also
+	// wraps its context with parsePrincipalsTimeout to bound the total time
+	// across all of the fetches a single call may trigger.
 	jwksHTTPClient := &http.Client{Transport: otelhttp.NewTransport(nil), Timeout: jwksHTTPTimeout}
 	provider := jwks.NewCachingProvider(issuerURL, 5*time.Minute,
 		jwks.WithCustomJWKSURI(jwksURLParsed),
@@ -163,6 +169,9 @@ func (r *AuthRepository) ValidateToken(ctx context.Context, token string) (*cont
 // function also provides the enforcement that "on behalf of" data is only used
 // if the authorized principal is a machine user.
 func (r *AuthRepository) ParsePrincipals(ctx context.Context, headers map[string]string) ([]contracts.Principal, error) {
+	ctx, cancel := context.WithTimeout(ctx, parsePrincipalsTimeout)
+	defer cancel()
+
 	authID := r.generateAuthID()
 
 	// This will be set to `true` if the authorization header contains a machine
