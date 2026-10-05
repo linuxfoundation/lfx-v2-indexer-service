@@ -4,6 +4,7 @@
 package messaging
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -629,17 +630,23 @@ func TestNakAbandonedMessage(t *testing.T) {
 }
 
 // TestNakAbandonedMessage_LogsNakFailure pins that a NakWithDelay error is
-// logged rather than silently dropped.
+// logged rather than silently dropped. Asserts the actual emitted record
+// (message, error, subject) rather than just NotPanics, which would still
+// pass even if the WarnContext call were deleted.
 func TestNakAbandonedMessage_LogsNakFailure(t *testing.T) {
+	var logBuf bytes.Buffer
 	r := &MessagingRepository{
 		drainTimeout: time.Second,
-		logger:       slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		logger:       slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn})),
 	}
 
 	msg := &stubJSMsg{nakWithDelayErr: errors.New("nak failed")}
-	assert.NotPanics(t, func() {
-		r.nakAbandonedMessage(context.Background(), msg, "test.subject")
-	})
+	r.nakAbandonedMessage(context.Background(), msg, "test.subject")
+
+	logged := logBuf.String()
+	assert.Contains(t, logged, "Failed to Nak message abandoned while queued for a worker slot")
+	assert.Contains(t, logged, "nak failed")
+	assert.Contains(t, logged, "test.subject")
 }
 
 // TestAcquireWorkerSlot_HeartbeatsWhileQueued pins the behavior that keeps

@@ -170,6 +170,13 @@ func (r *AuthRepository) ValidateToken(ctx context.Context, token string) (*cont
 // X-On-Behalf-Of header is not validated or pruned by the API gateway, this
 // function also provides the enforcement that "on behalf of" data is only used
 // if the authorized principal is a machine user.
+//
+// If parsePrincipalsTimeout elapses or ctx is otherwise canceled while a
+// token is being validated, that is returned as an error rather than being
+// treated like an ordinary invalid-token failure: swallowing it would let a
+// JWKS stall silently acknowledge a message with missing or partial audit
+// principals. The caller should treat this error like any other parse
+// failure (the message is retried, not indexed).
 func (r *AuthRepository) ParsePrincipals(ctx context.Context, headers map[string]string) ([]contracts.Principal, error) {
 	ctx, cancel := context.WithTimeout(ctx, parsePrincipalsTimeout)
 	defer cancel()
@@ -189,6 +196,12 @@ func (r *AuthRepository) ParsePrincipals(ctx context.Context, headers map[string
 		case constants.AuthorizationHeader:
 			principal, email, err := r.parsePrincipalAndEmail(ctx, value)
 			if err != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					r.logger.Warn("Principal parsing aborted: context deadline exceeded",
+						"auth_id", authID,
+						"error", ctxErr.Error())
+					return nil, fmt.Errorf("principal parsing deadline exceeded: %w", ctxErr)
+				}
 				if errors.Is(err, errNonJWTToken) {
 					r.logger.Debug("Authorization header contains non-JWT token",
 						"auth_id", authID)
@@ -237,6 +250,17 @@ func (r *AuthRepository) ParsePrincipals(ctx context.Context, headers map[string
 			for i, jwt := range forwardedJWTs {
 				var principal, email string
 
+				// Stop spawning further validations once the deadline has
+				// already passed; parsePrincipalAndEmail would just block
+				// until it fires anyway.
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					r.logger.Warn("On-behalf-of parsing aborted: context deadline exceeded",
+						"auth_id", authID,
+						"token_index", i,
+						"error", ctxErr.Error())
+					return nil, fmt.Errorf("principal parsing deadline exceeded: %w", ctxErr)
+				}
+
 				r.logger.Debug("Processing on-behalf-of token",
 					"auth_id", authID,
 					"token_index", i,
@@ -244,6 +268,13 @@ func (r *AuthRepository) ParsePrincipals(ctx context.Context, headers map[string
 
 				principal, email, err = r.parsePrincipalAndEmail(ctx, strings.TrimSpace(jwt))
 				if err != nil {
+					if ctxErr := ctx.Err(); ctxErr != nil {
+						r.logger.Warn("On-behalf-of parsing aborted: context deadline exceeded",
+							"auth_id", authID,
+							"token_index", i,
+							"error", ctxErr.Error())
+						return nil, fmt.Errorf("principal parsing deadline exceeded: %w", ctxErr)
+					}
 					errCount++
 					lastError = err
 					if !errors.Is(err, errNonJWTToken) {

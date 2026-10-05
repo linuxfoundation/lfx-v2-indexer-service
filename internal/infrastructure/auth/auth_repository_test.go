@@ -249,6 +249,42 @@ func TestAuthRepository_ParsePrincipals(t *testing.T) {
 		assert.Empty(t, principals)
 		assert.Len(t, principals, 0)
 	})
+
+	// canceled_context pins that a context deadline/cancellation observed
+	// while validating a JWT-shaped (dot-containing) token is returned as an
+	// error, instead of being swallowed like an ordinary invalid-token
+	// failure. testToken is used because "invalid-token" has no "." and
+	// would be short-circuited as a non-JWT token before ctx is ever
+	// consulted.
+	t.Run("canceled_context", func(t *testing.T) {
+		canceledCtx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		headers := map[string]string{
+			constants.AuthorizationHeader: "Bearer " + testToken,
+		}
+
+		principals, err := repo.ParsePrincipals(canceledCtx, headers)
+
+		require.Error(t, err)
+		assert.Nil(t, principals)
+		assert.ErrorIs(t, err, context.Canceled)
+	})
+
+	t.Run("canceled_context_on_behalf_of", func(t *testing.T) {
+		canceledCtx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		headers := map[string]string{
+			constants.OnBehalfOfHeader: testToken,
+		}
+
+		principals, err := repo.ParsePrincipals(canceledCtx, headers)
+
+		require.Error(t, err)
+		assert.Nil(t, principals)
+		assert.ErrorIs(t, err, context.Canceled)
+	})
 }
 
 // Test HealthCheck method
