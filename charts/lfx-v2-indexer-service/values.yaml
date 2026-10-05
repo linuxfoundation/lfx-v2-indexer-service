@@ -114,13 +114,19 @@ opensearch:
     backoffLimit: 3
     # ttlSecondsAfterFinished is how long to keep the job after completion
     ttlSecondsAfterFinished: 300
-    # activeDeadlineSeconds is the maximum time for the entire Job to run,
-    # including all backoffLimit retries (optional). Sized above the
-    # worst-case single-attempt runtime: 30 readiness-probe attempts at
-    # (--max-time 10 + 5s sleep) plus the two follow-up requests at
-    # --max-time 30 each, with headroom. Raise this if backoffLimit is
-    # increased, or set back to null to opt out of a deadline entirely.
-    activeDeadlineSeconds: 900
+    # activeDeadlineSeconds caps the whole Job's wall-clock time, cumulative
+    # across all backoffLimit retries (optional). Sized to a single attempt's
+    # worst case -- 20 readiness-probe attempts at (--max-time 5 + 5s sleep)
+    # plus the two follow-up requests at --max-time 30 each is ~260s -- so a
+    # normal single pass stays comfortably under Helm's default 300s hook-wait
+    # timeout; Helm waits synchronously for hook Jobs and would otherwise
+    # fail the install/upgrade before the pod even finishes. A retry past the
+    # first attempt will already be outside Helm's own wait window regardless
+    # of this value. Raising the retry-loop attempt count or any --max-time
+    # value requires raising both this value and the deployment's Helm
+    # --timeout together, or set this back to null to opt out of a Job-level
+    # deadline entirely.
+    activeDeadlineSeconds: 270
     # restartPolicy is the pod restart policy (OnFailure or Never)
     restartPolicy: OnFailure
     # image is the container image for the job
