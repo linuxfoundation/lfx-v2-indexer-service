@@ -70,12 +70,14 @@ spec:
               # The pre-install/pre-upgrade hook fires once the Job manifest is
               # applied, not once OpenSearch is actually accepting connections, so
               # wait for it to answer before checking/creating the index. Bounded
-              # to fit Helm's default --timeout (300s) for hook Jobs: 20 attempts
-              # of (5s curl + 5s sleep) plus the two 30s requests below is ~260s,
-              # under activeDeadlineSeconds (270s, see values.yaml).
-              for i in $(seq 1 20); do
+              # to fit Helm's default --timeout (300s) for hook Jobs: 15 attempts
+              # of (5s curl + 5s sleep) is ~150s, plus up to three 30s follow-up
+              # requests below (HEAD, PUT, and a recheck HEAD on a concurrent-
+              # create race) is ~240s total, under activeDeadlineSeconds (260s,
+              # see values.yaml).
+              for i in $(seq 1 15); do
                 curl -sf --connect-timeout 5 --max-time 5 -o /dev/null {{ if .Values.opensearch.auth.enabled }}-u "${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}" {{ end }}"${OPENSEARCH_URL}/" && break
-                echo "waiting for opensearch at ${OPENSEARCH_URL} (${i}/20)"
+                echo "waiting for opensearch at ${OPENSEARCH_URL} (${i}/15)"
                 sleep 5
               done
 

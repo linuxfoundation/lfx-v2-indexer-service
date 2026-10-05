@@ -116,17 +116,18 @@ opensearch:
     ttlSecondsAfterFinished: 300
     # activeDeadlineSeconds caps the whole Job's wall-clock time, cumulative
     # across all backoffLimit retries (optional). Sized to a single attempt's
-    # worst case -- 20 readiness-probe attempts at (--max-time 5 + 5s sleep)
-    # plus the two follow-up requests at --max-time 30 each is ~260s -- so a
-    # normal single pass stays comfortably under Helm's default 300s hook-wait
-    # timeout; Helm waits synchronously for hook Jobs and would otherwise
-    # fail the install/upgrade before the pod even finishes. A retry past the
-    # first attempt will already be outside Helm's own wait window regardless
-    # of this value. Raising the retry-loop attempt count or any --max-time
-    # value requires raising both this value and the deployment's Helm
-    # --timeout together, or set this back to null to opt out of a Job-level
-    # deadline entirely.
-    activeDeadlineSeconds: 270
+    # worst case -- 15 readiness-probe attempts at (--max-time 5 + 5s sleep)
+    # is ~150s, plus up to three --max-time 30 follow-up requests (the HEAD
+    # existence check, the PUT create, and a recheck HEAD if the PUT loses a
+    # concurrent-create race) is ~240s total -- so a normal single pass stays
+    # comfortably under Helm's default 300s hook-wait timeout; Helm waits
+    # synchronously for hook Jobs and would otherwise fail the install/upgrade
+    # before the pod even finishes. A retry past the first attempt will
+    # already be outside Helm's own wait window regardless of this value.
+    # Raising the retry-loop attempt count or any --max-time value requires
+    # raising both this value and the deployment's Helm --timeout together,
+    # or set this back to null to opt out of a Job-level deadline entirely.
+    activeDeadlineSeconds: 260
     # restartPolicy is the pod restart policy (OnFailure or Never)
     restartPolicy: OnFailure
     # image is the container image for the job
