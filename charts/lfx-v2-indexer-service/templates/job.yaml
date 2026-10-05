@@ -1,0 +1,114 @@
+# Copyright The Linux Foundation and each contributor to LFX.
+# SPDX-License-Identifier: MIT
+{{- if .Values.opensearch.indexingJob.enabled }}
+{{- $job := .Values.opensearch.indexingJob }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "lfx-v2-indexer-service.indexJobName" . }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-weight": "1"
+spec:
+  ttlSecondsAfterFinished: {{ $job.ttlSecondsAfterFinished }}
+  backoffLimit: {{ $job.backoffLimit }}
+  {{- if $job.activeDeadlineSeconds }}
+  activeDeadlineSeconds: {{ $job.activeDeadlineSeconds }}
+  {{- end }}
+  template:
+    spec:
+      # This Job never calls the Kubernetes API, so it has no use for the
+      # pod's default service-account token; disable automount to avoid
+      # exposing cluster credentials to the third-party curl image.
+      automountServiceAccountToken: false
+      restartPolicy: {{ $job.restartPolicy }}
+      containers:
+        - name: curl
+          image: {{ $job.image.repository }}:{{ $job.image.tag }}
+          imagePullPolicy: {{ $job.image.pullPolicy }}
+          {{- with $job.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.opensearch.auth.enabled }}
+          {{- $secretName := required "opensearch.auth.existingSecret is required when opensearch.auth.enabled is true" .Values.opensearch.auth.existingSecret }}
+          env:
+            - name: OPENSEARCH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: username
+            - name: OPENSEARCH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: password
+          {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              OPENSEARCH_URL="{{ .Values.opensearch.url | trimSuffix "/" }}"
+              INDEX_NAME="{{ .Values.opensearch.index }}"
+
+              # The index body is embedded here (base64, rather than mounted
+              # from a ConfigMap) because a pre-install/pre-upgrade hook
+              # ConfigMap is not tracked as part of the release and is never
+              # cleaned up on helm uninstall -- before-hook-creation only
+              # fires on the next install/upgrade's hook execution. Keeping
+              # the config inline with this already-hook-scoped, self-cleaning
+              # (ttlSecondsAfterFinished, hook-succeeded) Job avoids that
+              # orphaned-resource problem entirely.
+              echo "{{ tpl (.Files.Get "files/opensearch-resources-index.json.tpl") . | b64enc }}" | base64 -d > /tmp/resources-index.json
+
+              # The pre-install/pre-upgrade hook fires once the Job manifest is
+              # applied, not once OpenSearch is actually accepting connections, so
+              # wait for it to answer before checking/creating the index. Bounded
+              # to fit Helm's default --timeout (300s) for hook Jobs: 15 attempts
+              # of (5s curl + 5s sleep) is ~150s, plus up to three 30s follow-up
+              # requests below (HEAD, PUT, and a recheck HEAD on a concurrent-
+              # create race) is ~240s total, under activeDeadlineSeconds (260s,
+              # see values.yaml).
+              for i in $(seq 1 15); do
+                curl -sf --connect-timeout 5 --max-time 5 -o /dev/null {{ if .Values.opensearch.auth.enabled }}-u "${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}" {{ end }}"${OPENSEARCH_URL}/" && break
+                echo "waiting for opensearch at ${OPENSEARCH_URL} (${i}/15)"
+                sleep 5
+              done
+
+              # Check if index already exists
+              HTTP_CODE=$(curl -s --connect-timeout 5 --max-time 30 -o /dev/null -w "%{http_code}" {{ if .Values.opensearch.auth.enabled }}-u "${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}" {{ end }}--head "${OPENSEARCH_URL}/${INDEX_NAME}")
+
+              if [ "$HTTP_CODE" = "200" ]; then
+                echo "Index '${INDEX_NAME}' already exists, skipping creation"
+                exit 0
+              elif [ "$HTTP_CODE" = "404" ]; then
+                echo "Index '${INDEX_NAME}' does not exist, creating..."
+                if curl -f --connect-timeout 5 --max-time 30 {{ if .Values.opensearch.auth.enabled }}-u "${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}" {{ end }}-X PUT "${OPENSEARCH_URL}/${INDEX_NAME}" \
+                  -H 'Content-Type: application/json' \
+                  -d @/tmp/resources-index.json; then
+                  echo "Index '${INDEX_NAME}' created successfully"
+                else
+                  # The check-then-create is not atomic: another release or
+                  # operator may have created the index in the gap, in which
+                  # case OpenSearch returns resource_already_exists_exception
+                  # and this curl fails even though the desired index now
+                  # exists. Recheck before treating it as a real failure.
+                  RECHECK_CODE=$(curl -s --connect-timeout 5 --max-time 30 -o /dev/null -w "%{http_code}" {{ if .Values.opensearch.auth.enabled }}-u "${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}" {{ end }}--head "${OPENSEARCH_URL}/${INDEX_NAME}")
+                  if [ "$RECHECK_CODE" = "200" ]; then
+                    echo "Index '${INDEX_NAME}' already exists (created concurrently), treating as success"
+                  else
+                    echo "Failed to create index '${INDEX_NAME}' and it still does not exist (recheck HTTP ${RECHECK_CODE})"
+                    exit 1
+                  fi
+                fi
+              else
+                echo "Unexpected response checking index: HTTP ${HTTP_CODE}"
+                exit 1
+              fi
+{{- end }}
