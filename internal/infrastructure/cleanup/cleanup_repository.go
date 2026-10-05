@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
 )
 
@@ -470,6 +471,20 @@ func (j *CleanupRepository) updateLatestFlag(ctx context.Context, doc contracts.
 		"latest", latest,
 		"seq_no", safeLogInt64(doc.SeqNo),
 		"primary_term", safeLogInt64(doc.PrimaryTerm))
+
+	// Without both seq_no and primary_term, UpdateWithOptimisticLock omits
+	// the IfSeqNo/IfPrimaryTerm constraint entirely and performs an
+	// unconditional update, which can overwrite a concurrently-replaced
+	// document. Skip rather than risk that; the document stays latest=true
+	// until a future janitor pass observes it with version metadata.
+	if doc.SeqNo == nil || doc.PrimaryTerm == nil {
+		j.logger.Warn("Skipping optimistic update: document missing version metadata",
+			"object_ref", objectRef,
+			"document_id", doc.ID,
+			"seq_no", safeLogInt64(doc.SeqNo),
+			"primary_term", safeLogInt64(doc.PrimaryTerm))
+		return errors.New(constants.ErrMissingVersionInfo)
+	}
 
 	updateBody := map[string]any{
 		"doc": map[string]any{

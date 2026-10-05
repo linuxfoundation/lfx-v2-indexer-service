@@ -34,11 +34,13 @@ const jwksHTTPTimeout = 5 * time.Second
 // fetch; go-jwt-middleware's CachingProvider.KeyFunc serializes refreshes on
 // a cache miss, so an Authorization token plus several on-behalf-of tokens
 // can each trigger their own fetch and queue behind one another, letting the
-// cumulative wait exceed jwksHTTPTimeout many times over. This matches the
-// ackWaitSafetyMargin (10s) that app_config.go's AckWait derivation reserves
-// for everything outside the OpenSearch flush path, including principal/JWKS
-// resolution.
-const parsePrincipalsTimeout = 10 * time.Second
+// cumulative wait exceed jwksHTTPTimeout many times over. app_config.go's
+// AckWait derivation reserves ackWaitSafetyMargin (10s) for everything
+// outside the OpenSearch flush path, not for principal parsing alone;
+// budgeting the full 10s here would leave zero headroom for the rest of the
+// handler (message decoding, logging, NATS ack) once parsing is at its
+// worst case. 6s leaves a documented 4s of that margin for that other work.
+const parsePrincipalsTimeout = 6 * time.Second
 
 // HeimdallClaims contains extra custom claims we want to parse from the JWT token
 type HeimdallClaims struct {
@@ -387,7 +389,7 @@ func (r *AuthRepository) parsePrincipalAndEmail(ctx context.Context, token strin
 		return "", "", fmt.Errorf("%w: %s", errNonJWTToken, r.safeTokenLog(token))
 	}
 
-	parsedJWT, err := r.validator.ValidateToken(ctx, token)
+	parsedJWT, err := r.validateTokenWithCtx(ctx, token)
 	if err != nil {
 		errorType := r.classifyAuthError(err)
 		r.logger.Debug("Token validation failed during principal parsing",
@@ -420,6 +422,37 @@ func (r *AuthRepository) parsePrincipalAndEmail(ctx context.Context, token strin
 		"is_machine_user", r.isMachineUser(principal))
 
 	return principal, email, nil
+}
+
+// validateTokenWithCtx calls r.validator.ValidateToken but makes sure ctx's
+// deadline is actually observed by the caller even though the underlying
+// go-jwt-middleware CachingProvider cannot be trusted to do so itself: on a
+// cold-cache refresh, CachingProvider.refreshKey takes a plain sync.Mutex
+// before calling the real KeyFunc, and a goroutine blocked on a plain mutex
+// cannot wake up on ctx.Done(). Under concurrent cold-cache requests for the
+// same issuer, that lets one blocked ValidateToken call silently defeat
+// parsePrincipalsTimeout and run well past it. Running the call on its own
+// goroutine and racing its result against ctx.Done() bounds what the caller
+// waits for; the abandoned goroutine still completes in the background (an
+// acceptable, bounded leak) and its result is dropped via the buffered
+// channel once nothing is left to receive it.
+func (r *AuthRepository) validateTokenWithCtx(ctx context.Context, token string) (interface{}, error) {
+	type result struct {
+		claims interface{}
+		err    error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		claims, err := r.validator.ValidateToken(ctx, token)
+		resultCh <- result{claims: claims, err: err}
+	}()
+
+	select {
+	case res := <-resultCh:
+		return res.claims, res.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // extractPrincipalFromClaims extracts principal information from JWT claims

@@ -545,6 +545,8 @@ type stubJSMsg struct {
 	numDelivered    uint64
 	metaErr         error
 	inProgressCalls atomic.Int64
+	nakDelay        atomic.Int64 // last delay passed to NakWithDelay, as time.Duration
+	nakWithDelayErr error
 }
 
 func (s *stubJSMsg) Metadata() (*jetstream.MsgMetadata, error) {
@@ -553,14 +555,17 @@ func (s *stubJSMsg) Metadata() (*jetstream.MsgMetadata, error) {
 	}
 	return &jetstream.MsgMetadata{NumDelivered: s.numDelivered}, nil
 }
-func (s *stubJSMsg) Data() []byte                       { return nil }
-func (s *stubJSMsg) Headers() nats.Header               { return nil }
-func (s *stubJSMsg) Subject() string                    { return "" }
-func (s *stubJSMsg) Reply() string                      { return "" }
-func (s *stubJSMsg) Ack() error                         { return nil }
-func (s *stubJSMsg) DoubleAck(_ context.Context) error  { return nil }
-func (s *stubJSMsg) Nak() error                         { return nil }
-func (s *stubJSMsg) NakWithDelay(_ time.Duration) error { return nil }
+func (s *stubJSMsg) Data() []byte                      { return nil }
+func (s *stubJSMsg) Headers() nats.Header              { return nil }
+func (s *stubJSMsg) Subject() string                   { return "" }
+func (s *stubJSMsg) Reply() string                     { return "" }
+func (s *stubJSMsg) Ack() error                        { return nil }
+func (s *stubJSMsg) DoubleAck(_ context.Context) error { return nil }
+func (s *stubJSMsg) Nak() error                        { return nil }
+func (s *stubJSMsg) NakWithDelay(d time.Duration) error {
+	s.nakDelay.Store(int64(d))
+	return s.nakWithDelayErr
+}
 func (s *stubJSMsg) InProgress() error {
 	s.inProgressCalls.Add(1)
 	return nil
@@ -603,6 +608,37 @@ func TestNakDelay(t *testing.T) {
 		msg := &stubJSMsg{metaErr: errors.New("metadata unavailable")}
 		d := nakDelay(msg)
 		assert.Equal(t, time.Second, d)
+	})
+}
+
+// TestNakAbandonedMessage pins that a message abandoned while queued for a
+// worker slot is NAK'd with a delay of exactly r.drainTimeout, not Nak'd
+// immediately — see nakAbandonedMessage's doc comment for why an immediate
+// Nak risks burning a MaxDeliver attempt on a still-draining consumer.
+func TestNakAbandonedMessage(t *testing.T) {
+	drainTimeout := 7 * time.Second
+	r := &MessagingRepository{
+		drainTimeout: drainTimeout,
+		logger:       slog.New(slog.NewTextHandler(os.Stderr, nil)),
+	}
+
+	msg := &stubJSMsg{}
+	r.nakAbandonedMessage(context.Background(), msg, "test.subject")
+
+	assert.Equal(t, drainTimeout, time.Duration(msg.nakDelay.Load()))
+}
+
+// TestNakAbandonedMessage_LogsNakFailure pins that a NakWithDelay error is
+// logged rather than silently dropped.
+func TestNakAbandonedMessage_LogsNakFailure(t *testing.T) {
+	r := &MessagingRepository{
+		drainTimeout: time.Second,
+		logger:       slog.New(slog.NewTextHandler(os.Stderr, nil)),
+	}
+
+	msg := &stubJSMsg{nakWithDelayErr: errors.New("nak failed")}
+	assert.NotPanics(t, func() {
+		r.nakAbandonedMessage(context.Background(), msg, "test.subject")
 	})
 }
 

@@ -421,9 +421,10 @@ func TestCleanupRepository_ProcessWithNilSeqNoAndPrimaryTerm(t *testing.T) {
 
 	// Both hits are missing _seq_no/_primary_term (e.g. OpenSearch omitted
 	// them despite seq_no_primary_term:true). safeLogInt64 must not panic
-	// dereferencing these, and the resulting OptimisticUpdateParams must
-	// carry the nil pointers through unchanged rather than synthesizing a
-	// fake value that would defeat the optimistic lock.
+	// dereferencing these, and updateLatestFlag must skip the update rather
+	// than send an OptimisticUpdateParams with nil SeqNo/PrimaryTerm, which
+	// would make UpdateWithOptimisticLock perform an unconditional update
+	// and defeat the optimistic lock entirely.
 	mockDocs := []contracts.VersionedDocument{
 		{
 			ID:     "doc-winner",
@@ -454,13 +455,11 @@ func TestCleanupRepository_ProcessWithNilSeqNoAndPrimaryTerm(t *testing.T) {
 	}
 	mockRepo.On("SearchWithVersions", ctx, "test-index", expectedQuery).Return(mockDocs, nil)
 
-	nilParams := &contracts.OptimisticUpdateParams{SeqNo: nil, PrimaryTerm: nil}
-	mockRepo.On("UpdateWithOptimisticLock", ctx, "test-index", "doc-loser", mock.Anything, nilParams).Return(nil)
-
 	assert.NotPanics(t, func() {
 		service.processItem(ctx, &objectRef)
 	})
 
+	mockRepo.AssertNotCalled(t, "UpdateWithOptimisticLock", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	mockRepo.AssertExpectations(t)
 }
 

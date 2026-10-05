@@ -854,6 +854,23 @@ func (r *MessagingRepository) GetConnectionStatus() map[string]interface{} {
 // this must stop waiting rather than start a handler with an
 // already-canceled context; the caller must not release a slot it never
 // acquired.
+// nakAbandonedMessage Naks msg after it was abandoned while queued for a
+// worker slot (acquireWorkerSlot returned false because ctx was canceled for
+// shutdown). The Nak is delayed by r.drainTimeout rather than issued
+// immediately: this pod's pull consumer is only guaranteed stopped once
+// DrainWithTimeout's Phase 1 (cc.Stop() + cc.Closed()) completes, up to
+// drainTimeout later, so an immediate Nak risks the server redelivering
+// straight back to this same still-pulling consumer — or to another replica
+// also mid-drain during a rolling update — burning a MaxDeliver attempt for
+// no chance of success.
+func (r *MessagingRepository) nakAbandonedMessage(ctx context.Context, msg jetstream.Msg, subject string) {
+	if err := msg.NakWithDelay(r.drainTimeout); err != nil {
+		r.logger.WarnContext(ctx, "Failed to Nak message abandoned while queued for a worker slot",
+			"error", err,
+			"subject", subject)
+	}
+}
+
 func (r *MessagingRepository) acquireWorkerSlot(ctx context.Context, msg jetstream.Msg, subject string) bool {
 	if ctx.Err() != nil {
 		return false
@@ -1042,11 +1059,7 @@ func (r *MessagingRepository) ConsumeWithJetStream(
 				// to this same still-pulling consumer — or to another
 				// replica that's also mid-drain during a rolling update —
 				// burning a MaxDeliver attempt for no chance of success.
-				if err := msg.NakWithDelay(r.drainTimeout); err != nil {
-					r.logger.WarnContext(msgCtx, "Failed to Nak message abandoned while queued for a worker slot",
-						"error", err,
-						"subject", subject)
-				}
+				r.nakAbandonedMessage(msgCtx, msg, subject)
 				return
 			}
 			defer func() { <-r.sem }()
