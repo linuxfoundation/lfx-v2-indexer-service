@@ -94,6 +94,67 @@ opensearch:
   batchMaxSize: 50
   # batchMaxWait is the maximum time to wait before flushing a partial batch
   batchMaxWait: "200ms"
+  # auth configures authentication for OpenSearch
+  auth:
+    # enabled controls whether authentication is used
+    enabled: false
+    # existingSecret is the name of an existing secret containing credentials.
+    # Required when enabled is true; the secret must have 'username' and
+    # 'password' keys. Plaintext credentials are not accepted here to avoid
+    # committing secrets to VCS in GitOps workflows.
+    existingSecret: ""
+  # indexingJob is the configuration for the OpenSearch index creation job
+  indexingJob:
+    # enabled is a boolean to determine if the indexing job should be created.
+    # Defaults to false because the hook Job fails the Helm release if
+    # OpenSearch isn't reachable at hook execution time; enable only when
+    # OpenSearch availability is guaranteed during install/upgrade.
+    enabled: false
+    # backoffLimit is the number of retries before marking the job as failed
+    backoffLimit: 3
+    # ttlSecondsAfterFinished is how long to keep the job after completion
+    ttlSecondsAfterFinished: 300
+    # activeDeadlineSeconds caps the whole Job's wall-clock time, cumulative
+    # across all backoffLimit retries (optional). Sized to a single attempt's
+    # worst case -- 15 readiness-probe attempts at (--max-time 5 + 5s sleep)
+    # is ~150s, plus up to three --max-time 30 follow-up requests (the HEAD
+    # existence check, the PUT create, and a recheck HEAD if the PUT loses a
+    # concurrent-create race) is ~240s total -- so a normal single pass stays
+    # comfortably under Helm's default 300s hook-wait timeout; Helm waits
+    # synchronously for hook Jobs and would otherwise fail the install/upgrade
+    # before the pod even finishes. A retry past the first attempt will
+    # already be outside Helm's own wait window regardless of this value.
+    # Raising the retry-loop attempt count or any --max-time value requires
+    # raising both this value and the deployment's Helm --timeout together,
+    # or set this back to null to opt out of a Job-level deadline entirely.
+    activeDeadlineSeconds: 260
+    # restartPolicy is the pod restart policy (OnFailure or Never)
+    restartPolicy: OnFailure
+    # image is the container image for the job
+    image:
+      repository: curlimages/curl
+      tag: "8.12.0"
+      pullPolicy: IfNotPresent
+    # resources defines CPU and memory limits/requests for the job container
+    resources:
+      requests:
+        cpu: 50m
+        memory: 32Mi
+      limits:
+        cpu: 200m
+        memory: 64Mi
+    # numberOfShards is the number_of_shards index setting used when creating
+    # the index. An explicit create-index setting overrides any cluster or
+    # index-template shard default, so this is surfaced here rather than left
+    # implicit. Defaults to 1, OpenSearch's own default.
+    numberOfShards: 1
+    # numberOfReplicas is the number_of_replicas index setting used when
+    # creating the index. Defaults to 1 (OpenSearch's own default) so a lost
+    # primary shard has a replica to promote in a real multi-node production
+    # cluster. Override to 0 for single-node deployments (e.g. local dev),
+    # where a replica can never be assigned and would leave the index stuck
+    # in "yellow" health.
+    numberOfReplicas: 1
 
 # heimdall is the configuration for the heimdall middleware
 heimdall:
