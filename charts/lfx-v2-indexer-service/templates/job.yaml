@@ -67,20 +67,20 @@ spec:
               # applied, not once OpenSearch is actually accepting connections, so
               # wait for it to answer before checking/creating the index.
               for i in $(seq 1 30); do
-                curl -sf -o /dev/null {{ if .Values.opensearch.auth.enabled }}-u "${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}" {{ end }}"${OPENSEARCH_URL}/" && break
+                curl -sf --connect-timeout 5 --max-time 10 -o /dev/null {{ if .Values.opensearch.auth.enabled }}-u "${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}" {{ end }}"${OPENSEARCH_URL}/" && break
                 echo "waiting for opensearch at ${OPENSEARCH_URL} (${i}/30)"
                 sleep 5
               done
 
               # Check if index already exists
-              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" {{ if .Values.opensearch.auth.enabled }}-u "${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}" {{ end }}--head "${OPENSEARCH_URL}/${INDEX_NAME}")
+              HTTP_CODE=$(curl -s --connect-timeout 5 --max-time 30 -o /dev/null -w "%{http_code}" {{ if .Values.opensearch.auth.enabled }}-u "${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}" {{ end }}--head "${OPENSEARCH_URL}/${INDEX_NAME}")
 
               if [ "$HTTP_CODE" = "200" ]; then
                 echo "Index '${INDEX_NAME}' already exists, skipping creation"
                 exit 0
               elif [ "$HTTP_CODE" = "404" ]; then
                 echo "Index '${INDEX_NAME}' does not exist, creating..."
-                curl -f {{ if .Values.opensearch.auth.enabled }}-u "${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}" {{ end }}-X PUT "${OPENSEARCH_URL}/${INDEX_NAME}" \
+                curl -f --connect-timeout 5 --max-time 30 {{ if .Values.opensearch.auth.enabled }}-u "${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}" {{ end }}-X PUT "${OPENSEARCH_URL}/${INDEX_NAME}" \
                   -H 'Content-Type: application/json' \
                   -d @/tmp/resources-index.json
                 echo "Index '${INDEX_NAME}' created successfully"
