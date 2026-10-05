@@ -37,6 +37,14 @@ func (e *VersionConflictError) Error() string {
 		e.DocumentID, e.CurrentSeq, e.ExpectedSeq, e.Err)
 }
 
+// DocumentIndexer indexes one document at a time. StorageRepository satisfies
+// it directly; a batching wrapper (see internal/infrastructure/storage.BatchIndexer)
+// can satisfy it too, so a caller's single-document writes can be coalesced
+// into bulk OpenSearch requests without the caller knowing about it.
+type DocumentIndexer interface {
+	Index(ctx context.Context, index string, docID string, body io.Reader) error
+}
+
 // BulkOperation represents a bulk operation for indexing
 type BulkOperation struct {
 	Index  string
@@ -59,8 +67,12 @@ type StorageRepository interface {
 	// Delete deletes a document from OpenSearch
 	Delete(ctx context.Context, index string, docID string) error
 
-	// BulkIndex performs bulk indexing operations
-	BulkIndex(ctx context.Context, operations []BulkOperation) error
+	// BulkIndex performs bulk indexing operations. It returns a per-operation
+	// error slice aligned by index with operations (nil entry = that
+	// operation succeeded), plus a top-level error for failures that aren't
+	// attributable to a specific operation (e.g. marshal/transport errors).
+	// A non-nil top-level error means itemErrors may be nil or incomplete.
+	BulkIndex(ctx context.Context, operations []BulkOperation) (itemErrors []error, err error)
 
 	// HealthCheck checks the health of the OpenSearch connection
 	HealthCheck(ctx context.Context) error

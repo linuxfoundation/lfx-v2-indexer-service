@@ -21,6 +21,12 @@ import (
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
 )
 
+// janitorMaxDuplicates bounds the "latest=true" conflict-resolution search
+// in processItem. Duplicate "latest" documents for one object_ref should be
+// rare and few; this caps memory/response size against an indexer bug that
+// produces far more than expected without silently truncating the normal case.
+const janitorMaxDuplicates = 100
+
 var (
 	// Global janitor channel for up to 50 queued item-janitor requests (matches production)
 	globalJanitorChan = make(chan *string, 50)
@@ -224,9 +230,44 @@ func (j *CleanupRepository) processItem(ctx context.Context, objectRef *string) 
 	j.logger.Debug("Janitor processing started",
 		"object_ref", safeLogString(objectRef))
 
-	// Search for all documents with this object_ref and latest=true
-	// This matches the production query exactly
+	// Search for documents with this object_ref and latest=true. Bounded by
+	// size (janitorMaxDuplicates) since a runaway indexer bug producing
+	// thousands of "latest" duplicates for one object_ref would otherwise
+	// pull them all into memory; _source is limited to the fields conflict
+	// resolution below actually reads.
 	query := map[string]any{
+		// Requesting one more than the cap lets the truncation check below
+		// tell "exactly janitorMaxDuplicates, fully resolved" apart from
+		// "truncated" instead of treating both as the same count.
+		"size": janitorMaxDuplicates + 1,
+		// OpenSearch omits _seq_no/_primary_term from hits unless explicitly
+		// requested; without this, every VersionedDocument below comes back
+		// with nil SeqNo/PrimaryTerm, which the optimistic-lock update then
+		// silently skips and the conflict-resolution logging below would
+		// otherwise dereference unconditionally.
+		"seq_no_primary_term": true,
+		// Sort so that if there are more than janitorMaxDuplicates hits, the
+		// truncated set still keeps the actual winner. A delete only sets
+		// deleted_at, not updated_at (see indexer_service.go's ActionDeleted
+		// handling), so sorting on updated_at alone can push a tombstone
+		// outside the cap while a live document with a newer updated_at
+		// stays in. Sort documents that have deleted_at first — matching
+		// the deletion-priority rule below — then break ties by updated_at
+		// so the normal (no-deletion) case still keeps the most recent hits.
+		"sort": []map[string]any{
+			// unmapped_type is required alongside missing: "_last" — missing
+			// only controls where a doc that has no value for an otherwise
+			// *mapped* field sorts to; it does not by itself let OpenSearch
+			// sort when the field has no mapping at all yet (e.g. no document
+			// in this index has ever had a deleted_at value), which would
+			// otherwise fail the sort/query entirely. updated_at needs the
+			// same handling: delete bodies never set updated_at (see
+			// indexer_service.go's ActionDeleted handling), so a fresh index
+			// populated first by tombstones has never mapped updated_at either.
+			{"deleted_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
+			{"updated_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
+		},
+		"_source": []string{"created_at", "updated_at", "deleted_at"},
 		"query": map[string]any{
 			"bool": map[string]any{
 				"must": []map[string]any{
@@ -248,6 +289,15 @@ func (j *CleanupRepository) processItem(ctx context.Context, objectRef *string) 
 			"object_ref", safeLogString(objectRef),
 			"error", err.Error())
 		return "error"
+	}
+
+	// docs was requested with size janitorMaxDuplicates+1; truncate to the
+	// cap now that the extra hit has told us whether the result was cut off.
+	if len(docs) > janitorMaxDuplicates {
+		j.logger.Warn("Janitor search hit the duplicate cap; some duplicates may not have been resolved",
+			"object_ref", safeLogString(objectRef),
+			"cap", janitorMaxDuplicates)
+		docs = docs[:janitorMaxDuplicates]
 	}
 
 	// Log the number of hits with analysis
@@ -288,8 +338,8 @@ func (j *CleanupRepository) processItem(ctx context.Context, objectRef *string) 
 		j.logger.Debug("Analyzing document for conflict resolution",
 			"object_ref", safeLogString(objectRef),
 			"document_id", doc.ID,
-			"seq_no", *doc.SeqNo,
-			"primary_term", *doc.PrimaryTerm)
+			"seq_no", safeLogInt64(doc.SeqNo),
+			"primary_term", safeLogInt64(doc.PrimaryTerm))
 
 		// Unmarshal the source into a TransactionBodyStub
 		hitBody := new(TransactionBodyStub)
@@ -418,8 +468,8 @@ func (j *CleanupRepository) updateLatestFlag(ctx context.Context, doc contracts.
 		"object_ref", objectRef,
 		"document_id", doc.ID,
 		"latest", latest,
-		"seq_no", *doc.SeqNo,
-		"primary_term", *doc.PrimaryTerm)
+		"seq_no", safeLogInt64(doc.SeqNo),
+		"primary_term", safeLogInt64(doc.PrimaryTerm))
 
 	updateBody := map[string]any{
 		"doc": map[string]any{
@@ -575,6 +625,15 @@ func (j *CleanupRepository) IsRunning() bool {
 }
 
 // Helper functions for safe logging
+
+// safeLogInt64 safely logs an int64 pointer, such as a possibly-absent
+// OpenSearch _seq_no/_primary_term value, without dereferencing a nil.
+func safeLogInt64(i *int64) any {
+	if i == nil {
+		return "<nil>"
+	}
+	return *i
+}
 
 // safeLogString safely logs a string pointer without exposing sensitive data
 func safeLogString(s *string) string {

@@ -42,15 +42,36 @@ type MessagingRepository struct {
 	pendingMsgLimit   int
 	pendingBytesLimit int
 	sem               chan struct{}
+	// ackWait is the JetStream consumer AckWait, passed through from config
+	// so it can be kept decoupled from (and larger than) the OpenSearch
+	// client timeout rather than sharing a hardcoded constant with it.
+	ackWait time.Duration
+	// maxAckPending is the JetStream consumer's MaxAckPending — a
+	// durable-consumer-wide (cluster-wide) limit shared across every pod
+	// running this deployment, unlike workerCount which is per-pod.
+	maxAckPending int
 }
 
 // NewMessagingRepository creates a new NATS messaging repository with auth delegation
-func NewMessagingRepository(conn *nats.Conn, authRepo contracts.AuthRepository, logger *slog.Logger, drainTimeout time.Duration, pendingMsgLimit int, pendingBytesLimit int, workerCount int) *MessagingRepository {
+func NewMessagingRepository(conn *nats.Conn, authRepo contracts.AuthRepository, logger *slog.Logger, drainTimeout time.Duration, pendingMsgLimit int, pendingBytesLimit int, workerCount int, ackWait time.Duration, maxAckPending int) *MessagingRepository {
 	msgLogger := logging.WithComponent(logger, constants.ComponentNATS)
 
 	if workerCount <= 0 {
 		msgLogger.Warn("Invalid workerCount, falling back to default", "provided", workerCount, "default", constants.DefaultWorkerCount)
 		workerCount = constants.DefaultWorkerCount
+	}
+
+	if ackWait <= 0 {
+		msgLogger.Warn("Invalid ackWait, falling back to default", "provided", ackWait, "default", constants.DefaultAckWait)
+		ackWait = constants.DefaultAckWait
+	}
+
+	// A non-positive maxAckPending (e.g. a caller bypassing config.LoadConfig's
+	// validated derivation) falls back to workerCount, the single-pod-
+	// equivalent behavior this knob replaced.
+	if maxAckPending <= 0 {
+		msgLogger.Warn("Invalid maxAckPending, falling back to workerCount", "provided", maxAckPending, "worker_count", workerCount)
+		maxAckPending = workerCount
 	}
 
 	repo := &MessagingRepository{
@@ -63,10 +84,12 @@ func NewMessagingRepository(conn *nats.Conn, authRepo contracts.AuthRepository, 
 		pendingMsgLimit:   pendingMsgLimit,
 		pendingBytesLimit: pendingBytesLimit,
 		sem:               make(chan struct{}, workerCount),
+		ackWait:           ackWait,
+		maxAckPending:     maxAckPending,
 	}
 
 	// Log initialization
-	msgLogger.Info("NATS messaging repository initialized", "drain_timeout", drainTimeout, "worker_count", workerCount, "auth_repo_configured", authRepo != nil)
+	msgLogger.Info("NATS messaging repository initialized", "drain_timeout", drainTimeout, "worker_count", workerCount, "max_ack_pending", maxAckPending, "auth_repo_configured", authRepo != nil)
 
 	return repo
 }
@@ -818,6 +841,73 @@ func (r *MessagingRepository) GetConnectionStatus() map[string]interface{} {
 // JETSTREAM OPERATIONS
 // =================
 
+// acquireWorkerSlot blocks until a local worker slot (r.sem) is free or ctx
+// is canceled, reporting whether it acquired a slot. AckWait's redelivery
+// timer starts at JetStream delivery — before this call is ever reached —
+// so under uneven per-pod load (rollout, replica outage) a message can
+// queue here for longer than AckWait while waiting for local worker
+// capacity, causing a premature redelivery before its handler even starts.
+// Sending periodic InProgress heartbeats while queued resets that timer
+// without acking, so slow-but-alive queueing no longer competes with
+// AckWait the way it did with a plain blocking send. ctx is canceled by the
+// caller (cmd/lfx-indexer/main.go) before DrainWithTimeout is called, so
+// this must stop waiting rather than start a handler with an
+// already-canceled context; the caller must not release a slot it never
+// acquired.
+func (r *MessagingRepository) acquireWorkerSlot(ctx context.Context, msg jetstream.Msg, subject string) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+
+	select {
+	case r.sem <- struct{}{}:
+		// select does not favor one ready case over another, so a slot send
+		// can still win a race against an already-canceled ctx; recheck
+		// before honoring it.
+		if ctx.Err() != nil {
+			<-r.sem
+			return false
+		}
+		return true
+	default:
+	}
+
+	// A third of AckWait leaves two more chances to heartbeat before AckWait
+	// would otherwise expire, tolerating a missed or slow heartbeat.
+	heartbeat := time.NewTicker(r.ackWait / 3)
+	defer heartbeat.Stop()
+	for {
+		select {
+		case r.sem <- struct{}{}:
+			if ctx.Err() != nil {
+				<-r.sem
+				r.logger.WarnContext(ctx, "Abandoning wait for a worker slot, context canceled",
+					"subject", subject)
+				return false
+			}
+			// The ticker only fires every ackWait/3; without a heartbeat
+			// here the handler can start with as little as ~2/3 of AckWait
+			// left if acquisition lands just before the next tick.
+			if err := msg.InProgress(); err != nil {
+				r.logger.WarnContext(ctx, "Failed to send JetStream InProgress heartbeat on worker slot acquisition",
+					"error", err,
+					"subject", subject)
+			}
+			return true
+		case <-ctx.Done():
+			r.logger.WarnContext(ctx, "Abandoning wait for a worker slot, context canceled",
+				"subject", subject)
+			return false
+		case <-heartbeat.C:
+			if err := msg.InProgress(); err != nil {
+				r.logger.WarnContext(ctx, "Failed to send JetStream InProgress heartbeat while queued for a worker slot",
+					"error", err,
+					"subject", subject)
+			}
+		}
+	}
+}
+
 // ConsumeWithJetStream creates a durable JetStream consumer on streamName,
 // filtering on filterSubjects, and delivers messages to handler. On handler
 // error the message is NAKed with exponential-backoff jitter; on success it
@@ -847,9 +937,20 @@ func (r *MessagingRepository) ConsumeWithJetStream(
 		// nakDelay caps at 1s, 2s, 4s, 8s — the 5-min ceiling needs delivery ≥10).
 		// After 5 attempts JetStream stops redelivering to this consumer; the
 		// stream message stays until maxAge/maxBytes eviction (not deleted).
-		MaxDeliver:    5,
-		AckWait:       30 * time.Second,
-		MaxAckPending: 100,
+		MaxDeliver: 5,
+		AckWait:    r.ackWait,
+		// r.maxAckPending bounds outstanding deliveries across the whole
+		// durable consumer (cluster-wide, shared by every pod), not just this
+		// pod's worker capacity (cap(r.sem)). A message queued for a local
+		// worker slot (see acquireWorkerSlot) heartbeats instead of blocking
+		// AckWait's clock, so it can now occupy a MaxAckPending slot
+		// indefinitely while queued — including on a persistently
+		// overloaded pod — rather than expiring and freeing that slot for a
+		// healthier replica. Size r.maxAckPending to the aggregate worker
+		// capacity across all replicas (e.g. workerCount * replica count) —
+		// not just this pod's — so one pod's backlog can't starve the rest
+		// of the consumer's throughput.
+		MaxAckPending: r.maxAckPending,
 		// DeliverAllPolicy (the default) is intentionally used here rather than
 		// DeliverNewPolicy. DeliverNewPolicy would skip any messages that landed
 		// in the stream between stream-CRD creation and pod startup — a real loss
@@ -905,21 +1006,41 @@ func (r *MessagingRepository) ConsumeWithJetStream(
 		data := append([]byte(nil), msg.Data()...)
 		subject := msg.Subject()
 
-		// Acquire a worker slot; this blocks the consumer callback goroutine
-		// until a slot is free, which provides back-pressure alongside
-		// MaxAckPending and keeps OpenSearch write concurrency bounded.
 		// Track in r.wg (all handlers) AND r.jsWg (JetStream-only) so
 		// DrainWithTimeout can wait for JetStream workers before draining the
 		// connection (preventing domain-event publishes on a closed connection).
 		r.wg.Add(1)
 		r.jsWg.Add(1)
-		r.sem <- struct{}{}
+		// Acquiring the worker slot happens inside this goroutine, not the
+		// callback, so the callback returns immediately and nats.go can keep
+		// delivering. nats.go's client buffers and invokes this callback
+		// serially: if acquiring instead blocked the callback itself, every
+		// message still sitting in that client-side buffer behind the one
+		// currently waiting would receive no InProgress heartbeat and could
+		// hit AckWait and redeliver before this callback ever reached it.
+		// Spawning per-message means every delivered message heartbeats on
+		// its own while queued for a slot, regardless of how many others are
+		// ahead of it.
 		go func() {
 			defer func() {
-				<-r.sem
 				r.jsWg.Done()
 				r.wg.Done()
 			}()
+			if !r.acquireWorkerSlot(msgCtx, msg, subject) {
+				// ctx was canceled while queued; no slot was acquired, so
+				// none must be released. The connection is still open during
+				// drain, so Nak immediately instead of leaving the message
+				// un-acked: it was recently heartbeated, so waiting out a
+				// full AckWait would otherwise delay handoff to a surviving
+				// replica for no benefit, at the same delivery-count cost.
+				if err := msg.Nak(); err != nil {
+					r.logger.WarnContext(msgCtx, "Failed to Nak message abandoned while queued for a worker slot",
+						"error", err,
+						"subject", subject)
+				}
+				return
+			}
+			defer func() { <-r.sem }()
 
 			spanCtx, span := tracer.Start(msgCtx, "jetstream.process",
 				trace.WithSpanKind(trace.SpanKindConsumer),

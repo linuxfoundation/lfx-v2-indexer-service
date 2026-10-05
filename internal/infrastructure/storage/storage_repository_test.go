@@ -62,10 +62,11 @@ func TestBulkIndex_EmptyOperations(t *testing.T) {
 	}
 
 	// Execute - Empty operations should be handled without external calls
-	err := repo.BulkIndex(context.TODO(), []contracts.BulkOperation{})
+	itemErrors, err := repo.BulkIndex(context.TODO(), []contracts.BulkOperation{})
 
 	// Verify
 	assert.NoError(t, err)
+	assert.Nil(t, itemErrors)
 }
 
 func TestStorageRepository_StructureValidation(t *testing.T) {
@@ -278,6 +279,73 @@ func TestStorageRepository_ParameterValidation(t *testing.T) {
 	})
 }
 
+func TestBulkIndex_PartialFailure(t *testing.T) {
+	bulkRespBody := `{
+		"errors": true,
+		"items": [
+			{"index": {"status": 201}},
+			{"index": {"status": 400, "error": {"type": "mapper_parsing_exception", "reason": "failed to parse"}}}
+		]
+	}`
+
+	client, err := opensearch.NewClient(opensearch.Config{
+		Addresses: []string{"http://localhost:9200"},
+		Transport: &mockTransport{statusCode: 200, body: bulkRespBody},
+	})
+	require.NoError(t, err)
+
+	logger := setupTestLogger(t)
+	repo := NewStorageRepository(client, logger)
+
+	operations := []contracts.BulkOperation{
+		{Action: "index", Index: "test-index", DocID: "doc-1", Body: strings.NewReader(`{"field":"ok"}`)},
+		{Action: "index", Index: "test-index", DocID: "doc-2", Body: strings.NewReader(`{"field":"bad"}`)},
+	}
+
+	itemErrors, err := repo.BulkIndex(context.Background(), operations)
+
+	require.NoError(t, err, "top-level err is reserved for request-level failures, not per-item ones")
+	require.Len(t, itemErrors, 2)
+	assert.NoError(t, itemErrors[0])
+	require.Error(t, itemErrors[1])
+	assert.ErrorContains(t, itemErrors[1], "mapper_parsing_exception")
+	assert.ErrorContains(t, itemErrors[1], "doc-2")
+	// The raw OpenSearch "reason" field may echo indexed field values (PII
+	// risk) and must never appear in the returned error or any log.
+	assert.NotContains(t, itemErrors[1].Error(), "failed to parse")
+}
+
+func TestBulkIndex_FewerItemsThanRequestedAreReportedAsErrors(t *testing.T) {
+	// Only one item returned for two requested operations.
+	bulkRespBody := `{
+		"errors": false,
+		"items": [
+			{"index": {"status": 201}}
+		]
+	}`
+
+	client, err := opensearch.NewClient(opensearch.Config{
+		Addresses: []string{"http://localhost:9200"},
+		Transport: &mockTransport{statusCode: 200, body: bulkRespBody},
+	})
+	require.NoError(t, err)
+
+	logger := setupTestLogger(t)
+	repo := NewStorageRepository(client, logger)
+
+	operations := []contracts.BulkOperation{
+		{Action: "index", Index: "test-index", DocID: "doc-1", Body: strings.NewReader(`{"field":"a"}`)},
+		{Action: "index", Index: "test-index", DocID: "doc-2", Body: strings.NewReader(`{"field":"b"}`)},
+	}
+
+	itemErrors, err := repo.BulkIndex(context.Background(), operations)
+
+	require.NoError(t, err)
+	require.Len(t, itemErrors, 2)
+	assert.NoError(t, itemErrors[0])
+	assert.Error(t, itemErrors[1], "the missing trailing item must not read as a silent success")
+}
+
 func TestIndex_LogsStructuredErrorOn400(t *testing.T) {
 	osErrBody := `{"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [data.system_updated_at]"},"status":400}`
 
@@ -294,9 +362,11 @@ func TestIndex_LogsStructuredErrorOn400(t *testing.T) {
 
 	assert.Error(t, indexErr)
 	logging.AssertLogContains(t, buf, "mapper_parsing_exception")
-	logging.AssertLogContains(t, buf, "failed to parse field")
 	logging.AssertLogContains(t, buf, "error_type")
-	logging.AssertLogContains(t, buf, "error_reason")
+	// The raw OpenSearch "reason" field may echo indexed field values (PII
+	// risk) and must never appear in logs or the returned error.
+	assert.NotContains(t, buf.String(), "failed to parse field")
+	assert.NotContains(t, buf.String(), "error_reason")
 }
 
 // Note: Integration tests that require actual OpenSearch connections should be placed

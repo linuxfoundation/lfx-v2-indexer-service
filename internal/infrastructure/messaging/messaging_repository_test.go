@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -52,7 +53,7 @@ func TestNewMessagingRepository(t *testing.T) {
 	drainTimeout := 10 * time.Second
 
 	t.Run("without_auth_repo", func(t *testing.T) {
-		repo := NewMessagingRepository(nil, nil, logger, drainTimeout, constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit, constants.DefaultWorkerCount)
+		repo := NewMessagingRepository(nil, nil, logger, drainTimeout, constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit, constants.DefaultWorkerCount, constants.DefaultAckWait, 0)
 
 		assert.NotNil(t, repo)
 		assert.NotNil(t, repo.logger)
@@ -65,7 +66,7 @@ func TestNewMessagingRepository(t *testing.T) {
 
 func TestMessagingRepository_ValidateToken_NoAuthRepo(t *testing.T) {
 	logger := setupTestLogger()
-	repo := NewMessagingRepository(nil, nil, logger, 5*time.Second, constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit, constants.DefaultWorkerCount)
+	repo := NewMessagingRepository(nil, nil, logger, 5*time.Second, constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit, constants.DefaultWorkerCount, constants.DefaultAckWait, 0)
 
 	ctx := context.Background()
 	token := "test.jwt.token" // #nosec G101 - This is a test token, not a real secret
@@ -79,7 +80,7 @@ func TestMessagingRepository_ValidateToken_NoAuthRepo(t *testing.T) {
 
 func TestMessagingRepository_ParsePrincipals_NoAuthRepo(t *testing.T) {
 	logger := setupTestLogger()
-	repo := NewMessagingRepository(nil, nil, logger, 5*time.Second, constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit, constants.DefaultWorkerCount)
+	repo := NewMessagingRepository(nil, nil, logger, 5*time.Second, constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit, constants.DefaultWorkerCount, constants.DefaultAckWait, 0)
 
 	ctx := context.Background()
 	headers := map[string]string{
@@ -96,7 +97,7 @@ func TestMessagingRepository_ParsePrincipals_NoAuthRepo(t *testing.T) {
 
 func TestMessagingRepository_PublishDisconnected(t *testing.T) {
 	logger := setupTestLogger()
-	repo := NewMessagingRepository(nil, nil, logger, 5*time.Second, constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit, constants.DefaultWorkerCount)
+	repo := NewMessagingRepository(nil, nil, logger, 5*time.Second, constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit, constants.DefaultWorkerCount, constants.DefaultAckWait, 0)
 
 	ctx := context.Background()
 	subject := "test.subject"
@@ -110,7 +111,7 @@ func TestMessagingRepository_PublishDisconnected(t *testing.T) {
 
 func TestMessagingRepository_HealthCheck_NilConnection(t *testing.T) {
 	logger := setupTestLogger()
-	repo := NewMessagingRepository(nil, nil, logger, 5*time.Second, constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit, constants.DefaultWorkerCount)
+	repo := NewMessagingRepository(nil, nil, logger, 5*time.Second, constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit, constants.DefaultWorkerCount, constants.DefaultAckWait, 0)
 
 	ctx := context.Background()
 
@@ -123,7 +124,7 @@ func TestMessagingRepository_HealthCheck_NilConnection(t *testing.T) {
 
 func TestMessagingRepository_DrainWithTimeout_NilConnection(t *testing.T) {
 	logger := setupTestLogger()
-	repo := NewMessagingRepository(nil, nil, logger, 5*time.Second, constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit, constants.DefaultWorkerCount)
+	repo := NewMessagingRepository(nil, nil, logger, 5*time.Second, constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit, constants.DefaultWorkerCount, constants.DefaultAckWait, 0)
 
 	err := repo.DrainWithTimeout()
 
@@ -132,7 +133,7 @@ func TestMessagingRepository_DrainWithTimeout_NilConnection(t *testing.T) {
 
 func TestMessagingRepository_Close_NilConnection(t *testing.T) {
 	logger := setupTestLogger()
-	repo := NewMessagingRepository(nil, nil, logger, 5*time.Second, constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit, constants.DefaultWorkerCount)
+	repo := NewMessagingRepository(nil, nil, logger, 5*time.Second, constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit, constants.DefaultWorkerCount, constants.DefaultAckWait, 0)
 
 	err := repo.Close()
 
@@ -141,7 +142,7 @@ func TestMessagingRepository_Close_NilConnection(t *testing.T) {
 
 func TestMessagingRepository_UtilityMethods_NilConnection(t *testing.T) {
 	logger := setupTestLogger()
-	repo := NewMessagingRepository(nil, nil, logger, 5*time.Second, constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit, constants.DefaultWorkerCount)
+	repo := NewMessagingRepository(nil, nil, logger, 5*time.Second, constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit, constants.DefaultWorkerCount, constants.DefaultAckWait, 0)
 
 	t.Run("get_connection", func(t *testing.T) {
 		connection := repo.GetConnection()
@@ -196,7 +197,7 @@ func TestMessagingRepository_UtilityMethods_NilConnection(t *testing.T) {
 
 func TestMessagingRepository_PublicMethods(t *testing.T) {
 	logger := setupTestLogger()
-	repo := NewMessagingRepository(nil, nil, logger, 5*time.Second, constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit, constants.DefaultWorkerCount)
+	repo := NewMessagingRepository(nil, nil, logger, 5*time.Second, constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit, constants.DefaultWorkerCount, constants.DefaultAckWait, 0)
 
 	t.Run("connection_info", func(t *testing.T) {
 		// Test that GetConnection works with nil connection
@@ -240,7 +241,7 @@ func TestMessagingRepository_PublicMethods(t *testing.T) {
 
 func TestMessagingRepository_UtilityMethods(t *testing.T) {
 	logger := setupTestLogger()
-	repo := NewMessagingRepository(nil, nil, logger, 5*time.Second, constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit, constants.DefaultWorkerCount)
+	repo := NewMessagingRepository(nil, nil, logger, 5*time.Second, constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit, constants.DefaultWorkerCount, constants.DefaultAckWait, 0)
 
 	t.Run("metrics_structure", func(t *testing.T) {
 		// Test that metrics have expected structure
@@ -285,7 +286,7 @@ func TestMessagingRepository_UtilityMethods(t *testing.T) {
 
 func TestMessagingRepository_StateManagement(t *testing.T) {
 	logger := setupTestLogger()
-	repo := NewMessagingRepository(nil, nil, logger, 5*time.Second, constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit, constants.DefaultWorkerCount)
+	repo := NewMessagingRepository(nil, nil, logger, 5*time.Second, constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit, constants.DefaultWorkerCount, constants.DefaultAckWait, 0)
 
 	t.Run("connection_info_nil_safe", func(t *testing.T) {
 		// Test that GetConnectionStatus handles nil connection gracefully
@@ -311,7 +312,7 @@ func TestMessagingRepository_StateManagement(t *testing.T) {
 // Performance benchmarks
 func BenchmarkMessagingRepository_PublicMethods(b *testing.B) {
 	logger := setupTestLogger()
-	repo := NewMessagingRepository(nil, nil, logger, 5*time.Second, constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit, constants.DefaultWorkerCount)
+	repo := NewMessagingRepository(nil, nil, logger, 5*time.Second, constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit, constants.DefaultWorkerCount, constants.DefaultAckWait, 0)
 
 	b.Run("GetConnection", func(b *testing.B) {
 		b.ResetTimer()
@@ -337,7 +338,7 @@ func BenchmarkMessagingRepository_PublicMethods(b *testing.B) {
 
 func BenchmarkMessagingRepository_GetMetrics(b *testing.B) {
 	logger := setupTestLogger()
-	repo := NewMessagingRepository(nil, nil, logger, 5*time.Second, constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit, constants.DefaultWorkerCount)
+	repo := NewMessagingRepository(nil, nil, logger, 5*time.Second, constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit, constants.DefaultWorkerCount, constants.DefaultAckWait, 0)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -359,7 +360,7 @@ func TestMessagingRepository_IntegrationWithNATS(t *testing.T) {
 	defer conn.Close()
 
 	logger := setupTestLogger()
-	repo := NewMessagingRepository(conn, nil, logger, 5*time.Second, constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit, constants.DefaultWorkerCount)
+	repo := NewMessagingRepository(conn, nil, logger, 5*time.Second, constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit, constants.DefaultWorkerCount, constants.DefaultAckWait, 0)
 	defer func() { _ = repo.Close() }()
 
 	ctx := context.Background()
@@ -485,7 +486,7 @@ func TestMessagingRepository_WithAuthRepo(t *testing.T) {
 		t.Skipf("Skipping auth test: %v", err)
 	}
 
-	repo := NewMessagingRepository(nil, authRepo, logger, 5*time.Second, constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit, constants.DefaultWorkerCount)
+	repo := NewMessagingRepository(nil, authRepo, logger, 5*time.Second, constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit, constants.DefaultWorkerCount, constants.DefaultAckWait, 0)
 	ctx := context.Background()
 
 	t.Run("validate_token_with_auth_repo", func(t *testing.T) {
@@ -541,8 +542,9 @@ func TestMessagingRepository_WithAuthRepo(t *testing.T) {
 // stubJSMsg is a minimal jetstream.Msg stub for nakDelay tests.
 // Only Metadata() returns real data; all other methods are unused.
 type stubJSMsg struct {
-	numDelivered uint64
-	metaErr      error
+	numDelivered    uint64
+	metaErr         error
+	inProgressCalls atomic.Int64
 }
 
 func (s *stubJSMsg) Metadata() (*jetstream.MsgMetadata, error) {
@@ -559,9 +561,12 @@ func (s *stubJSMsg) Ack() error                         { return nil }
 func (s *stubJSMsg) DoubleAck(_ context.Context) error  { return nil }
 func (s *stubJSMsg) Nak() error                         { return nil }
 func (s *stubJSMsg) NakWithDelay(_ time.Duration) error { return nil }
-func (s *stubJSMsg) InProgress() error                  { return nil }
-func (s *stubJSMsg) Term() error                        { return nil }
-func (s *stubJSMsg) TermWithReason(_ string) error      { return nil }
+func (s *stubJSMsg) InProgress() error {
+	s.inProgressCalls.Add(1)
+	return nil
+}
+func (s *stubJSMsg) Term() error                   { return nil }
+func (s *stubJSMsg) TermWithReason(_ string) error { return nil }
 
 // TestNakDelay pins the per-attempt delay ceiling that the MaxDeliver:5 +
 // nakDelay contract relies on. The function uses full jitter (rand in [0, cap])
@@ -599,6 +604,97 @@ func TestNakDelay(t *testing.T) {
 		d := nakDelay(msg)
 		assert.Equal(t, time.Second, d)
 	})
+}
+
+// TestAcquireWorkerSlot_HeartbeatsWhileQueued pins the behavior that keeps
+// AckWait from expiring while a message is queued behind a full local
+// worker semaphore: acquireWorkerSlot must send JetStream InProgress
+// heartbeats until a slot frees up, and must not return before one does.
+func TestAcquireWorkerSlot_HeartbeatsWhileQueued(t *testing.T) {
+	r := &MessagingRepository{
+		sem:     make(chan struct{}, 1),
+		ackWait: 30 * time.Millisecond,
+		logger:  slog.New(slog.NewTextHandler(os.Stderr, nil)),
+	}
+	r.sem <- struct{}{} // fill the only slot so acquireWorkerSlot must wait
+
+	msg := &stubJSMsg{}
+	done := make(chan struct{})
+	go func() {
+		r.acquireWorkerSlot(context.Background(), msg, "test.subject")
+		close(done)
+	}()
+
+	// Give the heartbeat ticker (ackWait/3 = 10ms) several chances to fire
+	// before freeing the slot.
+	require.Eventually(t, func() bool {
+		return msg.inProgressCalls.Load() >= 2
+	}, time.Second, 5*time.Millisecond, "expected InProgress heartbeats while queued")
+
+	select {
+	case <-done:
+		t.Fatal("acquireWorkerSlot returned before a slot was freed")
+	default:
+	}
+
+	<-r.sem // free the slot
+	require.Eventually(t, func() bool {
+		select {
+		case <-done:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 5*time.Millisecond, "expected acquireWorkerSlot to return once a slot freed")
+}
+
+// TestAcquireWorkerSlot_NoWaitNoHeartbeat pins the fast path: when a slot is
+// immediately available, acquireWorkerSlot must not send any heartbeat.
+func TestAcquireWorkerSlot_NoWaitNoHeartbeat(t *testing.T) {
+	r := &MessagingRepository{
+		sem:     make(chan struct{}, 1),
+		ackWait: 30 * time.Millisecond,
+		logger:  slog.New(slog.NewTextHandler(os.Stderr, nil)),
+	}
+
+	msg := &stubJSMsg{}
+	acquired := r.acquireWorkerSlot(context.Background(), msg, "test.subject")
+
+	assert.True(t, acquired)
+	assert.Equal(t, int64(0), msg.inProgressCalls.Load())
+	<-r.sem // consumed the slot
+}
+
+// TestAcquireWorkerSlot_CtxCanceledWhileQueuedReturnsFalse pins shutdown
+// behavior: if ctx is canceled while waiting for a worker slot (e.g.
+// DrainWithTimeout canceling the subscription context), acquireWorkerSlot
+// must stop waiting and report that it did not acquire a slot, rather than
+// blocking forever or handing the caller a slot to start a handler with an
+// already-canceled context.
+func TestAcquireWorkerSlot_CtxCanceledWhileQueuedReturnsFalse(t *testing.T) {
+	r := &MessagingRepository{
+		sem:     make(chan struct{}, 1),
+		ackWait: 30 * time.Millisecond,
+		logger:  slog.New(slog.NewTextHandler(os.Stderr, nil)),
+	}
+	r.sem <- struct{}{} // fill the only slot so acquireWorkerSlot must wait
+
+	ctx, cancel := context.WithCancel(context.Background())
+	msg := &stubJSMsg{}
+	done := make(chan bool, 1)
+	go func() {
+		done <- r.acquireWorkerSlot(ctx, msg, "test.subject")
+	}()
+
+	time.Sleep(20 * time.Millisecond) // let it queue and heartbeat at least once
+	cancel()
+
+	select {
+	case acquired := <-done:
+		assert.False(t, acquired, "a canceled ctx must not report an acquired slot")
+	case <-time.After(time.Second):
+		t.Fatal("acquireWorkerSlot did not return after ctx was canceled")
+	}
 }
 
 // Test runner setup

@@ -69,7 +69,7 @@ For the consumer subjects, queue group, and outbound event semantics in one plac
 ## OpenSearch storage patterns
 
 - Storage logic lives in `internal/infrastructure/storage/`. Domain services depend on the storage repository interface, not on the OpenSearch client directly.
-- The current write path calls `StorageRepository.Index` with `object_ref` as the OpenSearch document ID and `latest: true`. The background janitor (`internal/infrastructure/cleanup/`) reconciles duplicate `latest: true` hits for the same `object_ref` by flipping older hits to `latest: false`. Queries filter `latest: true`.
+- The write path calls `contracts.DocumentIndexer.Index` (defaulting to `StorageRepository`, optionally a `BatchIndexer` wrapper coalescing concurrent single-doc writes into OpenSearch bulk requests — see `IndexerService.SetDocIndexer`) with `object_ref` as the OpenSearch document ID and `latest: true`. The background janitor (`internal/infrastructure/cleanup/`) reconciles duplicate `latest: true` hits for the same `object_ref` by flipping older hits to `latest: false`. Queries filter `latest: true`.
 - Top-level document fields and their sources are fixed by the contract document. Do not add a new top-level field in this repo's storage code without updating `docs/indexer-contract.md` and coordinating with `lfx-v2-query-service`.
 - `data` is `flat_object`. New keys inside `data` are free. Search-shaped fields (`name_and_aliases`, `tags`, `fulltext`, `sort_name`, `parent_refs`) come from `IndexingConfig`.
 

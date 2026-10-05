@@ -71,6 +71,51 @@ func TestIndexerService_ProcessTransaction_Success(t *testing.T) {
 	assert.Contains(t, indexCall.Body, "Test Project")
 }
 
+// TestIndexerService_SetDocIndexer_RoutesWritesThroughOverride verifies that
+// ProcessTransaction's single-document write goes through whatever
+// SetDocIndexer installed (e.g. a BatchIndexer wrapper in production), not
+// unconditionally through storageRepo.Index — catching a regression where
+// the override is dropped or bypassed.
+func TestIndexerService_SetDocIndexer_RoutesWritesThroughOverride(t *testing.T) {
+	mockStorageRepo := mocks.NewMockStorageRepository()
+	mockDocIndexer := mocks.NewMockStorageRepository()
+	mockMessagingRepo := mocks.NewMockMessagingRepository()
+	logger, _ := logging.TestLogger(t)
+	service := NewIndexerService(mockStorageRepo, mockMessagingRepo, logger)
+	service.SetDocIndexer(mockDocIndexer)
+
+	transaction := &contracts.LFXTransaction{
+		Action:     constants.ActionCreated,
+		ObjectType: "project",
+		Headers: map[string]string{
+			"authorization": "Bearer valid-token",
+		},
+		Data: map[string]any{
+			"id":   "test-project",
+			"name": "Test Project",
+		},
+		IndexingConfig: &types.IndexingConfig{
+			ObjectID:             "test-project",
+			AccessCheckObject:    "project:test-project",
+			AccessCheckRelation:  "viewer",
+			HistoryCheckObject:   "project:test-project",
+			HistoryCheckRelation: "viewer",
+		},
+		Timestamp: time.Now(),
+		ParsedPrincipals: []contracts.Principal{
+			{Principal: "test_user", Email: "test@example.com"},
+		},
+	}
+
+	result, err := service.ProcessTransaction(context.Background(), transaction, "test-index")
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.True(t, result.Success)
+	assert.Len(t, mockDocIndexer.IndexCalls, 1, "write should go through the installed override")
+	assert.Empty(t, mockStorageRepo.IndexCalls, "write should not also go through the default storageRepo")
+}
+
 func TestIndexerService_ProcessTransaction_EnrichmentSuccess(t *testing.T) {
 	// Setup
 	mockStorageRepo := mocks.NewMockStorageRepository()

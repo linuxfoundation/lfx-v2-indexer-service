@@ -28,6 +28,7 @@ import (
 type IndexerService struct {
 	// Core dependencies
 	storageRepo   contracts.StorageRepository
+	docIndexer    contracts.DocumentIndexer // defaults to storageRepo; see SetDocIndexer
 	messagingRepo contracts.MessagingRepository
 	logger        *slog.Logger
 
@@ -73,11 +74,20 @@ func NewIndexerService(
 ) *IndexerService {
 	return &IndexerService{
 		storageRepo:   storageRepo,
+		docIndexer:    storageRepo,
 		messagingRepo: messagingRepo,
 		logger:        logging.WithComponent(logger, constants.Component),
 		timeout:       constants.HealthCheckTimeout,
 		cacheDuration: constants.CacheDuration,
 	}
+}
+
+// SetDocIndexer overrides the single-document indexer used by ProcessTransaction,
+// e.g. to install a batching wrapper around storageRepo. Defaults to storageRepo
+// itself if never called. Not safe to call concurrently with ProcessTransaction —
+// intended for one-time wiring during service startup, before traffic begins.
+func (s *IndexerService) SetDocIndexer(docIndexer contracts.DocumentIndexer) {
+	s.docIndexer = docIndexer
 }
 
 // =================
@@ -758,8 +768,9 @@ func (s *IndexerService) ProcessTransaction(ctx context.Context, transaction *co
 		"transaction_id", transactionID,
 		"body_size_bytes", len(bodyBytes))
 
-	// Index the transaction using storage repository
-	err = s.storageRepo.Index(ctx, index, body.ObjectRef, bytes.NewReader(bodyBytes))
+	// Index the transaction (batched with other concurrent single-document
+	// writes when docIndexer is a BatchIndexer; see SetDocIndexer)
+	err = s.docIndexer.Index(ctx, index, body.ObjectRef, bytes.NewReader(bodyBytes))
 	if err != nil {
 		result.Error = err
 		result.Success = false
