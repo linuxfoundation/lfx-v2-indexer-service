@@ -26,6 +26,25 @@ import (
 // errNonJWTToken is returned when a token does not have the structure of a JWT.
 var errNonJWTToken = errors.New("token is not a JWT")
 
+// validationDeadlineErr reports whether err reflects a parsing
+// deadline/cancellation rather than an ordinary invalid token, returning the
+// error to propagate (nil if neither applies). It checks both the outer ctx
+// and err itself: jwksHTTPClient's Timeout cancels its own internal request
+// context on a stalled fetch, so the resulting error can satisfy
+// errors.Is(err, context.DeadlineExceeded) well before parsePrincipalsTimeout
+// (the outer ctx) has elapsed. Treating only ctx.Err() as the deadline signal
+// would let that case fall through and be swallowed as an ordinary
+// invalid-token failure.
+func validationDeadlineErr(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return err
+	}
+	return nil
+}
+
 // jwksHTTPTimeout bounds a single JWKS HTTP fetch.
 const jwksHTTPTimeout = 5 * time.Second
 
@@ -210,11 +229,11 @@ func (r *AuthRepository) ParsePrincipals(ctx context.Context, headers map[string
 		case constants.AuthorizationHeader:
 			principal, email, err := r.parsePrincipalAndEmail(ctx, value)
 			if err != nil {
-				if ctxErr := ctx.Err(); ctxErr != nil {
+				if deadlineErr := validationDeadlineErr(ctx, err); deadlineErr != nil {
 					r.logger.Warn("Principal parsing aborted: context done",
 						"auth_id", authID,
-						"error", ctxErr.Error())
-					return nil, fmt.Errorf("principal parsing aborted: %w", ctxErr)
+						"error", deadlineErr.Error())
+					return nil, fmt.Errorf("principal parsing aborted: %w", deadlineErr)
 				}
 				if errors.Is(err, errNonJWTToken) {
 					r.logger.Debug("Authorization header contains non-JWT token",
@@ -282,12 +301,12 @@ func (r *AuthRepository) ParsePrincipals(ctx context.Context, headers map[string
 
 				principal, email, err = r.parsePrincipalAndEmail(ctx, strings.TrimSpace(jwt))
 				if err != nil {
-					if ctxErr := ctx.Err(); ctxErr != nil {
+					if deadlineErr := validationDeadlineErr(ctx, err); deadlineErr != nil {
 						r.logger.Warn("On-behalf-of parsing aborted: context done",
 							"auth_id", authID,
 							"token_index", i,
-							"error", ctxErr.Error())
-						return nil, fmt.Errorf("principal parsing aborted: %w", ctxErr)
+							"error", deadlineErr.Error())
+						return nil, fmt.Errorf("principal parsing aborted: %w", deadlineErr)
 					}
 					errCount++
 					lastError = err
@@ -495,6 +514,15 @@ func (r *AuthRepository) parsePrincipalAndEmail(ctx context.Context, token strin
 func (r *AuthRepository) validateTokenWithCtx(ctx context.Context, token string) (interface{}, error) {
 	select {
 	case r.validationGate <- struct{}{}:
+		// select does not favor one ready case over another, so a slot send
+		// can still win a race against an already-canceled ctx; recheck
+		// before spawning a goroutine that would otherwise block forever on
+		// the context-insensitive refresh mutex while permanently holding
+		// this slot.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			<-r.validationGate
+			return nil, ctxErr
+		}
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
