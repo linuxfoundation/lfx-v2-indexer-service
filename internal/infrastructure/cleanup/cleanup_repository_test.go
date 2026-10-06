@@ -409,70 +409,112 @@ func TestCleanupRepository_ProcessTruncatesAtDuplicateCap(t *testing.T) {
 	mockRepo.On("SearchWithVersions", ctx, "test-index", expectedQuery).Return(mockDocs, nil)
 	mockRepo.On("UpdateWithOptimisticLock", ctx, "test-index", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil)
 
-	service.processItem(ctx, &objectRef)
+	result := service.processItem(ctx, &objectRef)
 
 	// Exactly the capped losers (janitorMaxDuplicates - 1) are updated; the
 	// hit past the cap never gets attempted.
 	mockRepo.AssertNumberOfCalls(t, "UpdateWithOptimisticLock", janitorMaxDuplicates-1)
 	mockRepo.AssertNotCalled(t, "UpdateWithOptimisticLock", ctx, "test-index", "doc-excluded", mock.Anything, mock.Anything)
+
+	// doc-excluded is still latest=true and was never attempted, so even
+	// though every attempted update succeeded this pass is not actually
+	// resolved; it must not be reported as "conflict_resolved".
+	assert.Equal(t, "error", result)
 }
 
 func TestCleanupRepository_ProcessWithNilSeqNoAndPrimaryTerm(t *testing.T) {
-	mockRepo := &MockTransactionRepository{}
-	logger, _ := logging.TestLogger(t)
-	service := NewCleanupRepository(mockRepo, logger, "test-index")
-
-	ctx := context.Background()
-	objectRef := "test-object-ref"
-
-	// Both hits are missing _seq_no/_primary_term (e.g. OpenSearch omitted
-	// them despite seq_no_primary_term:true). safeLogInt64 must not panic
-	// dereferencing these, and updateLatestFlag must skip the update rather
-	// than send an OptimisticUpdateParams with nil SeqNo/PrimaryTerm, which
-	// would make UpdateWithOptimisticLock perform an unconditional update
-	// and defeat the optimistic lock entirely.
-	mockDocs := []contracts.VersionedDocument{
+	// Table cases cover both-nil plus each individually-missing field: a
+	// regression from the updateLatestFlag guard's "||" to "&&" would still
+	// skip the update (and pass) when both are nil, but would wrongly let a
+	// partially-populated doc (only one of the two nil) reach
+	// UpdateWithOptimisticLock, defeating the optimistic lock.
+	tests := []struct {
+		name       string
+		loserSeqNo *int64
+		loserPTerm *int64
+	}{
 		{
-			ID:     "doc-winner",
-			Source: map[string]any{"updated_at": "2023-01-02T00:00:00Z"},
+			name:       "both_nil",
+			loserSeqNo: nil,
+			loserPTerm: nil,
 		},
 		{
-			ID:     "doc-loser",
-			Source: map[string]any{"updated_at": "2023-01-01T00:00:00Z"},
+			name:       "seq_no_only_nil",
+			loserSeqNo: nil,
+			loserPTerm: int64Ptr(1),
+		},
+		{
+			name:       "primary_term_only_nil",
+			loserSeqNo: int64Ptr(1),
+			loserPTerm: nil,
 		},
 	}
 
-	expectedQuery := map[string]any{
-		"size":                janitorMaxDuplicates + 1,
-		"seq_no_primary_term": true,
-		"sort": []map[string]any{
-			{"deleted_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
-			{"updated_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
-		},
-		"_source": []string{"created_at", "updated_at", "deleted_at"},
-		"query": map[string]any{
-			"bool": map[string]any{
-				"must": []map[string]any{
-					{"term": map[string]any{"object_ref": objectRef}},
-					{"term": map[string]any{"latest": true}},
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mockRepo := &MockTransactionRepository{}
+			logger, _ := logging.TestLogger(t)
+			service := NewCleanupRepository(mockRepo, logger, "test-index")
+
+			ctx := context.Background()
+			objectRef := "test-object-ref"
+
+			winnerSeqNo, winnerPrimaryTerm := int64(0), int64(1)
+			// Both hits are missing _seq_no/_primary_term (e.g. OpenSearch
+			// omitted them despite seq_no_primary_term:true). safeLogInt64
+			// must not panic dereferencing these, and updateLatestFlag must
+			// skip the update rather than send an OptimisticUpdateParams
+			// with a nil SeqNo or PrimaryTerm, which would make
+			// UpdateWithOptimisticLock perform an unconditional update and
+			// defeat the optimistic lock entirely.
+			mockDocs := []contracts.VersionedDocument{
+				{
+					ID:          "doc-winner",
+					SeqNo:       &winnerSeqNo,
+					PrimaryTerm: &winnerPrimaryTerm,
+					Source:      map[string]any{"updated_at": "2023-01-02T00:00:00Z"},
 				},
-			},
-		},
+				{
+					ID:          "doc-loser",
+					SeqNo:       tc.loserSeqNo,
+					PrimaryTerm: tc.loserPTerm,
+					Source:      map[string]any{"updated_at": "2023-01-01T00:00:00Z"},
+				},
+			}
+
+			expectedQuery := map[string]any{
+				"size":                janitorMaxDuplicates + 1,
+				"seq_no_primary_term": true,
+				"sort": []map[string]any{
+					{"deleted_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
+					{"updated_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
+				},
+				"_source": []string{"created_at", "updated_at", "deleted_at"},
+				"query": map[string]any{
+					"bool": map[string]any{
+						"must": []map[string]any{
+							{"term": map[string]any{"object_ref": objectRef}},
+							{"term": map[string]any{"latest": true}},
+						},
+					},
+				},
+			}
+			mockRepo.On("SearchWithVersions", ctx, "test-index", expectedQuery).Return(mockDocs, nil)
+
+			var result string
+			assert.NotPanics(t, func() {
+				result = service.processItem(ctx, &objectRef)
+			})
+
+			mockRepo.AssertNotCalled(t, "UpdateWithOptimisticLock", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+			mockRepo.AssertExpectations(t)
+
+			// doc-loser's update was skipped (missing version metadata), not
+			// resolved: it stays latest=true, so this must not be reported
+			// as "conflict_resolved" or the stale duplicate goes unnoticed.
+			assert.Equal(t, "error", result)
+		})
 	}
-	mockRepo.On("SearchWithVersions", ctx, "test-index", expectedQuery).Return(mockDocs, nil)
-
-	var result string
-	assert.NotPanics(t, func() {
-		result = service.processItem(ctx, &objectRef)
-	})
-
-	mockRepo.AssertNotCalled(t, "UpdateWithOptimisticLock", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
-	mockRepo.AssertExpectations(t)
-
-	// doc-loser's update was skipped (missing version metadata), not
-	// resolved: it stays latest=true, so this must not be reported as
-	// "conflict_resolved" or the stale duplicate goes unnoticed.
-	assert.Equal(t, "error", result)
 }
 
 func TestCleanupRepository_StartStopItemLoop(t *testing.T) {
@@ -532,4 +574,8 @@ func TestCleanupRepository_ProcessQueuedItem(t *testing.T) {
 		queuedItem := <-globalJanitorChan
 		assert.Equal(t, "test-object", *queuedItem)
 	}
+}
+
+func int64Ptr(v int64) *int64 {
+	return &v
 }

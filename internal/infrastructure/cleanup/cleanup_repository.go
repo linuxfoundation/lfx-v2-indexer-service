@@ -299,7 +299,12 @@ func (j *CleanupRepository) processItem(ctx context.Context, objectRef *string) 
 
 	// docs was requested with size janitorMaxDuplicates+1; truncate to the
 	// cap now that the extra hit has told us whether the result was cut off.
-	if len(docs) > janitorMaxDuplicates {
+	// truncated is carried through to the final status below: the excluded
+	// hit is never attempted, so it's still latest=true even when every
+	// attempted update in this pass succeeds, and that case must not be
+	// reported as "conflict_resolved".
+	truncated := len(docs) > janitorMaxDuplicates
+	if truncated {
 		j.logger.Warn("Janitor search hit the duplicate cap; some duplicates may not have been resolved",
 			"object_ref", safeLogString(objectRef),
 			"cap", janitorMaxDuplicates)
@@ -471,9 +476,11 @@ func (j *CleanupRepository) processItem(ctx context.Context, objectRef *string) 
 		"updates_successful", updatesSuccessful)
 
 	// A doc left latest=true because its update failed or was skipped (e.g.
-	// missing seq_no/primary_term) is not actually resolved; counting it as
-	// "conflict_resolved" would hide the stale duplicate from observability.
-	if updatesSuccessful < updatesAttempted {
+	// missing seq_no/primary_term), or because the search was truncated at
+	// janitorMaxDuplicates and never attempted at all, is not actually
+	// resolved; counting it as "conflict_resolved" would hide the stale
+	// duplicate from observability.
+	if truncated || updatesSuccessful < updatesAttempted {
 		return "error"
 	}
 	return "conflict_resolved"
