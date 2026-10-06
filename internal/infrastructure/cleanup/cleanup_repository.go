@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
 )
 
@@ -134,6 +135,7 @@ func (j *CleanupRepository) StartItemLoop(ctx context.Context) {
 		itemsProcessed := 0
 		itemsSkipped := 0
 		conflictsResolved := 0
+		retriesScheduled := 0
 		errors := 0
 
 		for {
@@ -143,6 +145,7 @@ func (j *CleanupRepository) StartItemLoop(ctx context.Context) {
 					"items_processed", itemsProcessed,
 					"items_skipped", itemsSkipped,
 					"conflicts_resolved", conflictsResolved,
+					"retries_scheduled", retriesScheduled,
 					"errors", errors)
 				return
 			case <-ctx.Done():
@@ -150,6 +153,7 @@ func (j *CleanupRepository) StartItemLoop(ctx context.Context) {
 					"items_processed", itemsProcessed,
 					"items_skipped", itemsSkipped,
 					"conflicts_resolved", conflictsResolved,
+					"retries_scheduled", retriesScheduled,
 					"errors", errors,
 					"context_error", ctx.Err())
 				return
@@ -162,7 +166,7 @@ func (j *CleanupRepository) StartItemLoop(ctx context.Context) {
 
 				// Worker health logging every 100 items
 				if itemsProcessed%100 == 0 {
-					j.logWorkerHealth(itemsProcessed, itemsSkipped, conflictsResolved, errors)
+					j.logWorkerHealth(itemsProcessed, itemsSkipped, conflictsResolved, retriesScheduled, errors)
 				}
 
 				itemsProcessed++
@@ -177,6 +181,8 @@ func (j *CleanupRepository) StartItemLoop(ctx context.Context) {
 					itemsSkipped++
 				case "conflict_resolved":
 					conflictsResolved++
+				case "retry_scheduled":
+					retriesScheduled++
 				case "error":
 					errors++
 				}
@@ -293,7 +299,12 @@ func (j *CleanupRepository) processItem(ctx context.Context, objectRef *string) 
 
 	// docs was requested with size janitorMaxDuplicates+1; truncate to the
 	// cap now that the extra hit has told us whether the result was cut off.
-	if len(docs) > janitorMaxDuplicates {
+	// truncated is carried through to the final status below: the excluded
+	// hit is never attempted, so it's still latest=true even when every
+	// attempted update in this pass succeeds, and that case must not be
+	// reported as "conflict_resolved".
+	truncated := len(docs) > janitorMaxDuplicates
+	if truncated {
 		j.logger.Warn("Janitor search hit the duplicate cap; some duplicates may not have been resolved",
 			"object_ref", safeLogString(objectRef),
 			"cap", janitorMaxDuplicates)
@@ -435,10 +446,14 @@ func (j *CleanupRepository) processItem(ctx context.Context, objectRef *string) 
 					"document_id", vErr.DocumentID,
 					"conflict_type", "optimistic_lock")
 
-				// Async retry with production delays (5-10 seconds)
+				// Async retry with production delays (5-10 seconds). The
+				// conflict isn't resolved yet -- the doc is still
+				// latest=true pending that retry's outcome -- so this must
+				// not be counted the same as an update that already
+				// succeeded.
 				j.asyncRetry(ctx, *objectRef, vErr.DocumentID)
 				// Don't attempt to update any other hits either; wait for the next check.
-				return "conflict_resolved"
+				return "retry_scheduled"
 			}
 			j.logger.Error("Document update failed",
 				"object_ref", safeLogString(objectRef),
@@ -459,6 +474,15 @@ func (j *CleanupRepository) processItem(ctx context.Context, objectRef *string) 
 		"winning_id", winningID,
 		"updates_attempted", updatesAttempted,
 		"updates_successful", updatesSuccessful)
+
+	// A doc left latest=true because its update failed or was skipped (e.g.
+	// missing seq_no/primary_term), or because the search was truncated at
+	// janitorMaxDuplicates and never attempted at all, is not actually
+	// resolved; counting it as "conflict_resolved" would hide the stale
+	// duplicate from observability.
+	if truncated || updatesSuccessful < updatesAttempted {
+		return "error"
+	}
 	return "conflict_resolved"
 }
 
@@ -470,6 +494,20 @@ func (j *CleanupRepository) updateLatestFlag(ctx context.Context, doc contracts.
 		"latest", latest,
 		"seq_no", safeLogInt64(doc.SeqNo),
 		"primary_term", safeLogInt64(doc.PrimaryTerm))
+
+	// Without both seq_no and primary_term, UpdateWithOptimisticLock omits
+	// the IfSeqNo/IfPrimaryTerm constraint entirely and performs an
+	// unconditional update, which can overwrite a concurrently-replaced
+	// document. Skip rather than risk that; the document stays latest=true
+	// until a future janitor pass observes it with version metadata.
+	if doc.SeqNo == nil || doc.PrimaryTerm == nil {
+		j.logger.Warn("Skipping optimistic update: document missing version metadata",
+			"object_ref", objectRef,
+			"document_id", doc.ID,
+			"seq_no", safeLogInt64(doc.SeqNo),
+			"primary_term", safeLogInt64(doc.PrimaryTerm))
+		return errors.New(constants.ErrMissingVersionInfo)
+	}
 
 	updateBody := map[string]any{
 		"doc": map[string]any{
@@ -551,13 +589,14 @@ func (j *CleanupRepository) asyncRetry(ctx context.Context, objectRef, docID str
 }
 
 // logWorkerHealth logs worker health metrics and performance data
-func (j *CleanupRepository) logWorkerHealth(itemsProcessed, itemsSkipped, conflictsResolved, errors int) {
+func (j *CleanupRepository) logWorkerHealth(itemsProcessed, itemsSkipped, conflictsResolved, retriesScheduled, errors int) {
 	queueLength := len(globalJanitorChan)
 
 	j.logger.Debug("Janitor worker health check",
 		"items_processed", itemsProcessed,
 		"items_skipped", itemsSkipped,
 		"conflicts_resolved", conflictsResolved,
+		"retries_scheduled", retriesScheduled,
 		"errors", errors,
 		"queue_length", queueLength)
 

@@ -26,11 +26,46 @@ import (
 // errNonJWTToken is returned when a token does not have the structure of a JWT.
 var errNonJWTToken = errors.New("token is not a JWT")
 
-// jwksHTTPTimeout bounds the JWKS provider's HTTP client so a stalled
-// fetch can't exceed the ackWaitSafetyMargin (10s) that app_config.go's
-// AckWait derivation reserves for everything outside the OpenSearch flush
-// path, including principal/JWKS resolution.
+// validationDeadlineErr reports whether err reflects a parsing
+// deadline/cancellation rather than an ordinary invalid token, returning the
+// error to propagate (nil if neither applies). It checks both the outer ctx
+// and err itself: jwksHTTPClient's Timeout cancels its own internal request
+// context on a stalled fetch, so the resulting error can satisfy
+// errors.Is(err, context.DeadlineExceeded) well before parsePrincipalsTimeout
+// (the outer ctx) has elapsed. Treating only ctx.Err() as the deadline signal
+// would let that case fall through and be swallowed as an ordinary
+// invalid-token failure.
+func validationDeadlineErr(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return err
+	}
+	return nil
+}
+
+// jwksHTTPTimeout bounds a single JWKS HTTP fetch.
 const jwksHTTPTimeout = 5 * time.Second
+
+// parsePrincipalsTimeout bounds the total time ParsePrincipals may spend
+// across all of its JWT validations. A single jwksHTTPTimeout only caps one
+// fetch; go-jwt-middleware's CachingProvider.KeyFunc serializes refreshes on
+// a cache miss, so an Authorization token plus several on-behalf-of tokens
+// can each trigger their own fetch and queue behind one another, letting the
+// cumulative wait exceed jwksHTTPTimeout many times over. app_config.go's
+// AckWait derivation reserves ackWaitSafetyMargin (10s) for everything
+// outside the OpenSearch flush path, not for principal parsing alone;
+// budgeting the full 10s here would leave zero headroom for the rest of the
+// handler (message decoding, logging, NATS ack) once parsing is at its
+// worst case. 6s leaves a documented 4s of that margin for that other work.
+const parsePrincipalsTimeout = 6 * time.Second
+
+// maxConcurrentValidations bounds the number of concurrently in-flight
+// validateTokenWithCtx goroutines, including ones abandoned by a caller whose
+// ctx fired while the underlying ValidateToken call was still blocked. See
+// validateTokenWithCtx's doc comment for why this cap exists.
+const maxConcurrentValidations = 64
 
 // HeimdallClaims contains extra custom claims we want to parse from the JWT token
 type HeimdallClaims struct {
@@ -56,6 +91,13 @@ type AuthRepository struct {
 	issuer    string
 	audiences []string // Support multiple audiences
 	logger    *slog.Logger
+
+	// validationGate bounds the number of concurrently in-flight (including
+	// abandoned) validateTokenWithCtx goroutines. Must be initialized with
+	// make(chan struct{}, maxConcurrentValidations); a nil channel blocks
+	// forever on send, so tests constructing AuthRepository directly must
+	// set this field explicitly.
+	validationGate chan struct{}
 }
 
 // NewAuthRepository creates a new JWT auth repository
@@ -77,11 +119,9 @@ func NewAuthRepository(issuer string, audiences []string, jwksURL string, clockS
 	}
 
 	// Set up JWKS provider with 5 minute cache and traced HTTP client.
-	// Timeout bounds a stalled JWKS fetch (cache miss/refresh) so it can
-	// never silently run longer than ackWaitSafetyMargin (10s, see
-	// app_config.go) — without this, ParsePrincipals could block past
-	// AckWait while the message handler is already past the worker-slot
-	// heartbeat phase, triggering a premature JetStream redelivery.
+	// jwksHTTPTimeout bounds each individual fetch; ParsePrincipals also
+	// wraps its context with parsePrincipalsTimeout to bound the total time
+	// across all of the fetches a single call may trigger.
 	jwksHTTPClient := &http.Client{Transport: otelhttp.NewTransport(nil), Timeout: jwksHTTPTimeout}
 	provider := jwks.NewCachingProvider(issuerURL, 5*time.Minute,
 		jwks.WithCustomJWKSURI(jwksURLParsed),
@@ -108,10 +148,11 @@ func NewAuthRepository(issuer string, audiences []string, jwksURL string, clockS
 	}
 
 	return &AuthRepository{
-		validator: jwtValidator,
-		issuer:    issuer,
-		audiences: audiences, // Store audiences array
-		logger:    authLogger,
+		validator:      jwtValidator,
+		issuer:         issuer,
+		audiences:      audiences, // Store audiences array
+		logger:         authLogger,
+		validationGate: make(chan struct{}, maxConcurrentValidations),
 	}, nil
 }
 
@@ -162,7 +203,17 @@ func (r *AuthRepository) ValidateToken(ctx context.Context, token string) (*cont
 // X-On-Behalf-Of header is not validated or pruned by the API gateway, this
 // function also provides the enforcement that "on behalf of" data is only used
 // if the authorized principal is a machine user.
+//
+// If parsePrincipalsTimeout elapses or ctx is otherwise canceled while a
+// token is being validated, that is returned as an error rather than being
+// treated like an ordinary invalid-token failure: swallowing it would let a
+// JWKS stall silently acknowledge a message with missing or partial audit
+// principals. The caller should treat this error like any other parse
+// failure (the message is retried, not indexed).
 func (r *AuthRepository) ParsePrincipals(ctx context.Context, headers map[string]string) ([]contracts.Principal, error) {
+	ctx, cancel := context.WithTimeout(ctx, parsePrincipalsTimeout)
+	defer cancel()
+
 	authID := r.generateAuthID()
 
 	// This will be set to `true` if the authorization header contains a machine
@@ -178,6 +229,12 @@ func (r *AuthRepository) ParsePrincipals(ctx context.Context, headers map[string
 		case constants.AuthorizationHeader:
 			principal, email, err := r.parsePrincipalAndEmail(ctx, value)
 			if err != nil {
+				if deadlineErr := validationDeadlineErr(ctx, err); deadlineErr != nil {
+					r.logger.Warn("Principal parsing aborted: context done",
+						"auth_id", authID,
+						"error", deadlineErr.Error())
+					return nil, fmt.Errorf("principal parsing aborted: %w", deadlineErr)
+				}
 				if errors.Is(err, errNonJWTToken) {
 					r.logger.Debug("Authorization header contains non-JWT token",
 						"auth_id", authID)
@@ -226,6 +283,17 @@ func (r *AuthRepository) ParsePrincipals(ctx context.Context, headers map[string
 			for i, jwt := range forwardedJWTs {
 				var principal, email string
 
+				// Stop spawning further validations once the deadline has
+				// already passed; parsePrincipalAndEmail would just block
+				// until it fires anyway.
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					r.logger.Warn("On-behalf-of parsing aborted: context done",
+						"auth_id", authID,
+						"token_index", i,
+						"error", ctxErr.Error())
+					return nil, fmt.Errorf("principal parsing aborted: %w", ctxErr)
+				}
+
 				r.logger.Debug("Processing on-behalf-of token",
 					"auth_id", authID,
 					"token_index", i,
@@ -233,6 +301,13 @@ func (r *AuthRepository) ParsePrincipals(ctx context.Context, headers map[string
 
 				principal, email, err = r.parsePrincipalAndEmail(ctx, strings.TrimSpace(jwt))
 				if err != nil {
+					if deadlineErr := validationDeadlineErr(ctx, err); deadlineErr != nil {
+						r.logger.Warn("On-behalf-of parsing aborted: context done",
+							"auth_id", authID,
+							"token_index", i,
+							"error", deadlineErr.Error())
+						return nil, fmt.Errorf("principal parsing aborted: %w", deadlineErr)
+					}
 					errCount++
 					lastError = err
 					if !errors.Is(err, errNonJWTToken) {
@@ -378,7 +453,7 @@ func (r *AuthRepository) parsePrincipalAndEmail(ctx context.Context, token strin
 		return "", "", fmt.Errorf("%w: %s", errNonJWTToken, r.safeTokenLog(token))
 	}
 
-	parsedJWT, err := r.validator.ValidateToken(ctx, token)
+	parsedJWT, err := r.validateTokenWithCtx(ctx, token)
 	if err != nil {
 		errorType := r.classifyAuthError(err)
 		r.logger.Debug("Token validation failed during principal parsing",
@@ -411,6 +486,64 @@ func (r *AuthRepository) parsePrincipalAndEmail(ctx context.Context, token strin
 		"is_machine_user", r.isMachineUser(principal))
 
 	return principal, email, nil
+}
+
+// validateTokenWithCtx calls r.validator.ValidateToken but makes sure ctx's
+// deadline is actually observed by the caller even though the underlying
+// go-jwt-middleware CachingProvider cannot be trusted to do so itself: on a
+// cold-cache refresh, CachingProvider.refreshKey takes a plain sync.Mutex
+// before calling the real KeyFunc, and a goroutine blocked on a plain mutex
+// cannot wake up on ctx.Done(). Under concurrent cold-cache requests for the
+// same issuer, that lets one blocked ValidateToken call silently defeat
+// parsePrincipalsTimeout and run well past it. Running the call on its own
+// goroutine and racing its result against ctx.Done() bounds what the caller
+// waits for; the abandoned goroutine still completes in the background and
+// its result is dropped via the buffered channel once nothing is left to
+// receive it.
+//
+// During a sustained JWKS outage, the first stuck refreshKey call never
+// releases its mutex, so every subsequent call for that issuer blocks on the
+// same mutex forever too. Left unchecked, each one would still spawn its own
+// goroutine, growing unboundedly for as long as the outage lasts and the
+// caller keeps receiving messages. validationGate caps that: a slot must be
+// acquired before spawning the goroutine, and it is only released once the
+// underlying call actually returns, so a permanently-stuck call permanently
+// holds its slot rather than letting the count grow without limit. A caller
+// whose ctx fires while waiting for a free slot fails fast without spawning
+// another goroutine that would just get stuck too.
+func (r *AuthRepository) validateTokenWithCtx(ctx context.Context, token string) (interface{}, error) {
+	select {
+	case r.validationGate <- struct{}{}:
+		// select does not favor one ready case over another, so a slot send
+		// can still win a race against an already-canceled ctx; recheck
+		// before spawning a goroutine that would otherwise block forever on
+		// the context-insensitive refresh mutex while permanently holding
+		// this slot.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			<-r.validationGate
+			return nil, ctxErr
+		}
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+
+	type result struct {
+		claims interface{}
+		err    error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		defer func() { <-r.validationGate }()
+		claims, err := r.validator.ValidateToken(ctx, token)
+		resultCh <- result{claims: claims, err: err}
+	}()
+
+	select {
+	case res := <-resultCh:
+		return res.claims, res.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // extractPrincipalFromClaims extracts principal information from JWT claims
