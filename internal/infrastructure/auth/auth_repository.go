@@ -42,6 +42,12 @@ const jwksHTTPTimeout = 5 * time.Second
 // worst case. 6s leaves a documented 4s of that margin for that other work.
 const parsePrincipalsTimeout = 6 * time.Second
 
+// maxConcurrentValidations bounds the number of concurrently in-flight
+// validateTokenWithCtx goroutines, including ones abandoned by a caller whose
+// ctx fired while the underlying ValidateToken call was still blocked. See
+// validateTokenWithCtx's doc comment for why this cap exists.
+const maxConcurrentValidations = 64
+
 // HeimdallClaims contains extra custom claims we want to parse from the JWT token
 type HeimdallClaims struct {
 	Principal string `json:"principal"`
@@ -66,6 +72,13 @@ type AuthRepository struct {
 	issuer    string
 	audiences []string // Support multiple audiences
 	logger    *slog.Logger
+
+	// validationGate bounds the number of concurrently in-flight (including
+	// abandoned) validateTokenWithCtx goroutines. Must be initialized with
+	// make(chan struct{}, maxConcurrentValidations); a nil channel blocks
+	// forever on send, so tests constructing AuthRepository directly must
+	// set this field explicitly.
+	validationGate chan struct{}
 }
 
 // NewAuthRepository creates a new JWT auth repository
@@ -116,10 +129,11 @@ func NewAuthRepository(issuer string, audiences []string, jwksURL string, clockS
 	}
 
 	return &AuthRepository{
-		validator: jwtValidator,
-		issuer:    issuer,
-		audiences: audiences, // Store audiences array
-		logger:    authLogger,
+		validator:      jwtValidator,
+		issuer:         issuer,
+		audiences:      audiences, // Store audiences array
+		logger:         authLogger,
+		validationGate: make(chan struct{}, maxConcurrentValidations),
 	}, nil
 }
 
@@ -464,16 +478,34 @@ func (r *AuthRepository) parsePrincipalAndEmail(ctx context.Context, token strin
 // same issuer, that lets one blocked ValidateToken call silently defeat
 // parsePrincipalsTimeout and run well past it. Running the call on its own
 // goroutine and racing its result against ctx.Done() bounds what the caller
-// waits for; the abandoned goroutine still completes in the background (an
-// acceptable, bounded leak) and its result is dropped via the buffered
-// channel once nothing is left to receive it.
+// waits for; the abandoned goroutine still completes in the background and
+// its result is dropped via the buffered channel once nothing is left to
+// receive it.
+//
+// During a sustained JWKS outage, the first stuck refreshKey call never
+// releases its mutex, so every subsequent call for that issuer blocks on the
+// same mutex forever too. Left unchecked, each one would still spawn its own
+// goroutine, growing unboundedly for as long as the outage lasts and the
+// caller keeps receiving messages. validationGate caps that: a slot must be
+// acquired before spawning the goroutine, and it is only released once the
+// underlying call actually returns, so a permanently-stuck call permanently
+// holds its slot rather than letting the count grow without limit. A caller
+// whose ctx fires while waiting for a free slot fails fast without spawning
+// another goroutine that would just get stuck too.
 func (r *AuthRepository) validateTokenWithCtx(ctx context.Context, token string) (interface{}, error) {
+	select {
+	case r.validationGate <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+
 	type result struct {
 		claims interface{}
 		err    error
 	}
 	resultCh := make(chan result, 1)
 	go func() {
+		defer func() { <-r.validationGate }()
 		claims, err := r.validator.ValidateToken(ctx, token)
 		resultCh <- result{claims: claims, err: err}
 	}()

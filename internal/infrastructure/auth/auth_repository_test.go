@@ -9,6 +9,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -313,10 +314,11 @@ func TestAuthRepository_ParsePrincipals(t *testing.T) {
 		require.NoError(t, err)
 
 		blockingRepo := &AuthRepository{
-			validator: blockingValidator,
-			issuer:    testIssuer,
-			audiences: []string{testAudience},
-			logger:    logger,
+			validator:      blockingValidator,
+			issuer:         testIssuer,
+			audiences:      []string{testAudience},
+			logger:         logger,
+			validationGate: make(chan struct{}, maxConcurrentValidations),
 		}
 
 		deadlineCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
@@ -346,6 +348,91 @@ func TestAuthRepository_ParsePrincipals(t *testing.T) {
 		assert.ErrorIs(t, err, context.DeadlineExceeded)
 		assert.Less(t, elapsed, time.Second,
 			"ParsePrincipals must return once ctx's deadline fires, even though the underlying validation call is still blocked")
+	})
+
+	t.Run("validation_gate_bounds_stuck_goroutines", func(t *testing.T) {
+		unblock := make(chan struct{})
+		defer close(unblock)
+
+		// keyFuncCalls counts every entry into blockingKeyFunc. Each entry
+		// corresponds to one validateTokenWithCtx goroutine that reached
+		// the underlying ValidateToken call, which is exactly what
+		// validationGate must cap: with the gate full, a blocked caller
+		// must fail via its own ctx without ever incrementing this counter.
+		var keyFuncCalls atomic.Int32
+		blockingKeyFunc := func(ctx context.Context) (interface{}, error) {
+			keyFuncCalls.Add(1)
+			<-unblock
+			return nil, errors.New("keyFunc should not complete before the test asserts")
+		}
+
+		blockingValidator, err := validator.New(
+			blockingKeyFunc,
+			validator.PS256,
+			testIssuer,
+			[]string{testAudience},
+		)
+		require.NoError(t, err)
+
+		const gateSize = 2
+		gatedRepo := &AuthRepository{
+			validator:      blockingValidator,
+			issuer:         testIssuer,
+			audiences:      []string{testAudience},
+			logger:         logger,
+			validationGate: make(chan struct{}, gateSize),
+		}
+
+		header, payload, _ := strings.Cut(testToken, ".")
+		payload, _, _ = strings.Cut(payload, ".")
+		signature := base64.RawURLEncoding.EncodeToString([]byte("unverified-signature-bytes"))
+		blockingToken := header + "." + payload + "." + signature
+
+		headers := map[string]string{
+			constants.AuthorizationHeader: "Bearer " + blockingToken,
+		}
+
+		// Fill the gate with calls whose ctx never expires on its own, so
+		// their goroutines stay permanently stuck on blockingKeyFunc and
+		// permanently hold their slot, simulating a sustained outage. They
+		// are intentionally not waited on: like a real stuck-outage
+		// goroutine, each one only unblocks once blockingKeyFunc returns,
+		// which happens when this subtest's deferred close(unblock) runs.
+		for i := 0; i < gateSize; i++ {
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+				defer cancel()
+				_, _ = gatedRepo.ParsePrincipals(ctx, headers)
+			}()
+		}
+
+		require.Eventually(t, func() bool {
+			return keyFuncCalls.Load() == gateSize
+		}, time.Second, time.Millisecond, "gate-filling calls must all reach blockingKeyFunc")
+
+		// With the gate full, further calls must fail fast via their own
+		// deadline rather than spawning another goroutine that would reach
+		// blockingKeyFunc and get stuck too: keyFuncCalls must stay pinned
+		// at gateSize no matter how many more calls are attempted.
+		const extraCalls = 5
+		shortDeadline := 20 * time.Millisecond
+		for i := 0; i < extraCalls; i++ {
+			deadlineCtx, cancel := context.WithTimeout(context.Background(), shortDeadline)
+
+			start := time.Now()
+			principals, err := gatedRepo.ParsePrincipals(deadlineCtx, headers)
+			elapsed := time.Since(start)
+			cancel()
+
+			require.Error(t, err)
+			assert.Nil(t, principals)
+			assert.ErrorIs(t, err, context.DeadlineExceeded)
+			assert.Less(t, elapsed, time.Second,
+				"a caller waiting for a gate slot must fail fast once its own ctx deadline fires")
+		}
+
+		assert.Equal(t, int32(gateSize), keyFuncCalls.Load(),
+			"validationGate must prevent additional goroutines from reaching ValidateToken while it is full")
 	})
 }
 
