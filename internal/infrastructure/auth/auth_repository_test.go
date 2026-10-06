@@ -300,7 +300,13 @@ func TestAuthRepository_ParsePrincipals(t *testing.T) {
 		unblock := make(chan struct{})
 		defer close(unblock)
 
+		// keyFuncEntered confirms blockingKeyFunc actually started (with
+		// ctx not yet expired) before ParsePrincipals returns, so this test
+		// can't pass by accident if the goroutine it's meant to catch never
+		// reaches blockingKeyFunc within the deadline.
+		keyFuncEntered := make(chan error, 1)
 		blockingKeyFunc := func(ctx context.Context) (interface{}, error) {
+			keyFuncEntered <- ctx.Err()
 			<-unblock
 			return nil, errors.New("keyFunc should not complete before the test asserts")
 		}
@@ -342,6 +348,13 @@ func TestAuthRepository_ParsePrincipals(t *testing.T) {
 		start := time.Now()
 		principals, err := blockingRepo.ParsePrincipals(deadlineCtx, headers)
 		elapsed := time.Since(start)
+
+		select {
+		case keyFuncErr := <-keyFuncEntered:
+			require.NoError(t, keyFuncErr, "keyFunc must start before its context expires")
+		case <-time.After(time.Second):
+			t.Fatal("keyFunc was not entered")
+		}
 
 		require.Error(t, err)
 		assert.Nil(t, principals)
