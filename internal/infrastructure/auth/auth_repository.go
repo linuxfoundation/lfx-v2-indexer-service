@@ -197,10 +197,10 @@ func (r *AuthRepository) ParsePrincipals(ctx context.Context, headers map[string
 			principal, email, err := r.parsePrincipalAndEmail(ctx, value)
 			if err != nil {
 				if ctxErr := ctx.Err(); ctxErr != nil {
-					r.logger.Warn("Principal parsing aborted: context deadline exceeded",
+					r.logger.Warn("Principal parsing aborted: context done",
 						"auth_id", authID,
 						"error", ctxErr.Error())
-					return nil, fmt.Errorf("principal parsing deadline exceeded: %w", ctxErr)
+					return nil, fmt.Errorf("principal parsing aborted: %w", ctxErr)
 				}
 				if errors.Is(err, errNonJWTToken) {
 					r.logger.Debug("Authorization header contains non-JWT token",
@@ -254,11 +254,11 @@ func (r *AuthRepository) ParsePrincipals(ctx context.Context, headers map[string
 				// already passed; parsePrincipalAndEmail would just block
 				// until it fires anyway.
 				if ctxErr := ctx.Err(); ctxErr != nil {
-					r.logger.Warn("On-behalf-of parsing aborted: context deadline exceeded",
+					r.logger.Warn("On-behalf-of parsing aborted: context done",
 						"auth_id", authID,
 						"token_index", i,
 						"error", ctxErr.Error())
-					return nil, fmt.Errorf("principal parsing deadline exceeded: %w", ctxErr)
+					return nil, fmt.Errorf("principal parsing aborted: %w", ctxErr)
 				}
 
 				r.logger.Debug("Processing on-behalf-of token",
@@ -269,11 +269,11 @@ func (r *AuthRepository) ParsePrincipals(ctx context.Context, headers map[string
 				principal, email, err = r.parsePrincipalAndEmail(ctx, strings.TrimSpace(jwt))
 				if err != nil {
 					if ctxErr := ctx.Err(); ctxErr != nil {
-						r.logger.Warn("On-behalf-of parsing aborted: context deadline exceeded",
+						r.logger.Warn("On-behalf-of parsing aborted: context done",
 							"auth_id", authID,
 							"token_index", i,
 							"error", ctxErr.Error())
-						return nil, fmt.Errorf("principal parsing deadline exceeded: %w", ctxErr)
+						return nil, fmt.Errorf("principal parsing aborted: %w", ctxErr)
 					}
 					errCount++
 					lastError = err

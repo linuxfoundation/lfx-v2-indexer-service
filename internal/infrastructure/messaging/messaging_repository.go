@@ -841,19 +841,6 @@ func (r *MessagingRepository) GetConnectionStatus() map[string]interface{} {
 // JETSTREAM OPERATIONS
 // =================
 
-// acquireWorkerSlot blocks until a local worker slot (r.sem) is free or ctx
-// is canceled, reporting whether it acquired a slot. AckWait's redelivery
-// timer starts at JetStream delivery — before this call is ever reached —
-// so under uneven per-pod load (rollout, replica outage) a message can
-// queue here for longer than AckWait while waiting for local worker
-// capacity, causing a premature redelivery before its handler even starts.
-// Sending periodic InProgress heartbeats while queued resets that timer
-// without acking, so slow-but-alive queueing no longer competes with
-// AckWait the way it did with a plain blocking send. ctx is canceled by the
-// caller (cmd/lfx-indexer/main.go) before DrainWithTimeout is called, so
-// this must stop waiting rather than start a handler with an
-// already-canceled context; the caller must not release a slot it never
-// acquired.
 // nakAbandonedMessage Naks msg after it was abandoned while queued for a
 // worker slot (acquireWorkerSlot returned false because ctx was canceled for
 // shutdown). The Nak is delayed by r.drainTimeout rather than issued
@@ -870,6 +857,20 @@ func (r *MessagingRepository) nakAbandonedMessage(ctx context.Context, msg jetst
 			"subject", subject)
 	}
 }
+
+// acquireWorkerSlot blocks until a local worker slot (r.sem) is free or ctx
+// is canceled, reporting whether it acquired a slot. AckWait's redelivery
+// timer starts at JetStream delivery — before this call is ever reached —
+// so under uneven per-pod load (rollout, replica outage) a message can
+// queue here for longer than AckWait while waiting for local worker
+// capacity, causing a premature redelivery before its handler even starts.
+// Sending periodic InProgress heartbeats while queued resets that timer
+// without acking, so slow-but-alive queueing no longer competes with
+// AckWait the way it did with a plain blocking send. ctx is canceled by the
+// caller (cmd/lfx-indexer/main.go) before DrainWithTimeout is called, so
+// this must stop waiting rather than start a handler with an
+// already-canceled context; the caller must not release a slot it never
+// acquired.
 
 func (r *MessagingRepository) acquireWorkerSlot(ctx context.Context, msg jetstream.Msg, subject string) bool {
 	if ctx.Err() != nil {

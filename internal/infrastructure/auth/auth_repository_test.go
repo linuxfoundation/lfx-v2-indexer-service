@@ -5,12 +5,14 @@ package auth
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"log/slog"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/auth0/go-jwt-middleware/v2/validator"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -284,6 +286,66 @@ func TestAuthRepository_ParsePrincipals(t *testing.T) {
 		require.Error(t, err)
 		assert.Nil(t, principals)
 		assert.ErrorIs(t, err, context.Canceled)
+	})
+
+	// deadline_fires_while_validation_blocked exercises the scenario
+	// validateTokenWithCtx's doc comment describes: a keyFunc that never
+	// observes ctx (simulating CachingProvider.refreshKey's plain
+	// sync.Mutex) blocks indefinitely, so only the goroutine+select race
+	// against ctx.Done() lets ParsePrincipals return before the deadline.
+	// Calling r.validator.ValidateToken directly, without that race, would
+	// make this test hang until it times out.
+	t.Run("deadline_fires_while_validation_blocked", func(t *testing.T) {
+		unblock := make(chan struct{})
+		defer close(unblock)
+
+		blockingKeyFunc := func(ctx context.Context) (interface{}, error) {
+			<-unblock
+			return nil, errors.New("keyFunc should not complete before the test asserts")
+		}
+
+		blockingValidator, err := validator.New(
+			blockingKeyFunc,
+			validator.PS256,
+			testIssuer,
+			[]string{testAudience},
+		)
+		require.NoError(t, err)
+
+		blockingRepo := &AuthRepository{
+			validator: blockingValidator,
+			issuer:    testIssuer,
+			audiences: []string{testAudience},
+			logger:    logger,
+		}
+
+		deadlineCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+
+		// jwt.ParseSigned requires a syntactically valid (base64url) third
+		// segment before keyFunc is ever reached; testToken's "invalid-signature"
+		// segment isn't valid base64 and would fail before this test ever
+		// exercises the blocking keyFunc, so a well-formed signature segment is
+		// built here instead. Its contents never matter since blockingKeyFunc
+		// never returns.
+		header, payload, _ := strings.Cut(testToken, ".")
+		payload, _, _ = strings.Cut(payload, ".")
+		signature := base64.RawURLEncoding.EncodeToString([]byte("unverified-signature-bytes"))
+		blockingToken := header + "." + payload + "." + signature
+
+		headers := map[string]string{
+			constants.AuthorizationHeader: "Bearer " + blockingToken,
+		}
+
+		start := time.Now()
+		principals, err := blockingRepo.ParsePrincipals(deadlineCtx, headers)
+		elapsed := time.Since(start)
+
+		require.Error(t, err)
+		assert.Nil(t, principals)
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
+		assert.Less(t, elapsed, time.Second,
+			"ParsePrincipals must return once ctx's deadline fires, even though the underlying validation call is still blocked")
 	})
 }
 
