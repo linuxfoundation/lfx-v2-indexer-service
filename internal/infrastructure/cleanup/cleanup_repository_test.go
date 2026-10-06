@@ -287,7 +287,13 @@ func TestCleanupRepository_ProcessVersionConflict(t *testing.T) {
 	})
 
 	// Process the item - should handle version conflict gracefully
-	service.processItem(ctx, &objectRef)
+	result := service.processItem(ctx, &objectRef)
+
+	// The retry is only scheduled, not yet successful: the doc stays
+	// latest=true until that retry completes, so this must not be reported
+	// as "conflict_resolved" or the stale duplicate goes unnoticed in the
+	// interim.
+	assert.Equal(t, "retry_scheduled", result)
 
 	// Verify the mocks were called
 	mockRepo.AssertExpectations(t)

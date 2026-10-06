@@ -29,15 +29,21 @@ import (
 
 // MessagingRepository implements the MessagingRepository interface for NATS operations
 type MessagingRepository struct {
-	conn              *nats.Conn
-	authRepo          contracts.AuthRepository
-	logger            *slog.Logger
-	subscriptions     []*nats.Subscription
-	consumeContexts   []jetstream.ConsumeContext
-	mu                sync.RWMutex
-	wg                sync.WaitGroup // tracks all in-flight handler goroutines (core NATS + JetStream)
-	jsWg              sync.WaitGroup // tracks JetStream-only goroutines; waited before conn.Drain()
-	drainTimeout      time.Duration
+	conn            *nats.Conn
+	authRepo        contracts.AuthRepository
+	logger          *slog.Logger
+	subscriptions   []*nats.Subscription
+	consumeContexts []jetstream.ConsumeContext
+	mu              sync.RWMutex
+	wg              sync.WaitGroup // tracks all in-flight handler goroutines (core NATS + JetStream)
+	jsWg            sync.WaitGroup // tracks JetStream-only goroutines; waited before conn.Drain()
+	drainTimeout    time.Duration
+	// drainDeadline is set once by shutdownDeadline(), the first time either
+	// DrainWithTimeout or nakAbandonedMessage observes shutdown. Both read it
+	// through that same helper so they share one deadline instead of each
+	// starting its own independent drainTimeout-length countdown from
+	// whichever goroutine happens to wake first on ctx cancellation.
+	drainDeadline     time.Time
 	isShuttingDown    bool
 	pendingMsgLimit   int
 	pendingBytesLimit int
@@ -431,6 +437,30 @@ func (r *MessagingRepository) waitForJetStreamWorkers(timeout time.Duration) boo
 	}
 }
 
+// nakAbandonedHeadroom is added on top of the shared shutdownDeadline() when
+// delaying a Nak in nakAbandonedMessage. Without it, a Nak scheduled from
+// that same deadline could become eligible for redelivery at the exact
+// instant DrainWithTimeout's Phase 1 (cc.Stop() + cc.Closed()) times out,
+// racing the consumer's actual closure instead of strictly following it.
+const nakAbandonedHeadroom = 2 * time.Second
+
+// shutdownDeadline returns the instant by which DrainWithTimeout's Phase 1
+// (consumer stop) is bounded to complete, setting it on first use. Both
+// DrainWithTimeout and nakAbandonedMessage call this instead of each
+// independently computing time.Now().Add(r.drainTimeout): DrainWithTimeout
+// runs in one goroutine (triggered by ctx.Done() in container.go) while
+// nakAbandonedMessage runs in another (triggered by the same ctx
+// cancellation inside a per-message goroutine), so without a shared
+// deadline their two countdowns can start at slightly different instants.
+func (r *MessagingRepository) shutdownDeadline() time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.drainDeadline.IsZero() {
+		r.drainDeadline = time.Now().Add(r.drainTimeout)
+	}
+	return r.drainDeadline
+}
+
 // DrainWithTimeout performs graceful NATS connection drain with timeout
 func (r *MessagingRepository) DrainWithTimeout() error {
 	r.mu.Lock()
@@ -442,8 +472,9 @@ func (r *MessagingRepository) DrainWithTimeout() error {
 
 	// Record the deadline before stopping consumers so the entire
 	// shutdown sequence — consumer stop plus connection drain — is
-	// bounded by drainTimeout.
-	deadline := time.Now().Add(r.drainTimeout)
+	// bounded by drainTimeout, and shared with nakAbandonedMessage via
+	// shutdownDeadline() so both are bounded by the same instant.
+	deadline := r.shutdownDeadline()
 
 	// Phase 1: Stop JetStream consumers and wait for each one to fully close.
 	//
@@ -843,15 +874,23 @@ func (r *MessagingRepository) GetConnectionStatus() map[string]interface{} {
 
 // nakAbandonedMessage Naks msg after it was abandoned while queued for a
 // worker slot (acquireWorkerSlot returned false because ctx was canceled for
-// shutdown). The Nak is delayed by r.drainTimeout rather than issued
-// immediately: this pod's pull consumer is only guaranteed stopped once
-// DrainWithTimeout's Phase 1 (cc.Stop() + cc.Closed()) completes, up to
-// drainTimeout later, so an immediate Nak risks the server redelivering
-// straight back to this same still-pulling consumer — or to another replica
-// also mid-drain during a rolling update — burning a MaxDeliver attempt for
-// no chance of success.
+// shutdown). The Nak is delayed rather than issued immediately: this pod's
+// pull consumer is only guaranteed stopped once DrainWithTimeout's Phase 1
+// (cc.Stop() + cc.Closed()) completes, so an immediate Nak risks the server
+// redelivering straight back to this same still-pulling consumer — or to
+// another replica also mid-drain during a rolling update — burning a
+// MaxDeliver attempt for no chance of success. The delay is computed from
+// the same shutdownDeadline() DrainWithTimeout's Phase 1 is bounded by
+// (plus nakAbandonedHeadroom), not an independent drainTimeout-length
+// countdown, so the Nak can't become eligible before Phase 1 actually
+// completes merely because this goroutine observed ctx cancellation
+// slightly before the one driving DrainWithTimeout did.
 func (r *MessagingRepository) nakAbandonedMessage(ctx context.Context, msg jetstream.Msg, subject string) {
-	if err := msg.NakWithDelay(r.drainTimeout); err != nil {
+	delay := time.Until(r.shutdownDeadline()) + nakAbandonedHeadroom
+	if delay < nakAbandonedHeadroom {
+		delay = nakAbandonedHeadroom
+	}
+	if err := msg.NakWithDelay(delay); err != nil {
 		r.logger.WarnContext(ctx, "Failed to Nak message abandoned while queued for a worker slot",
 			"error", err,
 			"subject", subject)
@@ -1052,14 +1091,15 @@ func (r *MessagingRepository) ConsumeWithJetStream(
 				// would otherwise delay handoff to a surviving replica for
 				// no benefit, at the same delivery-count cost.
 				//
-				// Delay the Nak by the full drainTimeout rather than Nak'ing
-				// immediately: this pod's pull consumer is only guaranteed
-				// stopped once DrainWithTimeout's Phase 1 (cc.Stop() +
-				// cc.Closed()) completes, up to drainTimeout later. An
-				// immediate Nak risks the server redelivering straight back
-				// to this same still-pulling consumer — or to another
-				// replica that's also mid-drain during a rolling update —
-				// burning a MaxDeliver attempt for no chance of success.
+				// Delay the Nak rather than Nak'ing immediately: this pod's
+				// pull consumer is only guaranteed stopped once
+				// DrainWithTimeout's Phase 1 (cc.Stop() + cc.Closed())
+				// completes. An immediate Nak risks the server
+				// redelivering straight back to this same still-pulling
+				// consumer — or to another replica that's also mid-drain
+				// during a rolling update — burning a MaxDeliver attempt
+				// for no chance of success. See nakAbandonedMessage for how
+				// the delay is coordinated with that deadline.
 				r.nakAbandonedMessage(msgCtx, msg, subject)
 				return
 			}
