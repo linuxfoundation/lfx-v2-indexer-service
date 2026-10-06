@@ -460,6 +460,13 @@ func (j *CleanupRepository) processItem(ctx context.Context, objectRef *string) 
 		"winning_id", winningID,
 		"updates_attempted", updatesAttempted,
 		"updates_successful", updatesSuccessful)
+
+	// A doc left latest=true because its update failed or was skipped (e.g.
+	// missing seq_no/primary_term) is not actually resolved; counting it as
+	// "conflict_resolved" would hide the stale duplicate from observability.
+	if updatesSuccessful < updatesAttempted {
+		return "error"
+	}
 	return "conflict_resolved"
 }
 

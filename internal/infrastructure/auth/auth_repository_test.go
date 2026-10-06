@@ -9,6 +9,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -387,6 +388,13 @@ func TestAuthRepository_ParsePrincipals(t *testing.T) {
 	})
 
 	t.Run("validation_gate_bounds_stuck_goroutines", func(t *testing.T) {
+		var wg sync.WaitGroup
+		// Deferred in this order so close(unblock) runs first (defers are
+		// LIFO): it releases the gate-filling goroutines below, and only
+		// then does wg.Wait() block on their exit. Reversing the order
+		// would deadlock, since the goroutines only return once unblock
+		// closes.
+		defer wg.Wait()
 		unblock := make(chan struct{})
 		defer close(unblock)
 
@@ -430,12 +438,15 @@ func TestAuthRepository_ParsePrincipals(t *testing.T) {
 
 		// Fill the gate with calls whose ctx never expires on its own, so
 		// their goroutines stay permanently stuck on blockingKeyFunc and
-		// permanently hold their slot, simulating a sustained outage. They
-		// are intentionally not waited on: like a real stuck-outage
-		// goroutine, each one only unblocks once blockingKeyFunc returns,
-		// which happens when this subtest's deferred close(unblock) runs.
+		// permanently hold their slot, simulating a sustained outage. Each
+		// one only returns once blockingKeyFunc does, which happens when
+		// this subtest's deferred close(unblock) runs; wg lets the deferred
+		// wg.Wait() above confirm they've actually exited before the
+		// subtest returns, instead of leaking them into later tests.
+		wg.Add(gateSize)
 		for i := 0; i < gateSize; i++ {
 			go func() {
+				defer wg.Done()
 				ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 				defer cancel()
 				_, _ = gatedRepo.ParsePrincipals(ctx, headers)

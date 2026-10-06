@@ -455,12 +455,18 @@ func TestCleanupRepository_ProcessWithNilSeqNoAndPrimaryTerm(t *testing.T) {
 	}
 	mockRepo.On("SearchWithVersions", ctx, "test-index", expectedQuery).Return(mockDocs, nil)
 
+	var result string
 	assert.NotPanics(t, func() {
-		service.processItem(ctx, &objectRef)
+		result = service.processItem(ctx, &objectRef)
 	})
 
 	mockRepo.AssertNotCalled(t, "UpdateWithOptimisticLock", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	mockRepo.AssertExpectations(t)
+
+	// doc-loser's update was skipped (missing version metadata), not
+	// resolved: it stays latest=true, so this must not be reported as
+	// "conflict_resolved" or the stale duplicate goes unnoticed.
+	assert.Equal(t, "error", result)
 }
 
 func TestCleanupRepository_StartStopItemLoop(t *testing.T) {
