@@ -327,7 +327,13 @@ func TestAuthRepository_ParsePrincipals(t *testing.T) {
 			validationGate: make(chan struct{}, maxConcurrentValidations),
 		}
 
-		deadlineCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		// A fixed deadline would race the validation goroutine's scheduling
+		// against its own expiry: under load, ctx could expire before
+		// blockingKeyFunc is even scheduled, failing the keyFuncEntered
+		// assertion below for a reason unrelated to validateTokenWithCtx's
+		// correctness. Cancelling only after keyFuncEntered confirms the
+		// goroutine has started makes the ordering deterministic instead.
+		deadlineCtx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
 		// jwt.ParseSigned requires a syntactically valid (base64url) third
@@ -345,22 +351,39 @@ func TestAuthRepository_ParsePrincipals(t *testing.T) {
 			constants.AuthorizationHeader: "Bearer " + blockingToken,
 		}
 
-		start := time.Now()
-		principals, err := blockingRepo.ParsePrincipals(deadlineCtx, headers)
-		elapsed := time.Since(start)
+		type parseResult struct {
+			principals interface{}
+			err        error
+		}
+		resultCh := make(chan parseResult, 1)
+		go func() {
+			principals, err := blockingRepo.ParsePrincipals(deadlineCtx, headers)
+			resultCh <- parseResult{principals: principals, err: err}
+		}()
 
 		select {
 		case keyFuncErr := <-keyFuncEntered:
-			require.NoError(t, keyFuncErr, "keyFunc must start before its context expires")
+			require.NoError(t, keyFuncErr, "keyFunc must start before ctx is canceled")
 		case <-time.After(time.Second):
 			t.Fatal("keyFunc was not entered")
 		}
 
-		require.Error(t, err)
-		assert.Nil(t, principals)
-		assert.ErrorIs(t, err, context.DeadlineExceeded)
+		start := time.Now()
+		cancel()
+
+		var res parseResult
+		select {
+		case res = <-resultCh:
+		case <-time.After(time.Second):
+			t.Fatal("ParsePrincipals did not return after ctx was canceled")
+		}
+		elapsed := time.Since(start)
+
+		require.Error(t, res.err)
+		assert.Nil(t, res.principals)
+		assert.ErrorIs(t, res.err, context.Canceled)
 		assert.Less(t, elapsed, time.Second,
-			"ParsePrincipals must return once ctx's deadline fires, even though the underlying validation call is still blocked")
+			"ParsePrincipals must return once ctx is canceled, even though the underlying validation call is still blocked")
 	})
 
 	t.Run("validation_gate_bounds_stuck_goroutines", func(t *testing.T) {
