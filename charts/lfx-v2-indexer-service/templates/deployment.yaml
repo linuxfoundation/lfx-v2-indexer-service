@@ -26,11 +26,16 @@ would reject those other equally valid overrides.
 {{- if ne $matchedLen (len $drainTimeout) }}
 {{- fail $durationError }}
 {{- end }}
+{{- /*
+addf, not add, below: add() coerces both operands to int64 before summing,
+which would silently truncate the ms-derived fractional seconds to 0 before
+ceil ever ran, making e.g. "55999ms" evaluate as 55s instead of 56s.
+*/}}
 {{- $drainSecondsFloat := 0.0 }}
-{{- if $hPart }}{{- $drainSecondsFloat = add $drainSecondsFloat (mulf ($hPart | trimSuffix "h" | float64) 3600.0) }}{{- end }}
-{{- if $mPart }}{{- $drainSecondsFloat = add $drainSecondsFloat (mulf ($mPart | trimSuffix "m" | float64) 60.0) }}{{- end }}
-{{- if $sPart }}{{- $drainSecondsFloat = add $drainSecondsFloat ($sPart | trimSuffix "s" | float64) }}{{- end }}
-{{- if $msPart }}{{- $drainSecondsFloat = add $drainSecondsFloat (divf ($msPart | trimSuffix "ms" | float64) 1000.0) }}{{- end }}
+{{- if $hPart }}{{- $drainSecondsFloat = addf $drainSecondsFloat (mulf ($hPart | trimSuffix "h" | float64) 3600.0) }}{{- end }}
+{{- if $mPart }}{{- $drainSecondsFloat = addf $drainSecondsFloat (mulf ($mPart | trimSuffix "m" | float64) 60.0) }}{{- end }}
+{{- if $sPart }}{{- $drainSecondsFloat = addf $drainSecondsFloat ($sPart | trimSuffix "s" | float64) }}{{- end }}
+{{- if $msPart }}{{- $drainSecondsFloat = addf $drainSecondsFloat (divf ($msPart | trimSuffix "ms" | float64) 1000.0) }}{{- end }}
 {{- $drainSeconds := ceil $drainSecondsFloat | int }}
 {{- $minGracePeriod := add $drainSeconds 5 }}
 {{- if lt (int .Values.app.terminationGracePeriodSeconds) $minGracePeriod }}

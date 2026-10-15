@@ -4,6 +4,7 @@
 package messaging
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -545,6 +546,8 @@ type stubJSMsg struct {
 	numDelivered    uint64
 	metaErr         error
 	inProgressCalls atomic.Int64
+	nakDelay        atomic.Int64 // last delay passed to NakWithDelay, as time.Duration
+	nakWithDelayErr error
 }
 
 func (s *stubJSMsg) Metadata() (*jetstream.MsgMetadata, error) {
@@ -553,14 +556,17 @@ func (s *stubJSMsg) Metadata() (*jetstream.MsgMetadata, error) {
 	}
 	return &jetstream.MsgMetadata{NumDelivered: s.numDelivered}, nil
 }
-func (s *stubJSMsg) Data() []byte                       { return nil }
-func (s *stubJSMsg) Headers() nats.Header               { return nil }
-func (s *stubJSMsg) Subject() string                    { return "" }
-func (s *stubJSMsg) Reply() string                      { return "" }
-func (s *stubJSMsg) Ack() error                         { return nil }
-func (s *stubJSMsg) DoubleAck(_ context.Context) error  { return nil }
-func (s *stubJSMsg) Nak() error                         { return nil }
-func (s *stubJSMsg) NakWithDelay(_ time.Duration) error { return nil }
+func (s *stubJSMsg) Data() []byte                      { return nil }
+func (s *stubJSMsg) Headers() nats.Header              { return nil }
+func (s *stubJSMsg) Subject() string                   { return "" }
+func (s *stubJSMsg) Reply() string                     { return "" }
+func (s *stubJSMsg) Ack() error                        { return nil }
+func (s *stubJSMsg) DoubleAck(_ context.Context) error { return nil }
+func (s *stubJSMsg) Nak() error                        { return nil }
+func (s *stubJSMsg) NakWithDelay(d time.Duration) error {
+	s.nakDelay.Store(int64(d))
+	return s.nakWithDelayErr
+}
 func (s *stubJSMsg) InProgress() error {
 	s.inProgressCalls.Add(1)
 	return nil
@@ -604,6 +610,76 @@ func TestNakDelay(t *testing.T) {
 		d := nakDelay(msg)
 		assert.Equal(t, time.Second, d)
 	})
+}
+
+// TestNakAbandonedMessage pins that a message abandoned while queued for a
+// worker slot is NAK'd with a delay bounded by shutdownDeadline() plus
+// nakAbandonedHeadroom, not Nak'd immediately — see nakAbandonedMessage's
+// doc comment for why an immediate Nak risks burning a MaxDeliver attempt
+// on a still-draining consumer, and why the delay is derived from the
+// shared deadline rather than an independent drainTimeout-length countdown.
+func TestNakAbandonedMessage(t *testing.T) {
+	drainTimeout := 7 * time.Second
+	r := &MessagingRepository{
+		drainTimeout: drainTimeout,
+		logger:       slog.New(slog.NewTextHandler(os.Stderr, nil)),
+	}
+
+	msg := &stubJSMsg{}
+	r.nakAbandonedMessage(context.Background(), msg, "test.subject")
+
+	delay := time.Duration(msg.nakDelay.Load())
+	assert.InDelta(t, (drainTimeout + nakAbandonedHeadroom).Seconds(), delay.Seconds(), 1.0)
+	assert.GreaterOrEqual(t, delay, nakAbandonedHeadroom)
+}
+
+// TestNakAbandonedMessage_SharesDeadlineAcrossCalls pins that
+// shutdownDeadline() is set once and reused: without this, nakAbandonedMessage
+// and DrainWithTimeout — invoked from independent goroutines reacting to the
+// same ctx cancellation — could each start their own drainTimeout-length
+// countdown from slightly different instants, letting a delayed Nak become
+// eligible for redelivery before DrainWithTimeout's Phase 1 (consumer stop)
+// has actually finished.
+func TestNakAbandonedMessage_SharesDeadlineAcrossCalls(t *testing.T) {
+	r := &MessagingRepository{
+		drainTimeout: 7 * time.Second,
+		logger:       slog.New(slog.NewTextHandler(os.Stderr, nil)),
+	}
+
+	deadline := r.shutdownDeadline()
+
+	// A deliberate gap simulates nakAbandonedMessage's goroutine waking up
+	// measurably later than the goroutine that first established the
+	// deadline (e.g. via DrainWithTimeout).
+	time.Sleep(20 * time.Millisecond)
+
+	msg := &stubJSMsg{}
+	r.nakAbandonedMessage(context.Background(), msg, "test.subject")
+
+	wantDelay := time.Until(deadline) + nakAbandonedHeadroom
+	gotDelay := time.Duration(msg.nakDelay.Load())
+	assert.InDelta(t, wantDelay.Seconds(), gotDelay.Seconds(), 0.1,
+		"nakAbandonedMessage must derive its delay from the deadline already established by shutdownDeadline(), not restart its own countdown")
+}
+
+// TestNakAbandonedMessage_LogsNakFailure pins that a NakWithDelay error is
+// logged rather than silently dropped. Asserts the actual emitted record
+// (message, error, subject) rather than just NotPanics, which would still
+// pass even if the WarnContext call were deleted.
+func TestNakAbandonedMessage_LogsNakFailure(t *testing.T) {
+	var logBuf bytes.Buffer
+	r := &MessagingRepository{
+		drainTimeout: time.Second,
+		logger:       slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn})),
+	}
+
+	msg := &stubJSMsg{nakWithDelayErr: errors.New("nak failed")}
+	r.nakAbandonedMessage(context.Background(), msg, "test.subject")
+
+	logged := logBuf.String()
+	assert.Contains(t, logged, "Failed to Nak message abandoned while queued for a worker slot")
+	assert.Contains(t, logged, "nak failed")
+	assert.Contains(t, logged, "test.subject")
 }
 
 // TestAcquireWorkerSlot_HeartbeatsWhileQueued pins the behavior that keeps
