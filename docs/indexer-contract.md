@@ -72,6 +72,35 @@ OpenSearch document. **All publishers must include it on every create/update.**
 Deletes do not need it because the delete payload is only the object ID. Create/update
 messages without it are rejected by the indexer (`indexing_config is required`).
 
+Deletes may include a complete `IndexingConfig` captured by the publisher before
+the resource is removed. Its `ObjectID` must match the UID in `Data` to retain
+context. A mismatch logs a structured warning and discards the config context,
+but still writes the UID-based legacy tombstone so deleted live data is not left
+searchable. The delete path retains only `ParentRefs`,
+`HistoryCheckObject`, `HistoryCheckRelation`, and the derived `history_check_query`
+from this config. It does **not** copy `Public`, ordinary access-check fields,
+search fields, contacts, or resource data onto the tombstone. This preserves the
+existing non-public, ordinary-access-denied tombstone behavior. Required-field
+validation is unchanged: all five required fields below must be supplied with
+concrete values (delete `Data` has no fields for template expansion).
+Explicit `null` is treated as absent; present non-null config values that are
+not JSON objects are rejected before writes for all actions, including deletes.
+Malformed or incomplete configs still reject the delete and can leave the prior
+live document indexed until the publisher corrects and republishes the message;
+the UID-only fallback applies only to a fully parsed config with a mismatched ID.
+
+Existing top-level envelope `Tags` and V1 `v1_data` handling is unchanged: those
+legacy fields still flow into tombstones and post-indexing events. The exclusions
+above apply to fields copied from `IndexingConfig`, not a new payload-scrubbing
+policy. This compatibility behavior is not permission to copy legacy payloads
+into the proposed separate audit-history store.
+
+UID-only deletes remain compatible, but have no history authorization or scope
+metadata. These fields do not by themselves preserve revisions or establish
+working authorization after FGA tuples are deleted. Append-only storage and the
+deleted-resource access policy remain separate work; see the
+[audit-history implementation design](audit-history-design.md).
+
 ```go
 type IndexingConfig struct {
     // Required: identifies the resource and how to check access

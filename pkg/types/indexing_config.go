@@ -88,6 +88,9 @@ type IndexerMessageEnvelope struct {
 
 	// IndexingConfig provides indexing metadata required for create/update actions.
 	// The server uses this to determine access control, search fields, and document identity.
-	// Not required for delete actions.
+	// Optional for delete actions: only ParentRefs and history authorization fields
+	// are retained from config when ObjectID matches Data. A mismatch logs a warning
+	// and writes the legacy tombstone without config context. All required config
+	// fields must still be provided when present; non-null, non-object configs fail.
 	IndexingConfig *IndexingConfig `json:"indexing_config,omitempty"`
 }
