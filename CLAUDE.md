@@ -160,6 +160,17 @@ Layer boundaries, NATS handler patterns, OpenSearch storage patterns, logging, e
 
 ### Go Toolchain Version
 
+Application builds use `.go-version` and the matching `go.mod` **toolchain**
+directive; `osv-scanner.toml`'s `GoVersionOverride` must match that build patch.
+`make check-toolchain` verifies all three pins and requires the exact actual
+compiler version (ignoring experiment suffixes). Make targets and Docker builds
+explicitly select that compiler via `GOTOOLCHAIN=go<.go-version>`; PR/release
+workflows install it with `setup-go`. The
+`go.mod` **go** directive remains the lower compatibility minimum for the
+bundled MegaLinter compiler; the ceiling below still applies to that directive,
+not the separate patched application-build toolchain. Do not remove the build
+guard or override the scanner's version without aligning the actual builds.
+
 Freely bump `go.mod`'s `go` directive to the latest available *patch*
 release (e.g. `1.X.Y` → `1.X.{Y+1}`) to pick up security fixes. Do **not**
 bump the *minor* version (e.g. `1.X.x` → `1.{X+1}.x`) unless the user

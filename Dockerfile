@@ -9,7 +9,7 @@ FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/go:latest AS builder
 # Set necessary environment variables needed for our image. Allow building to
 # other architectures via cross-compilation build-arg.
 ARG TARGETARCH
-ENV CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH
+ENV CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH GOTOOLCHAIN=auto
 
 # Move to working directory /build
 WORKDIR /build
@@ -22,7 +22,10 @@ RUN go mod download
 COPY . .
 
 # Build the packages from cmd directory
-RUN go build -o /go/bin/lfx-indexer -trimpath -ldflags="-w -s" ./cmd/lfx-indexer
+RUN build_go_version=$(cat .go-version) && \
+    export GOTOOLCHAIN="go${build_go_version}" && \
+    sh scripts/check-go-toolchain.sh && \
+    go build -o /go/bin/lfx-indexer -trimpath -ldflags="-w -s" ./cmd/lfx-indexer
 
 # Run our go binary standalone
 FROM cgr.dev/chainguard/static:latest
@@ -36,4 +39,4 @@ COPY --from=builder /go/bin/lfx-indexer /lfx-indexer
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD ["/lfx-indexer", "health"]
 
-ENTRYPOINT ["/lfx-indexer"] 
+ENTRYPOINT ["/lfx-indexer"]
