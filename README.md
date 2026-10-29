@@ -22,7 +22,8 @@ The LFX V2 Indexer Service is responsible for:
 
 ### Prerequisites
 
-- **Go 1.26** (see `go.mod`'s `go` directive for the exact minimum patch version)
+- **Go 1.26.10** for builds (pin in `.go-version`; Make targets select it
+  automatically even if your installed Go bootstrap is newer)
 - **NATS Server** (message streaming)
 - **OpenSearch/Elasticsearch** (document indexing)
 - **Heimdall JWT Service** (authentication)
@@ -45,6 +46,17 @@ export PORT=8080
 ```
 
 ### Install & Run
+
+The `go` directive remains at 1.26.3 for MegaLinter's bundled compiler, but
+release/PR builds use the patched toolchain in `.go-version`. OSV scans that
+build version via `GoVersionOverride`, not the lint-only minimum. Run
+`make check-toolchain` to verify the pins and exact compiler version; build/test
+targets, image publishing, and Docker builds enforce this check. Make targets
+and Docker explicitly select the pinned compiler through `GOTOOLCHAIN`; for
+direct Go commands, use `export GOTOOLCHAIN="go$(cat .go-version)"` first.
+When updating the build
+patch version, update all three pins together and remove fixed OSV exceptions.
+Do not use a different compiler with the fixed OSV build-version override.
 
 ```bash
 # Install dependencies

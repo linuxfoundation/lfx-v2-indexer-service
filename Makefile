@@ -18,8 +18,10 @@ HELM_NAMESPACE := lfx
 HELM_VALUES_FILE := ./charts/lfx-v2-indexer-service/values.local.yaml
 
 # Go
-# Derived from go.mod's `go` directive so this never drifts out of sync.
-GO_VERSION := $(shell awk '/^go / {print $$2}' go.mod)
+# The build toolchain is separate from the minimum compiler used by MegaLinter.
+GO_VERSION := $(shell cat .go-version)
+# Select the scanned compiler even when a newer Go bootstrap is installed.
+export GOTOOLCHAIN := go$(GO_VERSION)
 GOOS := linux
 GOARCH := amd64
 
@@ -43,6 +45,10 @@ setup: ## Setup development environment
 deps: ## Download dependencies
 	@echo "Downloading dependencies..."
 	go mod download
+
+.PHONY: check-toolchain
+check-toolchain: ## Verify build/scanner pins and require the exact build compiler
+	@sh scripts/check-go-toolchain.sh
 
 .PHONY: fmt
 fmt: ## Format code
@@ -74,12 +80,12 @@ lint-fix: ## Run golangci-lint with auto-fix (for quick development fixes)
 	@golangci-lint run --fix --timeout=$(LINT_TIMEOUT)
 
 .PHONY: test
-test: ## Run tests
+test: check-toolchain ## Run tests
 	@echo "Running tests..."
 	go test -v -race -coverprofile=coverage.out ./...
 
 .PHONY: test-short
-test-short: ## Run tests in short mode
+test-short: check-toolchain ## Run tests in short mode
 	@echo "Running tests (short mode)..."
 	go test -short -v -race -coverprofile=coverage.out ./...
 
@@ -120,21 +126,21 @@ benchmark: ## Run benchmarks
 	go test -bench=. -benchmem ./...
 
 .PHONY: build
-build: ## Build the application
+build: check-toolchain ## Build the application
 	@echo "Building application..."
 	CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) go build \
 		-ldflags "-X main.version=$(VERSION) -X main.buildTime=$(BUILD_TIME) -X main.gitCommit=$(GIT_COMMIT)" \
 		-o bin/$(APP_NAME) ./cmd/lfx-indexer
 
 .PHONY: build-local
-build-local: ## Build the application for local OS
+build-local: check-toolchain ## Build the application for local OS
 	@echo "Building application for local development..."
 	go build \
 		-ldflags "-X main.version=$(VERSION) -X main.buildTime=$(BUILD_TIME) -X main.gitCommit=$(GIT_COMMIT)" \
 		-o bin/$(APP_NAME) ./cmd/lfx-indexer
 
 .PHONY: run
-run: ## Run the application locally
+run: check-toolchain ## Run the application locally
 	@echo "Running application..."
 	go run ./cmd/lfx-indexer
 

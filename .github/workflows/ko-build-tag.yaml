@@ -48,8 +48,11 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
         with:
-          go-version-file: go.mod
+          go-version-file: .go-version
           cache: false
+
+      - name: Verify build and scanner toolchain
+        run: sh scripts/check-go-toolchain.sh
 
       - name: Setup Ko
         uses: ko-build/setup-ko@d982fec422852203cfb2053a8ec6ad302280d04d  # v0.8

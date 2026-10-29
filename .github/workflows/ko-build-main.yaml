@@ -25,7 +25,9 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
         with:
-          go-version-file: go.mod
+          go-version-file: .go-version
+      - name: Verify build and scanner toolchain
+        run: sh scripts/check-go-toolchain.sh
       - uses: ko-build/setup-ko@d982fec422852203cfb2053a8ec6ad302280d04d  # v0.8
         with:
           version: v0.17.1
