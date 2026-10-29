@@ -1,3 +1,6 @@
+<!-- Copyright The Linux Foundation and each contributor to LFX. -->
+<!-- SPDX-License-Identifier: MIT -->
+
 # Client Guide: Indexing Resources in LFX
 
 This guide explains how to send messages to the LFX Indexer Service to index your resources in OpenSearch.
@@ -5,10 +8,18 @@ It is a caller-facing walkthrough. The authoritative generic envelope,
 `IndexingConfig`, OpenSearch document fields, event semantics, and schema
 evolution policy live in [`docs/indexer-contract.md`](indexer-contract.md).
 
+Existing unversioned publishers remain supported. Public audit envelope version
+2 types/validators are available, but **the consumer rejects version 2 before
+writing anything**. Do not start audited outbox delivery yet. The full contract
+and enablement requirements live in [audit-v2-contract.md](audit-v2-contract.md).
+Before deploying the discriminator reservation, follow the bounded source
+inventory and staging checks in [publisher-compatibility.md](publisher-compatibility.md).
+
 ## Table of Contents
 
 - [Overview](#overview)
 - [Message Format](#message-format)
+- [Audit Envelope Version 2](#audit-envelope-version-2)
 - [Using indexing_config](#using-indexing_config)
 - [Template Support](#template-support-in-indexing_config)
 - [Field Reference](#field-reference)
@@ -21,15 +32,19 @@ The LFX Indexer Service processes messages from NATS and indexes resources into 
 
 ## Message Format
 
-All indexing messages follow the `IndexerMessageEnvelope` structure:
+Existing platform V2 messages use `IndexerMessageEnvelope` without setting the
+new version/audit fields. Platform V2 (`lfx.index.*`) is not the same thing as
+audit envelope version 2 (`schema_version: 2`).
 
 ```go
 type IndexerMessageEnvelope struct {
-    Action         string                 // "created", "updated", or "deleted"
-    Headers        map[string]string      // Authentication headers
-    Data           any                    // Resource data (map or string for deletes)
-    Tags           []string               // Optional exact tags merged with indexing_config.tags
-    IndexingConfig *IndexingConfig        // Required for create/update; omit for delete
+    SchemaVersion  int                     `json:"schema_version,omitempty"` // Omit for existing messages; processing disabled
+    Audit          *AuditEvent             `json:"audit,omitempty"`          // Required by envelope version 2
+    Action         constants.MessageAction `json:"action"`                   // ActionCreated, ActionUpdated, or ActionDeleted
+    Headers        map[string]string       `json:"headers"`                  // Authentication headers
+    Data           any                     `json:"data"`                     // Object, or UID string for deletes
+    Tags           []string                `json:"tags,omitempty"`           // Optional exact tags
+    IndexingConfig *IndexingConfig         `json:"indexing_config,omitempty"` // Required for create/update; optional on legacy delete
 }
 ```
 
@@ -39,9 +54,119 @@ Publish to NATS subjects:
 
 - **Object-specific**: `lfx.index.<object_type>` (e.g., `lfx.index.project`)
 
+Do not add a version token to the resource subject suffix. A mixed-version
+consumer fleet needs coordinated rollout or a separately provisioned isolated
+audit stream; no new audited subject/subscription is provisioned in this release.
+
+## Audit Envelope Version 2
+
+This example shows the versioned **wire** format, not a message the current
+consumer will process. `fixture.audit.v1` is illustrative/test-only, not an
+approved production snapshot schema or authorization policy.
+
+```json
+{
+  "schema_version": 2,
+  "action": "updated",
+  "headers": {
+    "authorization": "Bearer <fresh-service-token>"
+  },
+  "data": {
+    "uid": "fixture-resource",
+    "name": "Updated Fixture"
+  },
+  "indexing_config": {
+    "object_id": "fixture-resource",
+    "access_check_object": "fixture_resource:fixture-resource",
+    "access_check_relation": "viewer",
+    "history_check_object": "project:fixture-project",
+    "history_check_relation": "auditor"
+  },
+  "audit": {
+    "event_id": "fixture-event-1",
+    "publisher": "test-publisher",
+    "occurred_at": "2026-10-29T16:00:00Z",
+    "resource_revision": 42,
+    "origin": "mutation",
+    "attribution": {
+      "actor_ref": "user:testuser01",
+      "effective_actor_ref": "user:testuser01",
+      "actor_profile": {
+        "availability": "captured",
+        "name": "Test User 1",
+        "avatar_url": "https://example.com/avatar.png",
+        "email": "user-1@example.com",
+        "username": "testuser01"
+      },
+      "effective_actor_profile": {
+        "availability": "captured",
+        "name": "Test User 1",
+        "avatar_url": "https://example.com/avatar.png",
+        "email": "user-1@example.com",
+        "username": "testuser01"
+      }
+    },
+    "scope": {
+      "before": ["project:fixture-project"],
+      "after": ["project:fixture-project"]
+    },
+    "content": {
+      "schema": "fixture.audit.v1",
+      "representation": "snapshots",
+      "before": {"name": "Previous Fixture"},
+      "after": {"name": "Updated Fixture"}
+    }
+  }
+}
+```
+
+- Commit immutable event data and the resource mutation in one PostgreSQL
+  transaction. Do not persist the example's `headers` in the outbox; attach fresh
+  service authentication when the relay dispatches it.
+- Preserve event identity, source occurrence time/revision, attribution, scope,
+  and approved snapshots on every retry. A new processing attempt is not a new
+  business mutation.
+- Capture the initiating/effective user's name, avatar URL, email, and username
+  in the profile snapshots at source-operation time, not through a lookup during
+  delivery or history reads. Equal refs require equal profiles. Each user profile
+  explicitly includes all four attributes, using null when unavailable, and
+  `availability: "captured"` for at least one captured attribute or `"unavailable"`
+  when all are null. Service actors have no human profile. No live user account
+  is required to interpret the recorded snapshot; later renames/deletion do not
+  refresh it. Avatar URLs are not archived image bytes and must be credential-free,
+  HTTPS, and query/fragment-free; use null when no approved stable URL is available.
+- Actor profile snapshots are personal history data, not public search data or
+  log context. History authorization, bounded retention, and erasure/replay
+  controls must cover them before audited processing can be enabled.
+- Creates require after scope/snapshot only; updates require both sides; deletes
+  require before scope/snapshot only and matching UID/config identity. All audited
+  deletes require complete concrete `IndexingConfig`; no legacy mismatch fallback.
+- Use `types.DecodeV2Envelope` for untrusted JSON and `envelope.ValidateV2` for
+  typed preflight, supplying an `AuditContentValidator` enforcing the registered
+  schema's publisher/resource ownership and exact permitted fields. Nil validators
+  reject mutations; no production registry is supplied here. Never use a permit-all
+  callback or a sensitive-field denylist as a substitute.
+- Structural preflight does not authenticate a publisher, authorize delegation or
+  origin suppression, or enable storage. Current runtime admission rejects even
+  a valid preflight result; do not treat it as a rollout-ready capability.
+- Version 2 strings are literal and never template-expanded. Materialize intended
+  substitutions before committing the outbox event. Free text/profile strings
+  containing `{{ ... }}` remain valid prose; ID/auth references must be concrete.
+- Projection-only origins (`reindex`, `backfill`, `sync_echo`) omit content and
+  need explicit producer authorization. System-driven domain changes still use
+  `mutation`. None of these versioned origins are processed yet.
+
+The [owner contract](audit-v2-contract.md) defines strict parsing, numeric bounds,
+snapshot rules, trust boundaries, deduplication, ordering, and rollout obligations.
+
 ## Using indexing_config
 
-Create and update messages must include the `indexing_config` field to provide complete indexing metadata. Delete messages omit `indexing_config` — the indexer only needs the object ID to remove the document. `indexing_config` gives you full control over how your resources are indexed and ensures proper access control.
+Create and update messages must include `indexing_config`. Legacy deletes may
+omit it or supply complete deletion scope/history context: only matching config
+context is retained, and a mismatched ID warns and falls back to the legacy
+tombstone. Deletes replace the current document with a tombstone; they do not
+remove a retained history record or create revision history. Audited deletes
+have stricter requirements in the version 2 contract.
 
 **Benefits:**
 
@@ -233,6 +358,8 @@ Templates use double curly braces: `{{ field_name }}`
 |-------|------|----------|-------------|
 | `tags` | array | No | Optional exact tags merged with `indexing_config.tags`. Prefer `indexing_config.tags` for new publishers. |
 | `indexing_config` | object | Yes (create/update) | Indexing metadata controlling access control, search, and sort behavior. Not required for delete. |
+| `schema_version` | integer | Omit for legacy | Explicit audit envelope version; only version 2 is defined, and runtime processing is disabled. |
+| `audit` | object | Version 2 only | Immutable source event metadata and approved content; never silently downgraded or stored in current `data`. |
 
 ### IndexingConfig Fields
 
@@ -265,8 +392,8 @@ Each contact in the `contacts` array supports the following fields:
 | Field | Type | Description | Example |
 |-------|------|-------------|---------|
 | `lfx_principal` | string | LFX principal ID for the contact | `"user:user-123"` |
-| `name` | string | Display name of the contact | `"John Doe"` |
-| `emails` | array | Email addresses for the contact | `["john@example.com"]` |
+| `name` | string | Display name of the contact | `"Test User 1"` |
+| `emails` | array | Email addresses for the contact | `["user-1@example.com"]` |
 | `bot` | boolean | Whether the contact is a bot account | `false` |
 | `profile` | object | Additional profile information | `{"title": "Developer"}` |
 
@@ -277,8 +404,8 @@ Each contact in the `contacts` array supports the following fields:
   "contacts": [
     {
       "lfx_principal": "user:user-123",
-      "name": "John Doe",
-      "emails": ["john@example.com", "jdoe@example.com"],
+      "name": "Test User 1",
+      "emails": ["user-1@example.com", "user-1-alt@example.com"],
       "bot": false,
       "profile": {
         "title": "Project Lead",
@@ -286,8 +413,8 @@ Each contact in the `contacts` array supports the following fields:
       }
     },
     {
-      "name": "Jane Smith",
-      "emails": ["jane@example.com"]
+      "name": "Test User 2",
+      "emails": ["user-2@example.com"]
     }
   ]
 }
@@ -300,8 +427,8 @@ Each contact in the `contacts` array supports the following fields:
   "data": {
     "uid": "proj-123",
     "owner_id": "user-456",
-    "owner_name": "Alice Johnson",
-    "owner_email": "alice@example.com"
+    "owner_name": "Test User 1",
+    "owner_email": "user-1@example.com"
   },
   "indexing_config": {
     "object_id": "{{ uid }}",
@@ -412,7 +539,10 @@ These fields are **always set by the server** and should **not** be included in 
 }
 ```
 
-Note: For delete operations, `indexing_config` is not needed. The server only requires the resource ID.
+For legacy deletes, `indexing_config` is optional. Providing a complete config
+preserves matching scope/history context, but still does not create append-only
+history. Top-level legacy tags and V1 data handling remains unchanged; do not
+reuse those payloads as approved version 2 snapshots.
 
 ## Best Practices
 
@@ -423,7 +553,7 @@ Note: For delete operations, `indexing_config` is not needed. The server only re
 
 2. **Access vs History**: Distinguish between access and history permissions
    - `access_check_*`: Who can view the current state
-   - `history_check_*`: Who can view the change history
+   - `history_check_*`: Metadata for separately authorized history reads; no history endpoint or append-only store is currently implemented
 
 3. **Public Flag**: Set appropriately to enable/disable public access
    - `true`: Resource is publicly searchable
@@ -472,10 +602,13 @@ Note: For delete operations, `indexing_config` is not needed. The server only re
 
 ### Error Handling
 
-The indexer service will reply with:
-
-- `"OK"` on success
-- `"ERROR: <details>"` on failure
+The deployed JetStream consumer does **not** return application `OK`/`ERROR`
+results to publishers. Core `conn.Request()` on a captured subject can receive
+a JetStream persistence acknowledgment, not a processing result. A durable
+outbox relay uses JetStream publish and waits for `PubAck` before recording
+delivery. Processing failures are NAKed/retried independently; monitor exhausted
+deliveries and reconcile from durable source events. Do not publish version 2
+yet: its admission rejection exhausts the existing bounded retry budget.
 
 Common errors:
 
@@ -483,6 +616,8 @@ Common errors:
 - Invalid action type
 - Missing authorization header
 - Malformed FGA queries
+- Reserved audit/version fields on a legacy message
+- Unsupported version or version 2 processing not enabled
 
 ### Performance Considerations
 
@@ -542,7 +677,8 @@ nc.Publish("lfx.index.project", data)
 
 **Problem**: `latest`, timestamp, or principal fields are missing in OpenSearch.
 
-**Solution**: Confirm the write went through indexer-service and returned `OK`.
+**Solution**: Confirm successful processing in the consumer's operational evidence
+and the indexed result; a publish acknowledgment is not processing confirmation.
 Create/update documents get `created_at` or `updated_at`; delete documents get
 `deleted_at`. Principal fields require a valid lower-case `authorization` header
 on V2 messages or `x-username` / `x-email` on V1 messages.
@@ -578,4 +714,6 @@ on V2 messages or `x-username` / `x-email` on V1 messages.
 
 - [Architecture Overview](../CLAUDE.md) - System architecture and design patterns
 - [README](../README.md) - Project overview and setup instructions
+- [Audit envelope version 2](audit-v2-contract.md) - Public contract, current rejection, and enablement requirements
+- [History storage design](audit-history-design.md) - Remaining persistence/recovery work
 - [OpenFGA Documentation](https://openfga.dev/) - Fine-Grained Authorization reference

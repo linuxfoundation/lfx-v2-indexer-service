@@ -62,6 +62,11 @@ Repo-owned guidance is split between contract docs and the local skills:
 
 - `docs/indexer-contract.md`: authoritative event contract (envelope, `IndexingConfig`, OpenSearch document fields, schema evolution policy). Other V2 services link here rather than copy.
 - `docs/client-guide.md`: publisher-facing usage walkthrough (for publishers in other services).
+- `docs/audit-v2-contract.md`: audit envelope version 2 types, strict preflight
+  validation, and fail-closed runtime admission. History processing is not enabled.
+- `docs/audit-history-design.md`: remaining append-only storage/recovery rollout.
+- `docs/publisher-compatibility.md`: source-only legacy publisher inventory and
+  staging/canary checks before deploying the discriminator reservation.
 - `.claude/skills/indexer-service-dev/`: repo-local Go conventions (auto-attaches on Go paths).
 - `.claude/skills/indexer-publishing/`: workflow for any change on the indexer write path (both indexer-internal and publishers in other repos).
 - `.claude/rules/indexer-contract.md`: enforced policy on contract-sensitive paths (action constants, additive envelope changes, no new top-level OpenSearch fields without coordination).

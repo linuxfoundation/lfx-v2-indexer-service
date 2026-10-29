@@ -71,6 +71,13 @@ type ContactBody struct {
 //		},
 //	}
 type IndexerMessageEnvelope struct {
+	// SchemaVersion is omitted for existing current-resource messages. Version 2
+	// defines the audit contract; runtime processing is not enabled yet.
+	SchemaVersion int `json:"schema_version,omitempty"`
+
+	// Audit is required by schema version 2 and must never be silently discarded.
+	Audit *AuditEvent `json:"audit,omitempty"`
+
 	// Action specifies the operation type: "created", "updated", or "deleted"
 	Action constants.MessageAction `json:"action"`
 
