@@ -149,7 +149,11 @@ func (s *IndexerService) CreateTransactionFromMessage(messageData map[string]any
 	}
 
 	// Parse indexing_config if present (for resource indexing)
-	if indexingConfigData, ok := messageData["indexing_config"].(map[string]any); ok {
+	if rawIndexingConfig, present := messageData["indexing_config"]; present && rawIndexingConfig != nil {
+		indexingConfigData, ok := rawIndexingConfig.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("indexing_config must be an object")
+		}
 		// Get transaction data for template expansion
 		var transactionData map[string]any
 		if dataMap, ok := messageData["data"].(map[string]any); ok {
@@ -672,6 +676,22 @@ func (s *IndexerService) GenerateTransactionBody(ctx context.Context, transactio
 		}
 		body.ObjectID = transaction.ParsedObjectID
 		body.ObjectRef = transaction.ObjectType + ":" + transaction.ParsedObjectID
+		if config := transaction.IndexingConfig; config != nil {
+			if config.ObjectID != body.ObjectID {
+				// Optional context must not leave the deleted resource's live data indexed.
+				logger.Warn("Ignoring delete indexing_config with mismatched object_id",
+					"transaction_id", transactionID,
+					"object_type", transaction.ObjectType,
+					"validation_step", "delete_config_identity")
+			} else {
+				// Retain publisher-supplied history context without making the tombstone
+				// public or granting ordinary access. Do not copy search data from config.
+				body.ParentRefs = config.ParentRefs
+				body.HistoryCheckObject = config.HistoryCheckObject
+				body.HistoryCheckRelation = config.HistoryCheckRelation
+				body.HistoryCheckQuery = contracts.JoinFgaQuery(config.HistoryCheckObject, config.HistoryCheckRelation)
+			}
+		}
 
 		logger.Debug("Deleted action body prepared",
 			"transaction_id", transactionID,
@@ -679,7 +699,7 @@ func (s *IndexerService) GenerateTransactionBody(ctx context.Context, transactio
 			"object_ref", body.ObjectRef,
 			"principal_count", len(transaction.ParsedPrincipals))
 
-		// Early return for delete transactions (no enrichment needed)
+		// Deletes have no resource data to enrich; legacy UID-only deletes remain supported.
 		logger.Debug("Transaction body generation completed (delete action)", "transaction_id", transactionID)
 		return body, nil
 	default:
