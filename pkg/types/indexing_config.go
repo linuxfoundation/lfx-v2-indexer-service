@@ -1,7 +1,12 @@
 // Copyright The Linux Foundation and each contributor to LFX.
 // SPDX-License-Identifier: MIT
 
-// Package types provides public types that can be used by external clients.
+// Package types provides public indexer contracts and construction helpers.
+// NewMessageV2 freezes audited source data without transport credentials;
+// NewAuditActorProfile, NewAuditAttribution, and NewAuditSnapshots construct its
+// nested metadata. Current consumers reject audit envelope version 2; structural
+// validation is not authorization, audited-delivery enablement, or persistence.
+// Existing unversioned clients continue using IndexerMessageEnvelope directly.
 package types
 
 import (
