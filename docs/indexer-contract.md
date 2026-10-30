@@ -19,8 +19,8 @@ generic; resource services tell it everything it needs via the message payload.
 Existing messages omit both `schema_version` and `audit` and retain their
 current-resource behavior. The **platform V2** subject name is not an envelope
 schema version. The new **audit envelope version 2** is specified in
-[audit-v2-contract.md](audit-v2-contract.md), with public types and preflight
-validators, but runtime processing is **not enabled**. It is rejected before
+[audit-v2-contract.md](audit-v2-contract.md), with public types, construction
+helpers, and preflight validators, but runtime processing is **not enabled**. It is rejected before
 any indexing/authentication side effects; no append-only history is written.
 The versioned attribution contract includes immutable user name/avatar URL/email/
 username snapshots alongside actor refs, with explicit unavailability rather

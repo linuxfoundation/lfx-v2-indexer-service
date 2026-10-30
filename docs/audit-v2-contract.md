@@ -5,7 +5,8 @@
 
 This is the owner specification for `schema_version: 2` in
 `types.IndexerMessageEnvelope`. The public types and preflight validators are
-implemented in `pkg/types/audit.go`. The current consumer **rejects version 2
+implemented in `pkg/types/audit.go`; public construction helpers live in
+`pkg/types/audit_builder.go`. The current consumer **rejects version 2
 before authentication, OpenSearch writes, cleanup, and post-index publication**.
 It does not yet implement history storage, deduplication, source-revision guards,
 publisher authorization, a schema registry, or a history query endpoint.
@@ -47,6 +48,30 @@ The fields are additive. Legacy Go publishers leave `SchemaVersion` at zero and
 not omission. There is deliberately no explicit envelope version 1 alias.
 
 ## Envelope and source identity
+
+### Public Go construction library
+
+Publishers use `types.NewMessageV2` with `MessageV2Options` and the approved
+`AuditContentValidator` to construct and freeze a complete event. Nested helpers
+`NewAuditActorProfile`, `NewAuditAttribution`, and `NewAuditSnapshots` construct
+the closed profile/attribution/content structures without live lookups. Simple
+source metadata and scope use the public `AuditEvent` and `AuditScope` types.
+Full construction/restore applies the same strict decoding, limits, and contract
+semantics as preflight; mutation schema approval is never defaulted.
+
+The immutable `MessageV2` JSON contains no transport headers (`headers: null`).
+Persist it and its resource type with the source mutation. `RestoreMessageV2`
+rejects nonempty headers, preserves captured source data, and revalidates the
+schema. `MessageV2.Envelope` creates an independent envelope with fresh service
+authorization for dispatch; the public `ValidateV2`/`DecodeV2Envelope` still
+require authorization. Neither a builder nor structural preflight authenticates
+or authorizes a publisher. Constructors never allocate event identity/time/
+revision, refresh profiles, publish, or enable consumer admission.
+
+See the [Go client guide](client-guide.md#go-client-example) and
+[compile-tested, offline-by-default example](../examples/audit-v2/main.go).
+
+### Source fields
 
 Keep existing `action`, `headers`, `data`, `tags`, and `indexing_config` fields.
 Add `SchemaVersion int` and `Audit *AuditEvent`. Use action constants, not new
