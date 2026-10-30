@@ -3,10 +3,12 @@
 
 # Append-only audit history: implementation design
 
-**Status: work in progress for linuxfoundation/lfx-self-serve#4616.** This is a
-proposal, not an available publisher or query API. The authoritative implemented
-contract remains [indexer-contract.md](indexer-contract.md). No history-write
-support or new envelope fields have been implemented yet.
+**Status: work in progress for linuxfoundation/lfx-self-serve#4616.** Public
+version 2 types and validators now exist; the authoritative wire contract is
+[audit-v2-contract.md](audit-v2-contract.md). Runtime admission rejects all audited
+envelopes until the durable processing/trust path is implemented. No history
+storage or history-query API is available. The current-resource contract remains
+[indexer-contract.md](indexer-contract.md).
 
 ## Current implementation boundary
 
@@ -26,50 +28,38 @@ support or new envelope fields have been implemented yet.
   `lfx-v2-query-service/docs/query-service-contract.md`. No query-service change
   is included in this work.
 
-## Proposed event contract
+## Version 2 event contract and producer handoff
 
-Add an optional, explicitly versioned audit block to the V2 envelope. Keep the
-existing action, headers, data, and indexing config compatible. Legacy envelopes
-continue indexing current resources but cannot establish audit completeness.
+Use the [version 2 contract](audit-v2-contract.md) rather than a second envelope
+definition here. It adds explicit version/identity/time/origin, required source
+revision, actor/effective actor refs and denormalized user profiles, before/after
+scope, and approved snapshots while
+leaving existing messages compatible. It requires complete deletion context.
+The previous metadata-only proposal is superseded: metadata alone records that
+a change happened, but cannot provide the requested prior resource values.
 
-The audit block should carry:
+Mutation content requires an approved publisher/resource-owned snapshot schema;
+no production registry is supplied yet. Never copy the current transaction body
+or raw resource `Data` wholesale into history. The contract decoder rejects
+unknown metadata, duplicate keys, unsafe shapes, and unapproved snapshot content
+through the caller's required schema validator. Runtime identity/delegation trust
+is a separate required gate, not a property of structural validation.
 
-- Schema version; immutable publisher namespace and event ID, assigned once per
-  committed domain mutation and reused across publish retries, redelivery,
-  replay, and storage retries. Prefer an outbox identity, not a request ID.
-- Source occurrence time, independent of the indexer's ingestion time; optional
-  publisher resource revision for source ordering. Equal occurrence times need
-  an event-ID tie-breaker, not an invented total mutation order.
-- Operation origin: domain mutation, reindex/backfill, or sync echo. Only domain
-  mutations append history; a legitimate system-driven mutation is a mutation
-  with a system actor, not automatically a sync echo. Derive origin from a trusted
-  ingress/workflow or accept it only from an authenticated producer authorized
-  for that resource type and origin. Ordinary request data cannot select audit
-  suppression. Validate this trust boundary before writing or suppressing history;
-  reject unknown or unauthorized classifications rather than silently skipping
-  a mutation. Producer identity must not be trusted merely because it appears in
-  a payload field; bind it to transport/service authentication.
-- Resource identity matching the subject and existing data/config identity.
-  Action comes from the existing envelope's validated action constant.
-- Explicit project/committee scope and history object/relation captured at
-  mutation time, including on deletion. Do not recover authoritative deletion
-  context from the current search document.
-- Approved effective actor and delegation attribution, validated against the
-  authenticated publisher/request context. Use an approved opaque principal
-  reference, not a display name/email copied from headers. Do not trust an
-  arbitrary caller-supplied actor or infer a system actor when auth is missing.
+Attribution explicitly captures name, avatar URL, email, and username for both
+user actors. Nullable attributes and a capture-availability marker preserve known
+facts without fabricating missing data or depending on an account still existing.
+These profile snapshots are immutable event metadata, not arbitrary directory
+objects and not the outbox relay's current profile. Retention/erasure and index
+permissions must cover them, both actor copies, and all replay/repair sources.
+An avatar URL is not an archived image; the indexer must not fetch it.
 
-The initial safe representation is **metadata-only**: event identity, action,
-times, resource, scope, and approved attribution/authorization. Snapshot values
-and field-change values require explicit per-resource allowlists before they can
-be added; neither arbitrary maps nor a sensitive-key denylist is sufficient.
-Confirm that this representation meets the initial history-query requirement
-with [publisher adoption](https://github.com/linuxfoundation/lfx-self-serve/issues/4615)
-and [history queries](https://github.com/linuxfoundation/lfx-self-serve/issues/4618).
-Never serialize the existing transaction body, resource `Data`,
-contacts/profiles, auth headers, bearer tokens, secrets, or arbitrary request
-bodies into history. Unknown audit fields should be rejected, not silently
-retained or accepted and dropped.
+The committee PostgreSQL migration should commit the mutation and an immutable
+outbox event in one database transaction. A relay attaches fresh service
+authentication and waits for JetStream persistence acknowledgment; no user JWTs
+or raw auth headers belong in the durable outbox/history payload. Retrying an
+outbox row preserves its event ID and source revision. An outbox in PostgreSQL
+cannot make an authoritative state write still performed in NATS KV atomic;
+coverage starts only for mutation paths actually using the transactional handoff.
 
 ## Proposed storage and recovery
 
@@ -78,8 +68,9 @@ history records to `resources`, set `latest` on them, or run the current-documen
 janitor against them. The history schema must be strict (`dynamic: strict`), with
 keyword event/resource/scope/auth fields and date fields for occurrence and
 ingestion times. Coordinate exact field names and mapping with query-service
-before implementing a consumer-facing schema. Actor references are sensitive
-even when opaque and require restricted index access.
+before implementing a consumer-facing schema. Actor references and denormalized
+profile snapshots are sensitive and require restricted index access and bounded
+personal-data retention; keep the latter out of general full-text search by default.
 
 Use OpenSearch create-only writes with a deterministic document ID derived from
 publisher namespace plus event ID. A duplicate must compare the immutable
@@ -186,10 +177,11 @@ no event may represent a failed mutation.
 
 ## Remaining implementation/test checkpoints
 
-1. Finalize the versioned public types, policy-approved metadata, strict parsing,
-   trusted origin classification, and publisher/query handoff; reject incomplete
-   audit-bearing deletes. The legacy mismatch fallback is not the proposed audit
-   envelope's completeness guarantee.
+1. Public types, strict preflight validation, and fail-closed discriminator guards
+   now exist. Implement the runtime trust/registry and publisher/query handoff;
+   reject incomplete audit-bearing deletes. The legacy mismatch fallback is not
+   the audit envelope's completeness guarantee. Do not enable processing without
+   the following storage, ordering, recovery, and retention requirements.
 2. Implement/configure create-only storage, duplicate payload verification, and
    retry-aware dual writes without changing legacy current-resource writes.
 3. Add lifecycle tests (create, multiple updates, delete), replay and both

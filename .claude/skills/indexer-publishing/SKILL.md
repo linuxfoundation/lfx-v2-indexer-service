@@ -23,6 +23,14 @@ paths:
 
 The indexer is generic. Publishers tell it everything via the envelope. Follow this workflow for any change that touches the contract.
 
+Audit envelope version 2 is defined in `docs/audit-v2-contract.md`, but runtime
+processing is not enabled. Existing publishers omit both `schema_version` and
+`audit`. Do not opt publishers into audited delivery until persistence, trust,
+schema approval, retention, and fleet rollout prerequisites are implemented.
+Use the strict public preflight validators for contract work; they are not an
+admission or delivery guarantee. The platform V2 subject naming is independent
+of this new envelope version.
+
 ## Workflow
 
 1. **Read the authoritative contract** in
@@ -49,6 +57,8 @@ The indexer is generic. Publishers tell it everything via the envelope. Follow t
    Adding new keys inside `data` requires no schema change.
 5. **For deletes**, send `Action = ActionDeleted` and `Data` = the UID
    string. The handler will reject a full-resource delete.
+   Legacy deletes may include complete matching scope/history config; the
+   current fallback for mismatched config is not valid for audited deletes.
 6. **Update the per-service contract doc** at `docs/indexer-contract.md` in
    the owning service in the same PR as the publisher change.
 7. **For indexer-internal changes**, ensure NATS replies remain `"OK"` on

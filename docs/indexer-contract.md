@@ -14,6 +14,28 @@ V2 and `lfx.v1.index.>` for V1; overridable via `nats.indexingSubject` and
 OpenSearch, and emits domain events on `lfx.{object_type}.{action}`. It is fully
 generic; resource services tell it everything it needs via the message payload.
 
+## Envelope versions and availability
+
+Existing messages omit both `schema_version` and `audit` and retain their
+current-resource behavior. The **platform V2** subject name is not an envelope
+schema version. The new **audit envelope version 2** is specified in
+[audit-v2-contract.md](audit-v2-contract.md), with public types and preflight
+validators, but runtime processing is **not enabled**. It is rejected before
+any indexing/authentication side effects; no append-only history is written.
+The versioned attribution contract includes immutable user name/avatar URL/email/
+username snapshots alongside actor refs, with explicit unavailability rather
+than a dependency on live account lookup. These are private history metadata,
+not additions to the current-resource document shape.
+
+`schema_version` and `audit` are reserved, lowercase discriminator fields. A
+present audit block without a version (including null), unsupported/invalid
+versions, and versioned traffic on platform V1 subjects are rejected rather than
+silently treated as legacy. This protects only consumers containing this guard;
+do not publish audited messages to older replicas during a rolling deployment.
+Before deploying the new reservation guard, complete the source/staging checks
+in [publisher-compatibility.md](publisher-compatibility.md); known local publishers
+have no declared collision, but deployed and external traffic is not proven here.
+
 ## Subject Conventions
 
 Publish a V2 index message on `lfx.index.{resource_type}`. Use lowercase, underscore-
@@ -40,6 +62,8 @@ Defined in the public `pkg/types/indexing_config.go` package (imported by
 
 ```go
 type IndexerMessageEnvelope struct {
+    SchemaVersion  int                     `json:"schema_version,omitempty"` // omitted for existing traffic
+    Audit          *AuditEvent             `json:"audit,omitempty"`          // version 2 contract; processing disabled
     Action         constants.MessageAction `json:"action"`           // "created", "updated", "deleted"
     Headers        map[string]string       `json:"headers"`          // auth headers from request context
     Data           any                     `json:"data"`             // full resource struct; bare UID string for deletes
@@ -154,8 +178,11 @@ The message is stored in the stream and processed asynchronously; there is no wa
 to determine whether indexing succeeded from the publish call. JetStream also
 overwrites the NATS `Reply` field with its internal ACK address (`$JS.ACK...`), so
 the original publisher reply inbox is not reachable from the consumer.
-Publishers must use `conn.Publish()` (fire-and-forget). Delivery guarantees are
-provided by the JetStream stream: messages that fail processing are NAKed with
+Existing publishers may continue `conn.Publish()` (fire-and-forget). A reliable
+outbox relay should instead use the JetStream publishing API and wait for its
+`PubAck` before recording delivery; that acknowledgment confirms broker storage,
+not successful indexing. Do not use core request/reply as an application result.
+Consumer delivery guarantees are provided by the JetStream stream: messages that fail processing are NAKed with
 exponential backoff with `MaxDeliver: 5` (1 initial delivery + up to 4 redeliveries;
 four NAK intervals: ≤1s, ≤2s, ≤4s, ≤8s; total retry window ~15 s). After 5 delivery
 attempts JetStream stops redelivering to this consumer; the message remains in the
@@ -220,7 +247,7 @@ fields without coordination with this service.
 | `history_check_object` | `IndexingConfig.HistoryCheckObject` | Compatibility field; prefer `history_check_query` |
 | `history_check_relation` | `IndexingConfig.HistoryCheckRelation` | Compatibility field; prefer `history_check_query` |
 | `access_check_query` | `{AccessCheckObject}#{AccessCheckRelation}` | Used by query-service to build FGA check |
-| `history_check_query` | `{HistoryCheckObject}#{HistoryCheckRelation}` | Used by query-service for audit views |
+| `history_check_query` | `{HistoryCheckObject}#{HistoryCheckRelation}` | History authorization metadata; no history query endpoint is implemented yet |
 | `latest` | Set by indexer | `true` for current version only |
 | `created_at`, `updated_at`, `deleted_at` | server timestamp by action | Audit and sorting timestamps |
 | `created_by`, `updated_by`, `deleted_by` | parsed principals | Human-readable principal refs |
@@ -292,6 +319,9 @@ Payload (`internal/domain/contracts/events.go`, `IndexingEvent`):
 - **Renaming or removing top-level fields**: breaking. Coordinate with the indexer
   team and the query-service team; existing documents must be re-indexed.
 - **Changing `IndexingConfig` shape**: breaking for all publishers. Coordinate.
+- **Audit envelope version 2**: additive public fields with strict opt-in
+  semantics, not an in-place change to existing fields. The runtime currently
+  rejects it; see [availability and rollout](audit-v2-contract.md).
 - **Adding a new resource type**: no indexer change needed. Publish on
   `lfx.index.<new_type>` with a valid envelope and `IndexingConfig`. Domain events
   `lfx.<new_type>.created/updated/deleted` are emitted automatically.
@@ -306,11 +336,15 @@ Before merging a change to publisher code in a resource service, verify:
 2. Deletes use `action = "deleted"` and `Data` = the UID string (not the resource).
 3. The subject matches the resource type that other services already use; check
    `pkg/constants/` for the canonical constant.
-4. Publishing is fire-and-forget — use `conn.Publish()`, not `conn.Request()`.
-   The indexer now runs as a JetStream durable consumer; request/reply is not
-   supported (see the note in the rejection table above).
+4. Legacy publishers may retain `conn.Publish()`; use acknowledged JetStream
+   publishing for durable outbox delivery. Neither persistence acknowledgment
+   nor core request/reply reports successful indexer processing.
 5. Headers carry lower-case `authorization` and `x-on-behalf-of` keys so audit principals are
    recorded on the indexed document.
+6. Existing traffic omits both new discriminator fields. Do not enable audited
+   delivery until the complete version 2 rollout in
+   [audit-v2-contract.md](audit-v2-contract.md#rollout-coexistence-and-rollback)
+   is complete.
 
 ## Adding a New Field to an Existing Resource
 

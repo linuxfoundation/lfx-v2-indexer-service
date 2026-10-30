@@ -116,6 +116,9 @@ func (s *IndexerService) isDeleteAction(transaction *contracts.LFXTransaction) b
 // CreateTransactionFromMessage creates a transaction from message data
 func (s *IndexerService) CreateTransactionFromMessage(messageData map[string]any, objectType string, isV1 bool) (*contracts.LFXTransaction, error) {
 	logger := s.logger
+	if err := validateEnvelopeAdmission(messageData, isV1); err != nil {
+		return nil, err
+	}
 
 	// Extract action as string first, then convert to MessageAction
 	actionStr, ok := messageData["action"].(string)

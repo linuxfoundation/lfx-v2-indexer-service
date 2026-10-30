@@ -7,6 +7,14 @@ A high-performance, indexer service for the LFX V2 platform that processes resou
 > [`docs/indexer-contract.md`](docs/indexer-contract.md). Caller examples live
 > in [`docs/client-guide.md`](docs/client-guide.md).
 
+> **Audit envelope version 2:** public types and preflight validators are defined
+> in [`docs/audit-v2-contract.md`](docs/audit-v2-contract.md). Processing is not
+> enabled: versioned/audit-bearing messages are rejected before writes rather
+> than silently indexed without history. Existing unversioned platform V1/V2
+> messages retain current behavior. No append-only history is stored yet.
+> The contract preserves denormalized user attribution (name, avatar URL, email,
+> and username) so historical records do not depend on the actor account still existing.
+
 ## 📋 Overview
 
 The LFX V2 Indexer Service is responsible for:
@@ -532,9 +540,13 @@ make coverage                      # Generate coverage report
 
 ### Testing Message Processing
 
+These are legacy publish smoke tests, not processing confirmations. A durable
+outbox relay uses JetStream publish acknowledgment as described in the client
+guide. Audit envelope version 2 is not yet admitted by the consumer.
+
 ```bash
-# Test V2 message format and wait for OK/ERROR reply
-nats request lfx.index.project '{
+# Smoke-test an unversioned platform V2 publish (not a processing acknowledgment)
+nats pub lfx.index.project '{
   "action": "created",
   "headers": {"authorization": "Bearer <valid JWT>"},
   "data": {
@@ -558,7 +570,7 @@ nats request lfx.index.project '{
 }' --server nats://your-nats-server:4222
 
 # Test V1 message format
-nats request lfx.v1.index.project '{
+nats pub lfx.v1.index.project '{
   "action": "create",
   "data": {
     "id": "test-project-456",
