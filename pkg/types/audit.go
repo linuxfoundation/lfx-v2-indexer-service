@@ -122,6 +122,10 @@ var (
 // publisher authentication, authorization, persistence, or delivery confirmation.
 // Decode errors deliberately do not echo untrusted payload values.
 func DecodeV2Envelope(payload []byte, objectType string, validateContent AuditContentValidator) (*IndexerMessageEnvelope, error) {
+	return decodeV2Envelope(payload, objectType, validateContent, true)
+}
+
+func decodeV2Envelope(payload []byte, objectType string, validateContent AuditContentValidator, requireAuthentication bool) (*IndexerMessageEnvelope, error) {
 	if len(payload) > MaxAuditEnvelopeBytes {
 		return nil, fmt.Errorf("audit envelope exceeds maximum size")
 	}
@@ -138,7 +142,7 @@ func DecodeV2Envelope(payload []byte, objectType string, validateContent AuditCo
 	if err := decoder.Decode(new(any)); err != io.EOF {
 		return nil, fmt.Errorf("version 2 envelope must contain exactly one JSON value")
 	}
-	if err := envelope.ValidateV2(objectType, validateContent); err != nil {
+	if err := envelope.validateV2(objectType, validateContent, requireAuthentication); err != nil {
 		return nil, err
 	}
 	return &envelope, nil
@@ -148,13 +152,17 @@ func DecodeV2Envelope(payload []byte, objectType string, validateContent AuditCo
 // validator for mutations. It does not authenticate the publisher or authorize
 // attribution, scope, history anchors, projection origins, or retention policy.
 func (e *IndexerMessageEnvelope) ValidateV2(objectType string, validateContent AuditContentValidator) error {
+	return e.validateV2(objectType, validateContent, true)
+}
+
+func (e *IndexerMessageEnvelope) validateV2(objectType string, validateContent AuditContentValidator, requireAuthentication bool) error {
 	if e == nil || e.SchemaVersion != AuditSchemaVersion || e.Audit == nil {
 		return fmt.Errorf("schema_version 2 and audit are required")
 	}
 	if !auditObjectPattern.MatchString(objectType) || objectType == "index" {
 		return fmt.Errorf("invalid audit object type")
 	}
-	if strings.TrimSpace(e.Headers[constants.AuthorizationHeader]) == "" {
+	if requireAuthentication && strings.TrimSpace(e.Headers[constants.AuthorizationHeader]) == "" {
 		return fmt.Errorf("headers.authorization is required")
 	}
 	config := e.IndexingConfig

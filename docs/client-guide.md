@@ -9,7 +9,7 @@ It is a caller-facing walkthrough. The authoritative generic envelope,
 evolution policy live in [`docs/indexer-contract.md`](indexer-contract.md).
 
 Existing unversioned publishers remain supported. Public audit envelope version
-2 types/validators are available, but **the consumer rejects version 2 before
+2 builders/types/validators are available, but **the consumer rejects version 2 before
 writing anything**. Do not start audited outbox delivery yet. The full contract
 and enablement requirements live in [audit-v2-contract.md](audit-v2-contract.md).
 Before deploying the discriminator reservation, follow the bounded source
@@ -634,42 +634,136 @@ Common errors:
 
 ## Go Client Example
 
-For Go services, use the public types package:
+Use the importable `pkg/types` library, not a local copy of the envelope types.
+The runnable, compile-tested [version 2 example](../examples/audit-v2/main.go)
+constructs the nested metadata, validates, freezes/restores outbox data, attaches
+fresh dispatch authentication, marshals, and waits for a JetStream `PubAck`.
+Run its **offline-only default** with:
+
+```bash
+go run ./examples/audit-v2
+```
+
+It uses a closed **test-only** snapshot schema, not a production registry. It
+does not print event payloads, profiles, credentials, or raw transport errors.
+
+### Build once at the source operation
+
+All helpers are in `github.com/linuxfoundation/lfx-v2-indexer-service/pkg/types`:
+
+| Helper | Purpose |
+| --- | --- |
+| `NewAuditActorProfile(AuditProfileAttributes)` | Copy the four approved attributes, infer captured/unavailable availability, emit explicit nulls |
+| `NewAuditAttribution(actor, effective)` | Copy initiating/effective refs and profiles; nil effective means the same actor, not a second lookup |
+| `NewAuditSnapshots(schema, before, after)` | Copy raw object snapshots and set the snapshots representation; nil means an absent side |
+| `NewMessageV2(objectType, MessageV2Options, validator)` | Construct, fully preflight, and freeze a header-free version 2 event |
+| `RestoreMessageV2(payload, objectType, validator)` | Strictly validate frozen outbox JSON, rejecting transport headers |
+| `event.Envelope(freshAuthorization, validator)` | Return an independent dispatch envelope with fresh lowercase authorization |
+
+For example, after capturing the initiating user's approved attributes:
 
 ```go
-import (
-    "github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
-    "github.com/linuxfoundation/lfx-v2-indexer-service/pkg/types"
-)
-
-// Create message with indexing config
-publicFlag := true
-envelope := &types.IndexerMessageEnvelope{
-    Action: constants.ActionCreated,
-    Headers: map[string]string{
-        constants.AuthorizationHeader: "Bearer " + token,
-    },
-    Data: map[string]any{
-        "id":   "proj-123",
-        "name": "My Project",
-    },
-    IndexingConfig: &types.IndexingConfig{
-        ObjectID:             "proj-123",
-        Public:               &publicFlag,
-        AccessCheckObject:    "project:proj-123",
-        AccessCheckRelation:  "viewer",
-        HistoryCheckObject:   "project:proj-123",
-        HistoryCheckRelation: "historian",
-        SortName:             "my project",
-        NameAndAliases:       []string{"My Project"},
-        Tags:                 []string{"uid:proj-123", "featured"},
-    },
+profile, err := types.NewAuditActorProfile(types.AuditProfileAttributes{
+    Name: capturedName, AvatarURL: capturedAvatar, Email: capturedEmail,
+    Username: capturedUsername, // *string; nil explicitly means unavailable
+})
+if err != nil {
+    return err
 }
-
-// Marshal and publish to NATS
-data, _ := json.Marshal(envelope)
-nc.Publish("lfx.index.project", data)
+attribution, err := types.NewAuditAttribution(types.AuditActor{
+    Ref: initiatingActorRef, Profile: profile,
+}, nil) // For delegation, supply a separately captured effective AuditActor.
+if err != nil {
+    return err
+}
+content, err := types.NewAuditSnapshots(approvedSchema, beforeJSON, afterJSON)
+if err != nil {
+    return err
+}
+event, err := types.NewMessageV2(objectType, types.MessageV2Options{
+    Action: action, Data: sanitizedIndexData, IndexingConfig: concreteConfig,
+    Audit: types.AuditEvent{
+        EventID: sourceEventID, Publisher: publisher,
+        OccurredAt: sourceOccurredAt, ResourceRevision: sourceRevision,
+        Origin: types.AuditOriginMutation, Attribution: attribution,
+        Scope: types.AuditScope{Before: beforeScope, After: afterScope},
+        Content: content,
+    },
+}, approvedSchemaValidator)
+if err != nil {
+    return err
+}
+outboxJSON, err := json.Marshal(event)
+if err != nil {
+    return err
+}
+// Persist outboxJSON and objectType atomically with the resource mutation.
+// Neither the options nor frozen event accepts transport authentication.
 ```
+
+The names above represent values captured by the source transaction, not relay
+lookups. Helpers never generate event IDs, revisions, timestamps, actors or user
+attributes, and never fetch profiles or publish messages. They copy their inputs;
+later changes to caller data or returned dispatch envelopes cannot change the
+frozen event. Reconstruct retries with `RestoreMessageV2`, not a fresh source read.
+Persist only the sanitized index projection and approved snapshots/attribution;
+the library cannot identify secrets hidden in arbitrary top-level resource data.
+
+- **Create:** `ActionCreated`, object data, after scope/snapshot only.
+- **Update:** `ActionUpdated`, object data, both before and after scope/snapshots.
+- **Delete:** `ActionDeleted`, bare UID data matching `IndexingConfig.ObjectID`,
+  before scope/snapshot only. Complete config is still required.
+- **Projection:** choose `AuditOriginReindex`, `AuditOriginBackfill`, or
+  `AuditOriginSyncEcho` explicitly and leave `Content` nil. Identity/time/revision,
+  attribution, action-specific scope, data, and config remain required. Do not
+  use projection origins to suppress a real mutation's audit requirement.
+- **Unavailable user:** pass `AuditProfileAttributes{}` to record all four nulls
+  and `availability: "unavailable"`. A missing user profile is not equivalent.
+- **Service actor:** use an explicit `service:` ref and nil profile; never infer
+  a service actor from missing request authentication.
+
+Snapshot construction checks JSON object shape; **only complete message
+construction/restore/dispatch validates schema ownership and its allowlist**.
+Every mutation requires an `AuditContentValidator`; nil fails closed. Use a
+deterministic, side-effect-free approved registry, never a permit-all callback.
+All errors from the schema callback are replaced with a privacy-safe rejection.
+
+### Dispatch only after audited-delivery rollout
+
+The offline builder is **not** an enablement switch. Before actual audited
+delivery, complete every [rollout prerequisite](audit-v2-contract.md#rollout-coexistence-and-rollback):
+history storage/recovery, trusted publisher/actor/origin admission, approved
+schemas, history authorization, retention/erasure/replay fences, revision guards,
+operational monitoring, and a fully compatible consumer fleet (or a separately
+provisioned isolated audited stream). Current consumers reject all origins.
+
+The example's send path requires `AUDIT_V2_EXAMPLE_SEND=isolated-test-only`, an
+explicit `NATS_URL`, and fresh `INDEXER_AUTHORIZATION`. Use it **only on a separately
+provisioned isolated test broker/compatible consumer**, not shared indexing
+subjects in an existing environment. The test fixture schema is never production
+approval. No production audited enablement flag is introduced here.
+
+At dispatch, restore the immutable event, call `event.Envelope` with fresh service
+authorization, then validate/marshal and use JetStream synchronous publish as in
+the example. Never persist that dispatch envelope, bearer tokens, raw headers,
+or arbitrary directory profiles in an outbox. The library stores frozen JSON with
+null headers; it is deliberately not directly dispatchable. Retain the resource
+type alongside it because the subject is not encoded in the envelope.
+
+A `PubAck` means **broker persistence only**, not successful indexing or history
+storage. Timeout/unknown outcome means retry the same event; preserve its original
+identity and captured profiles. JetStream message-ID deduplication is bounded by
+the broker's deduplication window and is not audit idempotency. Retain the repair
+source for the recovery window and monitor exhausted consumer deliveries.
+
+### Existing unversioned callers
+
+Continue using `types.IndexerMessageEnvelope` without `SchemaVersion` or `Audit`.
+The existing wire format and admission behavior are unchanged. Do not adopt the
+version 2 builders merely to send today's current-resource messages. For reliable
+legacy delivery, marshal with error handling and use JetStream publishing with a
+`PubAck` rather than the old fire-and-forget example; it still does not confirm
+consumer processing.
 
 ## Troubleshooting
 
