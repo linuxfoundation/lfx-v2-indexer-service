@@ -39,7 +39,7 @@ Quick checklist form. The narrative lives in `../SKILL.md`. Use this file in a c
 
 ## Domain events
 
-- [ ] After every successful write, publish `lfx.{object_type}.{action}` with `IndexingEvent` from `internal/domain/contracts/events.go`.
+- [ ] Preserve best-effort `lfx.{object_type}.{action}` events for legacy current writes. Audit v2 publishes only after current-body replacement, not receipts/history, guarded no-ops, identity-only updates or replay that only restores history. Use `IndexingEvent` from `internal/domain/contracts/events.go`.
 - [ ] Publish failures are logged but never fail the OpenSearch write path.
 
 ## Auth

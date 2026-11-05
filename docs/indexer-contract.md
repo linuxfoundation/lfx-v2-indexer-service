@@ -20,8 +20,10 @@ Existing messages omit both `schema_version` and `audit` and retain their
 current-resource behavior. The **platform V2** subject name is not an envelope
 schema version. The new **audit envelope version 2** is specified in
 [audit-v2-contract.md](audit-v2-contract.md), with public types, construction
-helpers, and preflight validators, but runtime processing is **not enabled**. It is rejected before
-any indexing/authentication side effects; no append-only history is written.
+helpers, and preflight validators. Runtime processing is **disabled by default**.
+It is rejected before indexing/authentication side effects until explicitly
+enabled with a trusted publisher/schema policy and private history index; see
+[rollout requirements](audit-rollout.md).
 The versioned attribution contract includes immutable user name/avatar URL/email/
 username snapshots alongside actor refs, with explicit unavailability rather
 than a dependency on live account lookup. These are private history metadata,
@@ -229,6 +231,9 @@ msg := indexerTypes.IndexerMessageEnvelope{
 The indexer is the only writer of the document. It writes using `object_ref` as the
 OpenSearch document ID. Field naming below is fixed; do not introduce new top-level
 fields without coordination with this service.
+Audited current writes URL-escape the document-ID path segment so reserved
+characters in an opaque resource ID cannot alter routing or alias another
+document. The stored `object_ref` and resource ID remain unchanged.
 
 | Field | Populated from | Purpose |
 |---|---|---|
@@ -249,7 +254,10 @@ fields without coordination with this service.
 | `access_check_query` | `{AccessCheckObject}#{AccessCheckRelation}` | Used by query-service to build FGA check |
 | `history_check_query` | `{HistoryCheckObject}#{HistoryCheckRelation}` | History authorization metadata; no history query endpoint is implemented yet |
 | `latest` | Set by indexer | `true` for current version only |
-| `created_at`, `updated_at`, `deleted_at` | server timestamp by action | Audit and sorting timestamps |
+| `audit_source_revision`, `audit_event_key`, `audit_event_fingerprint` | Audited current write only (disabled by default) | Internal atomic source-revision ordering and retry identity; unindexed, not returned by query-service's explicit source includes |
+| `audit_mutation_key`, `audit_mutation_fingerprint` | Audited current write only (disabled by default) | Preserve mutation identity across same-revision projection rebuilds; unindexed |
+| `audit_projection_order_time`, `audit_projection_order_key` | Audited current write only (disabled by default) | Stable same-revision ordering for authorized reindex/backfill/sync projections; unindexed |
+| `created_at`, `updated_at`, `deleted_at` | server timestamp by action (legacy); `audit.occurred_at` (UTC) for audited writes | Source-action timing for audited resources, not indexer ingestion time |
 | `created_by`, `updated_by`, `deleted_by` | parsed principals | Human-readable principal refs |
 | `created_by_principals`, `updated_by_principals`, `deleted_by_principals` | parsed principals | Principal IDs for filtering/audit |
 | `created_by_emails`, `updated_by_emails`, `deleted_by_emails` | parsed principals | Principal email addresses |
@@ -286,6 +294,15 @@ for that object reference and sets `latest: true`; deletes still write a tombsto
 document with `deleted_at` and delete principals. The janitor still scans for duplicate
 `latest: true` hits with the same `object_ref` and flips older duplicates to `latest: false`
 using optimistic update parameters. Queries must filter `latest: true` to see current data.
+For audited current writes, the janitor is queued even after a guarded no-op.
+Audited cleanup preserves a canonical-visibility requirement across up to 12 delayed
+visibility retries: if the guarded canonical document is not yet searchable, it does not
+declare a single visible legacy copy clean or choose a legacy winner. Once
+older `latest:true` duplicates and the canonical document are visible, it prefers
+the canonical revision-guarded document over legacy tombstones. The private history and
+delivery-receipt indices never enter the janitor queue.
+If the visibility budget expires, cleanup emits a warning requiring operator
+reconciliation and stops retrying that request instead of polling indefinitely.
 
 ### Domain events emitted after a successful write
 
@@ -308,6 +325,27 @@ Payload (`internal/domain/contracts/events.go`, `IndexingEvent`):
 
 `body` is the full `TransactionBody` written to OpenSearch. Publish failures here are
 **non-blocking**: the OpenSearch write is unaffected; the error is logged.
+Audited writes, once enabled, also include optional `event_id` as
+`{publisher}:{publisher_event_id}` for stable downstream deduplication. Legacy
+events omit that field. A guarded no-op retry, including replay that restores
+missing history without replacing current state, does
+not publish a new current-resource event.
+When a same-revision reindex/backfill/sync projection arrives before its mutation,
+the mutation still appends history and records its identity atomically, but does
+not replace the refreshed current body or publish a replacement-body event.
+Both arrival orders retain the projection body and the mutation identity.
+Audited current-document `*_by` and `*_by_principals` fields include the original
+actor and effective/on-behalf-of actor refs, deduplicated when equal. Private
+actor profile snapshots remain confined to history and are not copied into
+current documents or downstream event bodies.
+
+Publisher namespace is a delivery-identity namespace, **not** a revision
+namespace. All admitted publishers that can address the same `(object_type,
+object_id)` must use one authoritative source revision sequence. Projection
+workers copy that source revision; they must not invent independent counters.
+Disjoint resources may have different publishers. Overlapping publishers are
+approved only when they coordinate that shared source authority; startup does
+not infer coordination or enforce one publisher per type.
 
 ## Schema Evolution Policy
 
@@ -320,8 +358,8 @@ Payload (`internal/domain/contracts/events.go`, `IndexingEvent`):
   team and the query-service team; existing documents must be re-indexed.
 - **Changing `IndexingConfig` shape**: breaking for all publishers. Coordinate.
 - **Audit envelope version 2**: additive public fields with strict opt-in
-  semantics, not an in-place change to existing fields. The runtime currently
-  rejects it; see [availability and rollout](audit-v2-contract.md).
+  semantics, not an in-place change to existing fields. The runtime rejects it
+  by default; see [availability and rollout](audit-v2-contract.md).
 - **Adding a new resource type**: no indexer change needed. Publish on
   `lfx.index.<new_type>` with a valid envelope and `IndexingConfig`. Domain events
   `lfx.<new_type>.created/updated/deleted` are emitted automatically.

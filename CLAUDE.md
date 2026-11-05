@@ -63,8 +63,12 @@ Repo-owned guidance is split between contract docs and the local skills:
 - `docs/indexer-contract.md`: authoritative event contract (envelope, `IndexingConfig`, OpenSearch document fields, schema evolution policy). Other V2 services link here rather than copy.
 - `docs/client-guide.md`: publisher-facing usage walkthrough (for publishers in other services).
 - `docs/audit-v2-contract.md`: audit envelope version 2 types, strict preflight
-  validation, and fail-closed runtime admission. History processing is not enabled.
-- `docs/audit-history-design.md`: remaining append-only storage/recovery rollout.
+  validation, and fail-closed runtime admission. Audited history processing is
+  opt-in and disabled by default.
+- `docs/audit-history-design.md`: implemented storage/recovery behavior, validation
+  coverage, and remaining production rollout gates.
+- `docs/audit-rollout.md`: publisher policy, provisioning, coexistence,
+  reconciliation, and erasure runbook.
 - `docs/publisher-compatibility.md`: source-only legacy publisher inventory and
   staging/canary checks before deploying the discriminator reservation.
 - `.claude/skills/indexer-service-dev/`: repo-local Go conventions (auto-attaches on Go paths).
@@ -97,6 +101,8 @@ or the task needs additional peer repos.
 
 2. **Application Layer** (`internal/application/`): Use case orchestration
    - `message_processor.go`: Coordinates V2/V1 message processing workflows
+   - `audit_workflow.go`: Opt-in publisher admission, delivery reservation,
+     history-first persistence and guarded current projection through domain ports
 
 3. **Infrastructure Layer** (`internal/infrastructure/`): External service adapters
    - `messaging/`: NATS client with queue group support
@@ -111,16 +117,21 @@ or the task needs additional peer repos.
 ### Message Processing Flow
 
 ```
-NATS → MessagingRepository → IndexingMessageHandler → MessageProcessor → IndexerService → OpenSearch
-                                                                                                              ↓
-                                                                                                    NATS Event Published
-                                                                                                  lfx.{object_type}.{action}
+NATS → MessagingRepository → IndexingMessageHandler → MessageProcessor
+  ├─ legacy → IndexerService → current-resource bulk writes → best-effort event
+  └─ audit v2 (opt-in) → AuditWorkflow
+       → admission → private delivery receipt → mutation history (mutations only)
+       → guarded current projection → audited cleanup
+       → best-effort event only after an actual current-body replacement
 ```
 
 ### Domain Events (Outbound)
 
-After every successful OpenSearch write the service publishes a NATS event on
-`lfx.{object_type}.{action}`. Envelope shape, `IndexingEvent` payload, wildcard
+Legacy current writes attempt a NATS event on `lfx.{object_type}.{action}`.
+Audited processing publishes only after an actual current-body replacement:
+receipt/history appends, guarded no-ops, metadata-only updates and replay that
+only restores history do not publish. Delivery remains best-effort, not a
+durable/exactly-once notification guarantee. Envelope shape, `IndexingEvent` payload, wildcard
 subscriptions, and failure semantics are documented in the authoritative
 `docs/indexer-contract.md`. Cross-service topology lives in the
 central `/lfx-skills:lfx-platform-architecture` skill.

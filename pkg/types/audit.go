@@ -105,6 +105,31 @@ type AuditContent struct {
 // AuditRepresentationSnapshots is the only content representation in version 2.
 const AuditRepresentationSnapshots = "snapshots"
 
+// ValidAuditSchemaName applies the same token grammar used for a version 2
+// content.schema on the wire and in publisher policy manifests.
+func ValidAuditSchemaName(name string) bool {
+	return auditEventIDPattern.MatchString(name)
+}
+
+// ValidAuditPublisherName validates the shared publisher namespace used by
+// wire envelopes, startup policies and publisher:event_id storage identities.
+func ValidAuditPublisherName(name string) bool {
+	return auditPublisherPattern.MatchString(name)
+}
+
+// ValidAuditObjectType applies the shared audited subject/resource grammar,
+// including its 64-character limit and reserved index subject exclusion.
+func ValidAuditObjectType(name string) bool {
+	return auditObjectPattern.MatchString(name) && name != "index"
+}
+
+// RequiresLegacyFence identifies audited origins that depend on retained
+// revision guards. Only explicitly authorized backfill may bootstrap an
+// unfenced type, without claiming history coverage or ongoing guard stability.
+func (origin AuditOrigin) RequiresLegacyFence() bool {
+	return origin == AuditOriginMutation || origin == AuditOriginReindex || origin == AuditOriginSyncEcho
+}
+
 // AuditContentValidator must reject unregistered schemas, schemas not owned by
 // this publisher/resource type, and snapshots outside the approved allowlist.
 // No resource schemas or production validator registry ship with this contract.
@@ -155,11 +180,13 @@ func (e *IndexerMessageEnvelope) ValidateV2(objectType string, validateContent A
 	return e.validateV2(objectType, validateContent, true)
 }
 
+// validateV2 applies common wire/builder semantics while letting persisted,
+// credential-free builder messages defer transport authentication until dispatch.
 func (e *IndexerMessageEnvelope) validateV2(objectType string, validateContent AuditContentValidator, requireAuthentication bool) error {
 	if e == nil || e.SchemaVersion != AuditSchemaVersion || e.Audit == nil {
 		return fmt.Errorf("schema_version 2 and audit are required")
 	}
-	if !auditObjectPattern.MatchString(objectType) || objectType == "index" {
+	if !ValidAuditObjectType(objectType) {
 		return fmt.Errorf("invalid audit object type")
 	}
 	if requireAuthentication && strings.TrimSpace(e.Headers[constants.AuthorizationHeader]) == "" {
@@ -179,7 +206,7 @@ func (e *IndexerMessageEnvelope) validateV2(objectType string, validateContent A
 		return fmt.Errorf("version 2 indexing_config must be JSON serializable")
 	}
 	audit := e.Audit
-	if !auditPublisherPattern.MatchString(audit.Publisher) || !auditEventIDPattern.MatchString(audit.EventID) {
+	if !ValidAuditPublisherName(audit.Publisher) || !auditEventIDPattern.MatchString(audit.EventID) {
 		return fmt.Errorf("invalid audit publisher or event_id")
 	}
 	if audit.OccurredAt.IsZero() || audit.OccurredAt.Year() < 1 || audit.OccurredAt.Year() > 9999 {
@@ -252,7 +279,7 @@ func (e *IndexerMessageEnvelope) validateV2Action() error {
 
 func (e *IndexerMessageEnvelope) validateAuditContent(validate AuditContentValidator, objectType string) error {
 	content := e.Audit.Content
-	if content == nil || !auditEventIDPattern.MatchString(content.Schema) || content.Representation != AuditRepresentationSnapshots {
+	if content == nil || !ValidAuditSchemaName(content.Schema) || content.Representation != AuditRepresentationSnapshots {
 		return fmt.Errorf("audit.content requires a schema and snapshots representation")
 	}
 	before, after := len(content.Before) != 0, len(content.After) != 0

@@ -6,12 +6,14 @@
 This is the owner specification for `schema_version: 2` in
 `types.IndexerMessageEnvelope`. The public types and preflight validators are
 implemented in `pkg/types/audit.go`; public construction helpers live in
-`pkg/types/audit_builder.go`. The current consumer **rejects version 2
+`pkg/types/audit_builder.go`. The consumer **rejects version 2 by default
 before authentication, OpenSearch writes, cleanup, and post-index publication**.
-It does not yet implement history storage, deduplication, source-revision guards,
-publisher authorization, a schema registry, or a history query endpoint.
+Audited ingestion is opt-in and requires a reviewed, closed publisher/schema
+policy and the separate private history index; no production publisher policy
+is bundled. The history-query endpoint remains separate work. See the
+[rollout guide](audit-rollout.md).
 
-Do not enable publisher outbox delivery based on this contract-only release.
+Do not enable publisher outbox delivery based on the public types alone.
 Rejected messages follow the existing bounded JetStream retry/retention policy;
 they are not held indefinitely until a future consumer can process them.
 
@@ -25,7 +27,8 @@ they are not held indefinitely until a future consumer can process them.
   actions. It must not carry the new envelope discriminator or audit block.
 
 The legacy/current contract is [indexer-contract.md](indexer-contract.md).
-The future storage/recovery design is [audit-history-design.md](audit-history-design.md).
+The opt-in storage/recovery implementation and remaining rollout gates are
+described in [audit-history-design.md](audit-history-design.md).
 Known publisher source evidence and the required staging verification are in
 [publisher-compatibility.md](publisher-compatibility.md). No source inventory can
 prove the absence of collisions in uninspected deployed clients or retained data.
@@ -36,7 +39,7 @@ prove the absence of collisions in uninspected deployed clients or retained data
 | --- | --- |
 | Neither `schema_version` nor `audit` present | Existing platform V1/V2 behavior |
 | `audit` present without a version, including `audit: null` | Reject; never downgrade to legacy |
-| Version 2 with audit present | Reject: audit processing is not enabled |
+| Version 2 with audit present | Reject by default; when enabled, require approved publisher/subject/origin/schema, then append/verify history before a revision-guarded current write |
 | Version 2 with audit absent/null | Reject: audit is required |
 | Explicit version 0, 1, or any other unsupported version | Reject |
 | Null, string, array, object, or non-integer version | Reject |
@@ -187,8 +190,9 @@ contract for historical request accountability; this is not approval to persist
 an arbitrary user profile. They must not be copied into ordinary current-resource
 documents, general logs, metrics, tracing, or public/anonymous history responses.
 Profile data is not an authorization grant. Future storage/read implementations
-must restrict it to history-authorized callers, define bounded retention and
-erasure/export obligations, and avoid general full-text indexing of these fields
+   must restrict it to history-authorized callers, retain approved audit data
+   indefinitely without age-based expiry, define targeted erasure/export obligations,
+   and avoid general full-text indexing of these fields
 by default. Approved resource snapshots remain a separate schema allowlist.
 Controlled erasure is an exception to ordinary append-only ingestion: it must
 cover both actor copies and applicable snapshots/outbox/repair stores, coordinate
@@ -289,10 +293,14 @@ a new delivery ID; do not reuse a mutation's ID for projection work. IDs must
 remain unique across all origins within the publisher namespace, not merely
 within a resource type or origin. No separate projection identity field exists.
 Projection deduplication must not fabricate a history record merely to store a
-delivery receipt; its operational state and source-revision guard are separate
-implementation concerns required before enabling projection processing.
+delivery receipt; its minimal create-only operational state lives in the
+private `resource-audit-deliveries-v1` index, separate from mutation history.
+The current-document source-revision guard atomically preserves a stable
+same-revision projection ordering key so older replays cannot replace newer
+applied projections. Delivery receipts also reserve publisher/event identities
+across mutation and projection origins.
 
-All origins are currently rejected by runtime admission. Future processing must
+All origins are rejected by default runtime admission. Enabled processing must
 authorize classification before selecting append versus projection-only paths,
 and must not let an old projection overwrite newer current state. True source
 mutations caused by imports or synchronization are still `mutation`; they are
@@ -328,9 +336,9 @@ must not invent history or bypass ordering. Stable downstream notification ident
 and replay semantics require coordination with subscribers; the existing
 best-effort post-index event is not a substitute for the audit event.
 
-Before enabling writes, implement bounded retention, erasure/replay fences,
+Before enabling writes, implement indefinite retention with targeted erasure/replay fences,
 index permissions, exhausted-delivery monitoring, and reconciliation. Neither a
-new event ID nor a new ingestion time may resurrect purged/erased history.
+new event ID nor a new ingestion time may resurrect explicitly erased history.
 Future retention-aware disposition must not accidentally prevent removal of a
 deleted current resource; its explicit policy is a rollout prerequisite.
 

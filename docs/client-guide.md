@@ -136,7 +136,7 @@ approved production snapshot schema or authorization policy.
   refresh it. Avatar URLs are not archived image bytes and must be credential-free,
   HTTPS, and query/fragment-free; use null when no approved stable URL is available.
 - Actor profile snapshots are personal history data, not public search data or
-  log context. History authorization, bounded retention, and erasure/replay
+   log context. History authorization, indefinite audit retention, and erasure/replay
   controls must cover them before audited processing can be enabled.
 - Creates require after scope/snapshot only; updates require both sides; deletes
   require before scope/snapshot only and matching UID/config identity. All audited

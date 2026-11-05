@@ -8,10 +8,11 @@ A high-performance, indexer service for the LFX V2 platform that processes resou
 > in [`docs/client-guide.md`](docs/client-guide.md).
 
 > **Audit envelope version 2:** public types and preflight validators are defined
-> in [`docs/audit-v2-contract.md`](docs/audit-v2-contract.md). Processing is not
-> enabled: versioned/audit-bearing messages are rejected before writes rather
-> than silently indexed without history. Existing unversioned platform V1/V2
-> messages retain current behavior. No append-only history is stored yet.
+> in [`docs/audit-v2-contract.md`](docs/audit-v2-contract.md). Processing is
+> disabled by default; versioned messages are rejected until the strict
+> publisher policy, private index, and guarded projection are explicitly
+> enabled. See the [audit rollout guide](docs/audit-rollout.md). Existing
+> unversioned platform V1/V2 messages retain current behavior by default.
 > The contract preserves denormalized user attribution (name, avatar URL, email,
 > and username) so historical records do not depend on the actor account still existing.
 
@@ -345,10 +346,10 @@ OPENSEARCH_INDEX=resources                   # OpenSearch index name
 NATS_MAX_RECONNECTS=-1                       # Max reconnection attempts (-1 = infinite, recommended for production)
 NATS_RECONNECT_WAIT=2s                       # Wait time between reconnects
 NATS_CONNECTION_TIMEOUT=10s                  # Initial connection timeout
-NATS_DRAIN_TIMEOUT=55s                       # Time to wait for in-flight handlers to finish on shutdown; must be at least OPENSEARCH_TIMEOUT + OPENSEARCH_BATCH_MAX_WAIT + 5s safety margin (validated at startup), and below the deployment's terminationGracePeriodSeconds with headroom for the health server's own shutdown delay, or the pod is SIGKILLed mid-drain
+NATS_DRAIN_TIMEOUT=55s                       # Legacy minimum: timeout + batch wait + 5s. Audit minimum: max(5*timeout + 5s, legacy minimum); validated at startup and chart render
 
 # NATS Consumer/Worker Settings
-NATS_ACK_WAIT=45s                            # JetStream redelivery wait; this is the chart's shipped value, not the code default — unset, LoadConfig derives OPENSEARCH_TIMEOUT + OPENSEARCH_BATCH_MAX_WAIT + 10s safety margin (40.2s with defaults). Must be at least that derived minimum (validated at startup)
+NATS_ACK_WAIT=45s                            # Chart default, not the derived code default. Unset/0 derives timeout + batch wait + 10s; audit uses max(5*timeout + 10s, legacy minimum)
 NATS_WORKER_COUNT=100                        # Concurrent message handlers per pod
 NATS_MAX_ACK_PENDING=100                     # JetStream consumer's MaxAckPending (cluster-wide, shared across replicas); size to aggregate worker capacity, e.g. NATS_WORKER_COUNT * replica count
 NATS_PENDING_MSG_LIMIT=1000000               # Max pending messages buffered per subscription
@@ -358,6 +359,13 @@ NATS_PENDING_BYTES_LIMIT=536870912           # Max pending bytes buffered per su
 OPENSEARCH_TIMEOUT=30s                       # Response header timeout for direct (non-batched) calls — body reads are not bounded there. Batch flushes (BatchIndexer) apply it as an end-to-end deadline covering the whole bulk request, body reads included
 OPENSEARCH_BATCH_MAX_SIZE=50                 # Max documents buffered before a bulk flush
 OPENSEARCH_BATCH_MAX_WAIT=200ms              # Max time to wait before flushing a partial batch
+# Optional for all OpenSearch traffic, required when AUDIT_ENABLED=true.
+# Supply OPENSEARCH_USERNAME / OPENSEARCH_PASSWORD from a secret, not source control.
+
+# Audited history (disabled by default; see docs/audit-rollout.md)
+AUDIT_ENABLED=false
+# When enabled: AUDIT_POLICY_FILE=/etc/indexer/audit-policy.json
+# When enabled: AUDIT_REQUIRED_TYPES=committee,committee_member
 
 # JWT Configuration
 JWT_ISSUER=heimdall                          # JWT issuer validation
@@ -372,6 +380,14 @@ LOG_FORMAT=text                              # Log format (text,json)
 # Cleanup Service (Background Cleanup)
 JANITOR_ENABLED=true                         # Enable cleanup service (default: true)
 ```
+
+With audit enabled and the default 30s OpenSearch timeout, configure at least
+160s ACK wait, 155s drain and 160s pod termination grace; larger legacy batching
+budgets can raise these minimums. An unset/zero ACK wait derives its valid bound.
+Helm rejects insufficient audit timings before deployment, including the grace
+period's drain-plus-5s headroom. Chart timing guards support integer h/m/s/ms
+components (for example `2m40s` or `1500ms`). See [audit rollout](docs/audit-rollout.md)
+for the formulas and first-type bootstrap sequence.
 
 ### NATS Subject Patterns & Load Balancing
 

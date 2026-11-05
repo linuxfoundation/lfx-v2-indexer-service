@@ -23,10 +23,11 @@ paths:
 
 The indexer is generic. Publishers tell it everything via the envelope. Follow this workflow for any change that touches the contract.
 
-Audit envelope version 2 is defined in `docs/audit-v2-contract.md`, but runtime
-processing is not enabled. Existing publishers omit both `schema_version` and
+Audit envelope version 2 is defined in `docs/audit-v2-contract.md`; runtime
+processing is opt-in and disabled by default. Existing publishers omit both `schema_version` and
 `audit`. Do not opt publishers into audited delivery until persistence, trust,
-schema approval, retention, and fleet rollout prerequisites are implemented.
+schema approval, retention, and fleet rollout prerequisites are satisfied; see
+`docs/audit-rollout.md` for the operational sequence.
 Use the strict public preflight validators for contract work; they are not an
 admission or delivery guarantee. The platform V2 subject naming is independent
 of this new envelope version.
@@ -61,10 +62,12 @@ of this new envelope version.
    current fallback for mismatched config is not valid for audited deletes.
 6. **Update the per-service contract doc** at `docs/indexer-contract.md` in
    the owning service in the same PR as the publisher change.
-7. **For indexer-internal changes**, ensure NATS replies remain `"OK"` on
-   success and `"ERROR: <details>"` on failure, and that domain events on
-   `lfx.{object_type}.{action}` continue to fire after every successful
-   OpenSearch write.
+7. **For indexer-internal changes**, preserve the deployed JetStream ACK/NAK
+   semantics; broker persistence acknowledgment is not processing success.
+   Compatibility reply helpers retain `"OK"`/`"ERROR: <details>"`. Legacy
+   current writes attempt `lfx.{object_type}.{action}` events. Audit v2 attempts
+   them only after current-body replacement, not receipt/history appends,
+   guarded no-ops, identity-only updates or replay that only restores history.
 8. **Schema evolution**: adding a top-level OpenSearch field is breaking.
    Coordinate with the query-service team and the indexer contract owner before
    changing storage or publisher code.

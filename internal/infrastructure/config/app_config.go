@@ -14,12 +14,18 @@ import (
 	"time"
 
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/types"
 )
 
 // ackWaitSafetyMargin is added on top of OpenSearch.Timeout + OpenSearch.BatchMaxWait
 // both when deriving the default NATS AckWait and when validating an
 // explicitly-set one, so the two stay consistent with each other.
 const ackWaitSafetyMargin = 10 * time.Second
+
+// An audited retry can create/verify the delivery receipt, create/verify
+// mutation history, then perform a guarded current write: five sequential
+// OpenSearch requests in the worst case.
+const auditMaxOpenSearchRequests = 5
 
 // drainTimeoutSafetyMargin is added on top of OpenSearch.Timeout +
 // OpenSearch.BatchMaxWait when validating NATS.DrainTimeout, so a detached
@@ -37,6 +43,14 @@ type AppConfig struct {
 	Logging    LoggingConfig    `json:"logging"`
 	Janitor    JanitorConfig    `json:"janitor"`
 	Health     HealthConfig     `json:"health"`
+	Audit      AuditConfig      `json:"audit"`
+}
+
+// AuditConfig controls opt-in v2 ingestion. Empty policies never grant access.
+type AuditConfig struct {
+	Enabled       bool     `json:"enabled"`
+	PolicyFile    string   `json:"policy_file"`
+	RequiredTypes []string `json:"required_types"`
 }
 
 // ServerConfig contains minimal server configuration for health checks
@@ -147,6 +161,8 @@ func LoadConfig() (*AppConfig, error) {
 		},
 		OpenSearch: OpenSearchConfig{
 			URL:          getEnvStringWithLogging("OPENSEARCH_URL", "http://localhost:9200", envVarsUsed, defaultsUsed, logger),
+			Username:     getEnvStringWithLogging("OPENSEARCH_USERNAME", "", envVarsUsed, defaultsUsed, logger),
+			Password:     getEnvStringWithLogging("OPENSEARCH_PASSWORD", "", envVarsUsed, defaultsUsed, logger),
 			Index:        getEnvStringWithLogging("OPENSEARCH_INDEX", "resources", envVarsUsed, defaultsUsed, logger),
 			Timeout:      getEnvDurationWithLogging("OPENSEARCH_TIMEOUT", 30*time.Second, envVarsUsed, defaultsUsed, logger),
 			BatchMaxSize: getEnvIntWithLogging("OPENSEARCH_BATCH_MAX_SIZE", 50, envVarsUsed, defaultsUsed, logger),
@@ -186,6 +202,17 @@ func LoadConfig() (*AppConfig, error) {
 			CacheDuration:          getEnvDurationWithLogging("HEALTH_CACHE_DURATION", 5*time.Second, envVarsUsed, defaultsUsed, logger),
 			EnableDetailedResponse: getEnvBoolWithLogging("HEALTH_DETAILED_RESPONSE", true, envVarsUsed, defaultsUsed, logger),
 		},
+		Audit: AuditConfig{
+			Enabled:    getEnvBoolWithLogging("AUDIT_ENABLED", false, envVarsUsed, defaultsUsed, logger),
+			PolicyFile: getEnvStringWithLogging("AUDIT_POLICY_FILE", "", envVarsUsed, defaultsUsed, logger),
+			RequiredTypes: func() []string {
+				value := getEnvStringWithLogging("AUDIT_REQUIRED_TYPES", "", envVarsUsed, defaultsUsed, logger)
+				if value == "" {
+					return nil
+				}
+				return strings.Split(value, ",")
+			}(),
+		},
 	}
 
 	// AckWait must exceed the worst-case time a message can spend in flight:
@@ -200,7 +227,7 @@ func LoadConfig() (*AppConfig, error) {
 	case config.NATS.AckWait < 0:
 		return nil, fmt.Errorf("NATS_ACK_WAIT must not be negative, got: %v", config.NATS.AckWait)
 	case config.NATS.AckWait == 0:
-		config.NATS.AckWait = config.OpenSearch.Timeout + config.OpenSearch.BatchMaxWait + ackWaitSafetyMargin
+		config.NATS.AckWait = config.minimumAckWait()
 		defaultsUsed["NATS_ACK_WAIT"] = true
 	}
 
@@ -243,6 +270,7 @@ func (c *AppConfig) Validate() error {
 		{"logging", c.validateLogging},
 		{"janitor", c.validateJanitor},
 		{"health", c.validateHealth},
+		{"audit", c.validateAudit},
 	}
 
 	for _, step := range validationSteps {
@@ -255,6 +283,26 @@ func (c *AppConfig) Validate() error {
 	}
 
 	logger.Info("Configuration validation completed successfully")
+	return nil
+}
+
+// validateAudit requires explicit policy, adopted resource types and private
+// OpenSearch credentials only when audited ingestion is enabled.
+func (c *AppConfig) validateAudit() error {
+	if !c.Audit.Enabled {
+		return nil
+	}
+	if c.Audit.PolicyFile == "" || len(c.Audit.RequiredTypes) == 0 {
+		return fmt.Errorf("AUDIT_POLICY_FILE and AUDIT_REQUIRED_TYPES are required when AUDIT_ENABLED=true")
+	}
+	if c.OpenSearch.Username == "" || c.OpenSearch.Password == "" {
+		return fmt.Errorf("authenticated OpenSearch credentials are required for audited ingestion")
+	}
+	for _, resource := range c.Audit.RequiredTypes {
+		if !types.ValidAuditObjectType(resource) {
+			return fmt.Errorf("invalid AUDIT_REQUIRED_TYPES entry")
+		}
+	}
 	return nil
 }
 
@@ -337,8 +385,11 @@ func (c *AppConfig) validateNATS() error {
 	// comparison must allow equality — only reject values strictly below
 	// the minimum, or every deployment relying on the default would fail
 	// this check immediately after LoadConfig sets it.
-	minAckWait := c.OpenSearch.Timeout + c.OpenSearch.BatchMaxWait + ackWaitSafetyMargin
+	minAckWait := c.minimumAckWait()
 	if c.NATS.AckWait < minAckWait {
+		if c.Audit.Enabled {
+			return fmt.Errorf("NATS ack wait (%v) must be at least max(5 * OpenSearch timeout + 10s, OpenSearch timeout + batch max wait + 10s) (%v)", c.NATS.AckWait, minAckWait)
+		}
 		return fmt.Errorf("NATS ack wait (%v) must be at least OpenSearch timeout plus batch max wait plus safety margin (%v)", c.NATS.AckWait, minAckWait)
 	}
 
@@ -350,11 +401,29 @@ func (c *AppConfig) validateNATS() error {
 	// running: a write that goes on to succeed afterward can no longer
 	// publish its domain event or Ack the message.
 	minDrainTimeout := c.OpenSearch.Timeout + c.OpenSearch.BatchMaxWait + drainTimeoutSafetyMargin
+	if c.Audit.Enabled {
+		minDrainTimeout = max(minDrainTimeout, auditMaxOpenSearchRequests*c.OpenSearch.Timeout+drainTimeoutSafetyMargin)
+	}
 	if c.NATS.DrainTimeout < minDrainTimeout {
+		if c.Audit.Enabled {
+			return fmt.Errorf("NATS drain timeout (%v) must be at least max(5 * OpenSearch timeout + 5s, OpenSearch timeout + batch max wait + 5s) (%v)", c.NATS.DrainTimeout, minDrainTimeout)
+		}
 		return fmt.Errorf("NATS drain timeout (%v) must be at least OpenSearch timeout plus batch max wait plus safety margin (%v)", c.NATS.DrainTimeout, minDrainTimeout)
 	}
 
 	return nil
+}
+
+// minimumAckWait covers the larger legacy-batch or audited multi-request budget
+// so enabling audit cannot shorten the retry window for other publishers.
+func (c *AppConfig) minimumAckWait() time.Duration {
+	legacy := c.OpenSearch.Timeout + c.OpenSearch.BatchMaxWait + ackWaitSafetyMargin
+	if c.Audit.Enabled {
+		if audited := auditMaxOpenSearchRequests*c.OpenSearch.Timeout + ackWaitSafetyMargin; audited > legacy {
+			return audited
+		}
+	}
+	return legacy
 }
 
 // validateOpenSearch validates OpenSearch configuration
