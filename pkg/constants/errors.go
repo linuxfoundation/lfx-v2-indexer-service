@@ -36,6 +36,7 @@ const (
 	ErrBulkOperation      = "failed to perform bulk operation"
 	ErrDecodeBulkResponse = "failed to decode bulk response"
 	ErrOptimisticUpdate   = "failed to perform optimistic update"
+	ErrMissingVersionInfo = "document missing seq_no or primary_term, skipping optimistic update"
 
 	// Log messages
 	LogFailedIndexDocument       = "Failed to index document"

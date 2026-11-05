@@ -5,12 +5,17 @@ package auth
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/auth0/go-jwt-middleware/v2/validator"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -248,6 +253,379 @@ func TestAuthRepository_ParsePrincipals(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Empty(t, principals)
 		assert.Len(t, principals, 0)
+	})
+
+	// canceled_context pins that a context deadline/cancellation observed
+	// while validating a JWT-shaped (dot-containing) token is returned as an
+	// error, instead of being swallowed like an ordinary invalid-token
+	// failure. testToken is used because "invalid-token" has no "." and
+	// would be short-circuited as a non-JWT token before ctx is ever
+	// consulted.
+	t.Run("canceled_context", func(t *testing.T) {
+		canceledCtx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		headers := map[string]string{
+			constants.AuthorizationHeader: "Bearer " + testToken,
+		}
+
+		principals, err := repo.ParsePrincipals(canceledCtx, headers)
+
+		require.Error(t, err)
+		assert.Nil(t, principals)
+		assert.ErrorIs(t, err, context.Canceled)
+	})
+
+	t.Run("canceled_context_on_behalf_of", func(t *testing.T) {
+		canceledCtx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		headers := map[string]string{
+			constants.OnBehalfOfHeader: testToken,
+		}
+
+		principals, err := repo.ParsePrincipals(canceledCtx, headers)
+
+		require.Error(t, err)
+		assert.Nil(t, principals)
+		assert.ErrorIs(t, err, context.Canceled)
+	})
+
+	// validator_own_deadline_not_swallowed exercises the scenario where
+	// jwksHTTPClient's Timeout (bounding a single fetch) fires on its own,
+	// well before the outer parsePrincipalsTimeout ctx expires: the
+	// validator returns an error wrapping context.DeadlineExceeded while
+	// ctx.Err() is still nil. Before validationDeadlineErr, only ctx.Err()
+	// was checked, so this case fell through and was swallowed as an
+	// ordinary invalid-token failure instead of being propagated.
+	t.Run("validator_own_deadline_not_swallowed", func(t *testing.T) {
+		timingOutKeyFunc := func(ctx context.Context) (interface{}, error) {
+			return nil, fmt.Errorf("jwks fetch: %w", context.DeadlineExceeded)
+		}
+		timingOutValidator, err := validator.New(
+			timingOutKeyFunc,
+			validator.PS256,
+			testIssuer,
+			[]string{testAudience},
+		)
+		require.NoError(t, err)
+
+		timingOutRepo := &AuthRepository{
+			validator:      timingOutValidator,
+			issuer:         testIssuer,
+			audiences:      []string{testAudience},
+			logger:         logger,
+			validationGate: make(chan struct{}, maxConcurrentValidations),
+		}
+
+		// jose.ParseSigned rejects testToken's "invalid-signature" suffix as
+		// malformed base64 before the validator ever calls keyFunc, so a
+		// properly-shaped (if unverifiable) signature is required to reach
+		// the keyFunc path this test is exercising.
+		header, payload, _ := strings.Cut(testToken, ".")
+		payload, _, _ = strings.Cut(payload, ".")
+		signature := base64.RawURLEncoding.EncodeToString([]byte("unverified-signature-bytes"))
+		shapedToken := header + "." + payload + "." + signature
+
+		headers := map[string]string{
+			constants.AuthorizationHeader: "Bearer " + shapedToken,
+		}
+
+		principals, err := timingOutRepo.ParsePrincipals(context.Background(), headers)
+
+		require.Error(t, err)
+		assert.Nil(t, principals)
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
+	})
+
+	t.Run("validator_own_deadline_not_swallowed_on_behalf_of", func(t *testing.T) {
+		timingOutKeyFunc := func(ctx context.Context) (interface{}, error) {
+			return nil, fmt.Errorf("jwks fetch: %w", context.DeadlineExceeded)
+		}
+		timingOutValidator, err := validator.New(
+			timingOutKeyFunc,
+			validator.PS256,
+			testIssuer,
+			[]string{testAudience},
+		)
+		require.NoError(t, err)
+
+		timingOutRepo := &AuthRepository{
+			validator:      timingOutValidator,
+			issuer:         testIssuer,
+			audiences:      []string{testAudience},
+			logger:         logger,
+			validationGate: make(chan struct{}, maxConcurrentValidations),
+		}
+
+		header, payload, _ := strings.Cut(testToken, ".")
+		payload, _, _ = strings.Cut(payload, ".")
+		signature := base64.RawURLEncoding.EncodeToString([]byte("unverified-signature-bytes"))
+		shapedToken := header + "." + payload + "." + signature
+
+		headers := map[string]string{
+			constants.OnBehalfOfHeader: shapedToken,
+		}
+
+		principals, err := timingOutRepo.ParsePrincipals(context.Background(), headers)
+
+		require.Error(t, err)
+		assert.Nil(t, principals)
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
+	})
+
+	// deadline_fires_while_validation_blocked exercises the scenario
+	// validateTokenWithCtx's doc comment describes: a keyFunc that never
+	// observes ctx (simulating CachingProvider.refreshKey's plain
+	// sync.Mutex) blocks indefinitely, so only the goroutine+select race
+	// against ctx.Done() lets ParsePrincipals return before the deadline.
+	// Calling r.validator.ValidateToken directly, without that race, would
+	// make this test hang until it times out.
+	t.Run("deadline_fires_while_validation_blocked", func(t *testing.T) {
+		unblock := make(chan struct{})
+		defer close(unblock)
+
+		// keyFuncEntered confirms blockingKeyFunc actually started (with
+		// ctx not yet expired) before ParsePrincipals returns, so this test
+		// can't pass by accident if the goroutine it's meant to catch never
+		// reaches blockingKeyFunc within the deadline.
+		keyFuncEntered := make(chan error, 1)
+		blockingKeyFunc := func(ctx context.Context) (interface{}, error) {
+			keyFuncEntered <- ctx.Err()
+			<-unblock
+			return nil, errors.New("keyFunc should not complete before the test asserts")
+		}
+
+		blockingValidator, err := validator.New(
+			blockingKeyFunc,
+			validator.PS256,
+			testIssuer,
+			[]string{testAudience},
+		)
+		require.NoError(t, err)
+
+		blockingRepo := &AuthRepository{
+			validator:      blockingValidator,
+			issuer:         testIssuer,
+			audiences:      []string{testAudience},
+			logger:         logger,
+			validationGate: make(chan struct{}, maxConcurrentValidations),
+		}
+
+		// A fixed deadline would race the validation goroutine's scheduling
+		// against its own expiry: under load, ctx could expire before
+		// blockingKeyFunc is even scheduled, failing the keyFuncEntered
+		// assertion below for a reason unrelated to validateTokenWithCtx's
+		// correctness. Cancelling only after keyFuncEntered confirms the
+		// goroutine has started makes the ordering deterministic instead.
+		deadlineCtx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		// jwt.ParseSigned requires a syntactically valid (base64url) third
+		// segment before keyFunc is ever reached; testToken's "invalid-signature"
+		// segment isn't valid base64 and would fail before this test ever
+		// exercises the blocking keyFunc, so a well-formed signature segment is
+		// built here instead. Its contents never matter since blockingKeyFunc
+		// never returns.
+		header, payload, _ := strings.Cut(testToken, ".")
+		payload, _, _ = strings.Cut(payload, ".")
+		signature := base64.RawURLEncoding.EncodeToString([]byte("unverified-signature-bytes"))
+		blockingToken := header + "." + payload + "." + signature
+
+		headers := map[string]string{
+			constants.AuthorizationHeader: "Bearer " + blockingToken,
+		}
+
+		type parseResult struct {
+			principals interface{}
+			err        error
+		}
+		resultCh := make(chan parseResult, 1)
+		go func() {
+			principals, err := blockingRepo.ParsePrincipals(deadlineCtx, headers)
+			resultCh <- parseResult{principals: principals, err: err}
+		}()
+
+		select {
+		case keyFuncErr := <-keyFuncEntered:
+			require.NoError(t, keyFuncErr, "keyFunc must start before ctx is canceled")
+		case <-time.After(time.Second):
+			t.Fatal("keyFunc was not entered")
+		}
+
+		start := time.Now()
+		cancel()
+
+		var res parseResult
+		select {
+		case res = <-resultCh:
+		case <-time.After(time.Second):
+			t.Fatal("ParsePrincipals did not return after ctx was canceled")
+		}
+		elapsed := time.Since(start)
+
+		require.Error(t, res.err)
+		assert.Nil(t, res.principals)
+		assert.ErrorIs(t, res.err, context.Canceled)
+		assert.Less(t, elapsed, time.Second,
+			"ParsePrincipals must return once ctx is canceled, even though the underlying validation call is still blocked")
+	})
+
+	t.Run("validation_gate_bounds_stuck_goroutines", func(t *testing.T) {
+		var wg sync.WaitGroup
+		// Deferred in this order so close(unblock) runs first (defers are
+		// LIFO): it releases the gate-filling goroutines below, and only
+		// then does wg.Wait() block on their exit. Reversing the order
+		// would deadlock, since the goroutines only return once unblock
+		// closes.
+		defer wg.Wait()
+		unblock := make(chan struct{})
+		defer close(unblock)
+
+		// keyFuncCalls counts every entry into blockingKeyFunc. Each entry
+		// corresponds to one validateTokenWithCtx goroutine that reached
+		// the underlying ValidateToken call, which is exactly what
+		// validationGate must cap: with the gate full, a blocked caller
+		// must fail via its own ctx without ever incrementing this counter.
+		var keyFuncCalls atomic.Int32
+		blockingKeyFunc := func(ctx context.Context) (interface{}, error) {
+			keyFuncCalls.Add(1)
+			<-unblock
+			return nil, errors.New("keyFunc should not complete before the test asserts")
+		}
+
+		blockingValidator, err := validator.New(
+			blockingKeyFunc,
+			validator.PS256,
+			testIssuer,
+			[]string{testAudience},
+		)
+		require.NoError(t, err)
+
+		const gateSize = 2
+		gatedRepo := &AuthRepository{
+			validator:      blockingValidator,
+			issuer:         testIssuer,
+			audiences:      []string{testAudience},
+			logger:         logger,
+			validationGate: make(chan struct{}, gateSize),
+		}
+
+		header, payload, _ := strings.Cut(testToken, ".")
+		payload, _, _ = strings.Cut(payload, ".")
+		signature := base64.RawURLEncoding.EncodeToString([]byte("unverified-signature-bytes"))
+		blockingToken := header + "." + payload + "." + signature
+
+		headers := map[string]string{
+			constants.AuthorizationHeader: "Bearer " + blockingToken,
+		}
+
+		// Fill the gate with calls whose ctx never expires on its own, so
+		// their goroutines stay permanently stuck on blockingKeyFunc and
+		// permanently hold their slot, simulating a sustained outage. Each
+		// one only returns once blockingKeyFunc does, which happens when
+		// this subtest's deferred close(unblock) runs; wg lets the deferred
+		// wg.Wait() above confirm they've actually exited before the
+		// subtest returns, instead of leaking them into later tests.
+		wg.Add(gateSize)
+		for i := 0; i < gateSize; i++ {
+			go func() {
+				defer wg.Done()
+				ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+				defer cancel()
+				_, _ = gatedRepo.ParsePrincipals(ctx, headers)
+			}()
+		}
+
+		require.Eventually(t, func() bool {
+			return keyFuncCalls.Load() == gateSize
+		}, time.Second, time.Millisecond, "gate-filling calls must all reach blockingKeyFunc")
+
+		// With the gate full, further calls must fail fast via their own
+		// deadline rather than spawning another goroutine that would reach
+		// blockingKeyFunc and get stuck too: keyFuncCalls must stay pinned
+		// at gateSize no matter how many more calls are attempted.
+		const extraCalls = 5
+		shortDeadline := 20 * time.Millisecond
+		for i := 0; i < extraCalls; i++ {
+			deadlineCtx, cancel := context.WithTimeout(context.Background(), shortDeadline)
+
+			start := time.Now()
+			principals, err := gatedRepo.ParsePrincipals(deadlineCtx, headers)
+			elapsed := time.Since(start)
+			cancel()
+
+			require.Error(t, err)
+			assert.Nil(t, principals)
+			assert.ErrorIs(t, err, context.DeadlineExceeded)
+			assert.Less(t, elapsed, time.Second,
+				"a caller waiting for a gate slot must fail fast once its own ctx deadline fires")
+		}
+
+		assert.Equal(t, int32(gateSize), keyFuncCalls.Load(),
+			"validationGate must prevent additional goroutines from reaching ValidateToken while it is full")
+	})
+
+	t.Run("gate_slot_released_when_ctx_already_done", func(t *testing.T) {
+		// select does not favor one ready case over another, so an
+		// already-canceled ctx can still win the gate-send case. Without
+		// validateTokenWithCtx rechecking ctx.Err() immediately after
+		// acquiring the slot, it would spawn a goroutine that blocks
+		// forever on blockingKeyFunc (since unblock is never closed in
+		// this subtest) while permanently holding the slot, starving every
+		// later call. Looping forces that race window open repeatedly;
+		// asserting the gate is empty after every call catches a leak
+		// whichever case the race picks.
+		unblock := make(chan struct{})
+		blockingKeyFunc := func(ctx context.Context) (interface{}, error) {
+			<-unblock
+			return nil, errors.New("keyFunc should not be reached once ctx is already done")
+		}
+		blockingValidator, err := validator.New(
+			blockingKeyFunc,
+			validator.PS256,
+			testIssuer,
+			[]string{testAudience},
+		)
+		require.NoError(t, err)
+
+		gatedRepo := &AuthRepository{
+			validator:      blockingValidator,
+			issuer:         testIssuer,
+			audiences:      []string{testAudience},
+			logger:         logger,
+			validationGate: make(chan struct{}, 1),
+		}
+
+		header, payload, _ := strings.Cut(testToken, ".")
+		payload, _, _ = strings.Cut(payload, ".")
+		signature := base64.RawURLEncoding.EncodeToString([]byte("unverified-signature-bytes"))
+		blockingToken := header + "." + payload + "." + signature
+
+		const iterations = 200
+		for i := 0; i < iterations; i++ {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				_, err := gatedRepo.validateTokenWithCtx(ctx, blockingToken)
+				assert.ErrorIs(t, err, context.Canceled)
+			}()
+
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				close(unblock)
+				t.Fatalf("iteration %d: validateTokenWithCtx did not return for an already-canceled ctx", i)
+			}
+
+			assert.Equal(t, 0, len(gatedRepo.validationGate),
+				"iteration %d: gate slot leaked for an already-canceled ctx", i)
+		}
+
+		close(unblock)
 	})
 }
 

@@ -302,9 +302,11 @@ func (b *BatchIndexer) flushBatch(batch []*pendingIndexOp, needsRefresh bool) {
 		// as failures rather than defaulting to success, so a broken
 		// implementation can't make ProcessTransaction publish events for
 		// documents that were never confirmed written.
-		itemErr := fmt.Errorf("%s: bulk index response missing result for item %d", constants.ErrBulkOperation, i)
+		var itemErr error
 		if i < len(itemErrors) {
 			itemErr = itemErrors[i]
+		} else {
+			itemErr = fmt.Errorf("%s: bulk index response missing result for item %d", constants.ErrBulkOperation, i)
 		}
 		p.result <- itemErr
 	}
