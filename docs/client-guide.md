@@ -233,7 +233,15 @@ Templates use double curly braces: `{{ field_name }}`
 3. **Nested Fields**: `"{{ parent.id }}"` - Dot notation for nested objects
 4. **Arrays**: `["{{ uid }}", "{{ parent_id }}"]` - Templates in arrays
 5. **Multiple Templates**: `"{{ name }} - {{ description }}"` - Multiple in one string
-6. **Escaping**: `"\{{ not_a_template }}"` - Use backslash to escape
+6. **Escaping**: `"\{{ not_a_template }}"` - A backslash makes only the `{{` it precedes literal; other templates in the same string still expand
+
+**Expansion rules:**
+
+- Expansion is a single pass. Values substituted from `data` are never re-scanned, so a `data.name` of `"{{ slug }}"` is indexed as that literal text.
+- A reference is unresolvable when its path is absent from `data` or runs through a non-object (for example `{{ uid.x }}` when `uid` is a string).
+- In identity and authorization fields (`object_id`, `access_check_object`, `access_check_relation`, `history_check_object`, `history_check_relation`, `parent_refs`) an unresolvable reference rejects the message.
+- In every other field (`sort_name`, `name_and_aliases`, `fulltext`, `tags`, `contacts`) an unresolvable reference is replaced with an empty string and a warning is logged.
+- Every string in `indexing_config` is scanned, including end-user text a publisher copies into it, so a user-entered `{{ ... }}` is expanded (or blanked). To keep user text literal, reference it from `data` (`"sort_name": "{{ name }}"`) or escape it as `\{{`. Template expansion is scheduled for removal; new publishers should send concrete values.
 
 **Example with Templates:**
 
