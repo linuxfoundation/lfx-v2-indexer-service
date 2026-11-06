@@ -173,8 +173,8 @@ func (e *IndexerMessageEnvelope) validateV2(objectType string, validateContent A
 		!auditRef(config.HistoryCheckObject) || !auditRelationPattern.MatchString(config.HistoryCheckRelation) {
 		return fmt.Errorf("concrete access and history authorization fields are required")
 	}
-	// Version 2 config strings are literal, never passed through the legacy
-	// template expander. Concrete identity/reference checks above still apply.
+	// Version 2 config strings are literal. Concrete identity/reference checks
+	// above still apply.
 	if _, err := json.Marshal(config); err != nil {
 		return fmt.Errorf("version 2 indexing_config must be JSON serializable")
 	}
