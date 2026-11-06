@@ -213,14 +213,9 @@ The server will:
 
 ### Template Support in `indexing_config`
 
-To reduce message payload size and eliminate redundancy, `indexing_config` supports template variables that reference fields from the `data` object using `{{ field_name }}` syntax.
+> **Deprecated:** template expansion is scheduled for removal (lfx-self-serve-ops#1367). New publishers should send concrete values; existing template users should migrate.
 
-**Benefits:**
-
-- **Reduced Payload Size**: Avoid repeating the same values multiple times
-- **Single Source of Truth**: Data field values are the canonical source
-- **Less Error-Prone**: No risk of mismatched values between data and config
-- **Type Preservation**: Templates can preserve original data types
+`indexing_config` supports template variables that reference fields from the `data` object using `{{ field_name }}` syntax.
 
 **Template Syntax:**
 
@@ -342,8 +337,7 @@ Templates use double curly braces: `{{ field_name }}`
 
 **Best Practices:**
 
-- Use templates for repeated values (e.g., UIDs in multiple FGA fields)
-- Use nested field access to avoid flattening your data structure
+- Send concrete values; templates are deprecated and scheduled for removal
 - Escape `{{` as `\{{` when an `indexing_config` string must contain literal braces
 - Ensure fields referenced from identity and authorization fields exist and are non-empty in `data`; otherwise the message is rejected
 
