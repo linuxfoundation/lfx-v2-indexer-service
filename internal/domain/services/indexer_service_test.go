@@ -789,6 +789,21 @@ func TestIndexerService_parseIndexingConfig_TemplateExpansion(t *testing.T) {
 			},
 		},
 		{
+			name: "whole-value reference resolving to a non-string object_id should error",
+			indexingConfig: map[string]any{
+				"object_id":              "{{ count }}",
+				"access_check_object":    "project:abc-123",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:abc-123",
+				"history_check_relation": "historian",
+			},
+			transactionData: map[string]any{
+				"count": 42,
+			},
+			wantErr:     true,
+			errContains: "object_id is required and must be a non-empty string",
+		},
+		{
 			name: "missing hyphenated whole-value key in strict field should error",
 			indexingConfig: map[string]any{
 				"object_id":              "{{resource-id}}",
@@ -815,6 +830,22 @@ func TestIndexerService_parseIndexingConfig_TemplateExpansion(t *testing.T) {
 			},
 			wantErr:     true,
 			errContains: "indexing_config.access_check_object: unsupported template reference",
+		},
+		{
+			name: "unsupported reference in parent_refs array element should error",
+			indexingConfig: map[string]any{
+				"object_id":              "abc-123",
+				"access_check_object":    "project:abc-123",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:abc-123",
+				"history_check_relation": "historian",
+				"parent_refs":            []interface{}{"org:org-1", "org:{{a-b}}"},
+			},
+			transactionData: map[string]any{
+				"a-b": "org-2",
+			},
+			wantErr:     true,
+			errContains: "indexing_config.parent_refs: unsupported template reference",
 		},
 		{
 			name: "escaped braces in strict field are not an unsupported reference",
