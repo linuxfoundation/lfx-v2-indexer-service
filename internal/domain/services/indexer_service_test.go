@@ -722,6 +722,53 @@ func TestIndexerService_parseIndexingConfig_TemplateExpansion(t *testing.T) {
 			errContains: "indexing_config.access_check_object: template field 'missing_field' cannot be resolved",
 		},
 		{
+			name: "empty value embedded in strict field should error",
+			indexingConfig: map[string]any{
+				"object_id":              "proj-123",
+				"access_check_object":    "project:proj-123",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:{{ empty }}",
+				"history_check_relation": "historian",
+			},
+			transactionData: map[string]any{
+				"empty": "",
+			},
+			wantErr:     true,
+			errContains: "indexing_config.history_check_object: template field 'empty' cannot be resolved",
+		},
+		{
+			name: "null whole-value parent ref should error",
+			indexingConfig: map[string]any{
+				"object_id":              "proj-123",
+				"access_check_object":    "project:proj-123",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:proj-123",
+				"history_check_relation": "historian",
+				"parent_refs":            []interface{}{"{{ parent }}", "project:{{ meta }}"},
+			},
+			transactionData: map[string]any{
+				"parent": nil,
+				"meta":   map[string]any{"a": 1},
+			},
+			wantErr:     true,
+			errContains: "indexing_config.parent_refs: template field 'parent' cannot be resolved",
+		},
+		{
+			name: "object embedded in strict field should error",
+			indexingConfig: map[string]any{
+				"object_id":              "proj-123",
+				"access_check_object":    "project:{{ meta }}",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:proj-123",
+				"history_check_relation": "historian",
+			},
+			transactionData: map[string]any{
+				"meta": map[string]any{"a": 1},
+			},
+			wantErr:     true,
+			errContains: "indexing_config.access_check_object: template field 'meta' cannot be resolved",
+		},
+		{
 			name: "missing template field in optional embedded string should succeed",
 			indexingConfig: map[string]any{
 				"object_id":              "{{ uid }}",

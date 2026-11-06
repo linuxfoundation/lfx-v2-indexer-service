@@ -1378,11 +1378,21 @@ func expandTemplates(data map[string]any, value any, field string, strict bool, 
 // `\{{` yields a literal `{{` and suppresses expansion of only that occurrence.
 // A string that is exactly one reference returns the referenced value with its
 // original type. A reference is unresolvable when the path is absent from data
-// or runs through a non-object; strict fields return an error, other fields
-// substitute an empty string and log a warning.
+// or runs through a non-object; in strict fields it is also unresolvable when
+// the value is null or empty, or is an object/array embedded in a larger string.
+// Strict fields return an error; other fields substitute an empty string and
+// log a warning.
 func expandTemplateString(data map[string]any, s string, field string, strict bool, objectType string, logger *slog.Logger) (any, error) {
+	resolve := func(fieldPath string, embedded bool) (any, bool) {
+		value, ok := getNestedField(data, fieldPath)
+		if ok && strict && !usableStrictValue(value, embedded) {
+			return nil, false
+		}
+		return value, ok
+	}
+
 	if m := wholeTemplateRegex.FindStringSubmatch(s); m != nil {
-		if value, ok := getNestedField(data, m[1]); ok {
+		if value, ok := resolve(m[1], false); ok {
 			return value, nil
 		}
 		if strict {
@@ -1398,7 +1408,7 @@ func expandTemplateString(data map[string]any, s string, field string, strict bo
 			return "{{"
 		}
 		fieldPath := strings.TrimSpace(token[2 : len(token)-2])
-		if value, ok := getNestedField(data, fieldPath); ok {
+		if value, ok := resolve(fieldPath, true); ok {
 			return fmt.Sprint(value)
 		}
 		if strict {
@@ -1414,6 +1424,22 @@ func expandTemplateString(data map[string]any, s string, field string, strict bo
 		return nil, unresolvedTemplateError(field, unresolved)
 	}
 	return result, nil
+}
+
+// usableStrictValue reports whether a resolved value can stand in for a strict
+// (identity/authorization) template reference without producing an empty or
+// garbled reference such as "project:" or "project:<nil>".
+func usableStrictValue(value any, embedded bool) bool {
+	switch v := value.(type) {
+	case nil:
+		return false
+	case string:
+		return v != ""
+	case map[string]any, []any:
+		return !embedded
+	default:
+		return true
+	}
 }
 
 func unresolvedTemplateError(field, fieldPath string) error {

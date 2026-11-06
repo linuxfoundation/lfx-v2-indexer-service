@@ -239,7 +239,7 @@ Templates use double curly braces: `{{ field_name }}`
 
 - Expansion is a single pass. Values substituted from `data` are never re-scanned, so a `data.name` of `"{{ slug }}"` is indexed as that literal text.
 - A reference is unresolvable when its path is absent from `data` or runs through a non-object (for example `{{ uid.x }}` when `uid` is a string).
-- In identity and authorization fields (`object_id`, `access_check_object`, `access_check_relation`, `history_check_object`, `history_check_relation`, `parent_refs`) an unresolvable reference rejects the message.
+- In identity and authorization fields (`object_id`, `access_check_object`, `access_check_relation`, `history_check_object`, `history_check_relation`, `parent_refs`) an unresolvable reference rejects the message. In these fields a reference that resolves to `null` or `""`, or an object/array embedded in a larger string, is also rejected, so a document is never indexed under a reference such as `project:`.
 - In every other field (`sort_name`, `name_and_aliases`, `fulltext`, `tags`, `contacts`) an unresolvable reference is replaced with an empty string and a warning is logged.
 - Every string in `indexing_config` is scanned, including end-user text a publisher copies into it, so a user-entered `{{ ... }}` is expanded (or blanked). To keep user text literal, reference it from `data` (`"sort_name": "{{ name }}"`) or escape it as `\{{`. Template expansion is scheduled for removal; new publishers should send concrete values.
 
@@ -319,11 +319,8 @@ Templates use double curly braces: `{{ field_name }}`
 2. **Nested Access**: Use dot notation (e.g., `{{ parent.id }}`) for nested objects
 3. **Type Preservation**: Simple templates (`"{{ field }}"`) preserve the original type
 4. **String Conversion**: Embedded templates convert values to strings
-5. **Error Handling**: Missing fields in required whole-value templates become empty
-   and then fail required-field validation; missing fields in optional or embedded
-   templates are skipped with a warning and blank substitution. Traversing through
-   a non-object still fails processing.
-6. **Escaping**: Use `\{{ }}` to include literal curly braces in values
+5. **Error Handling**: See [Expansion rules](#template-support-in-indexing_config) above. Identity and authorization fields reject the message when a reference is missing, runs through a non-object, or resolves to null/empty (or to an object/array embedded in a string); other fields blank the reference and log a warning
+6. **Escaping**: Use `\{{` in an `indexing_config` string to emit a literal `{{` (`data` values are never scanned)
 7. **Whitespace**: Whitespace inside templates is trimmed (e.g., `{{  uid  }}` → `uid`)
 
 **Type Preservation Example:**
@@ -347,8 +344,8 @@ Templates use double curly braces: `{{ field_name }}`
 
 - Use templates for repeated values (e.g., UIDs in multiple FGA fields)
 - Use nested field access to avoid flattening your data structure
-- Escape templates when you need literal `{{ }}` in your data
-- Ensure referenced fields exist in `data` to avoid processing errors
+- Escape `{{` as `\{{` when an `indexing_config` string must contain literal braces
+- Ensure fields referenced from identity and authorization fields exist and are non-empty in `data`; otherwise the message is rejected
 
 ## Field Reference
 
