@@ -163,7 +163,7 @@ type IndexingConfig struct {
 | Empty `ObjectID` | NAKed and retried (no primary key) |
 | Empty `AccessCheckObject` or `AccessCheckRelation` | NAKed and retried during `IndexingConfig` parsing |
 | Empty `HistoryCheckObject` or `HistoryCheckRelation` | NAKed and retried during `IndexingConfig` parsing |
-| Unresolvable `{{ path }}` template in `ObjectID`, `AccessCheck*`, `HistoryCheck*`, or `ParentRefs` (path absent from `data`, runs through a non-object, resolves to null/`""`, or resolves to an object/array embedded in a larger string) | NAKed and retried during `IndexingConfig` parsing. In every other field the reference is replaced with an empty string and a warning is logged; the message is not rejected. See [template support](client-guide.md#template-support-in-indexing_config) |
+| Unresolvable `{{ path }}` template in `ObjectID`, `AccessCheck*`, `HistoryCheck*`, or `ParentRefs` (path absent from `data`, runs through a non-object, resolves to null/`""`, resolves to an object/array embedded in a larger string, or is an unescaped `{{` that the embedded-reference grammar does not accept) | NAKed and retried during `IndexingConfig` parsing. In every other field the reference is replaced with an empty string and a warning is logged; the message is not rejected. See [template support](client-guide.md#template-support-in-indexing_config) |
 | Unknown `action` value | NAKed and retried (`unknown action`) |
 | Missing lower-case `authorization` header on V2 messages | NAKed and retried during header validation |
 | `data` not present on create/update | NAKed and retried |

@@ -769,6 +769,69 @@ func TestIndexerService_parseIndexingConfig_TemplateExpansion(t *testing.T) {
 			errContains: "indexing_config.access_check_object: template field 'meta' cannot be resolved",
 		},
 		{
+			name: "whole-value reference to hyphenated key should resolve",
+			indexingConfig: map[string]any{
+				"object_id":              "{{resource-id}}",
+				"access_check_object":    "project:abc-123",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:abc-123",
+				"history_check_relation": "historian",
+				"sort_name":              "{{ display name }}",
+			},
+			transactionData: map[string]any{
+				"resource-id":  "abc-123",
+				"display name": "Acme",
+			},
+			wantErr: false,
+			validate: func(t *testing.T, config *types.IndexingConfig) {
+				assert.Equal(t, "abc-123", config.ObjectID)
+				assert.Equal(t, "Acme", config.SortName)
+			},
+		},
+		{
+			name: "missing hyphenated whole-value key in strict field should error",
+			indexingConfig: map[string]any{
+				"object_id":              "{{resource-id}}",
+				"access_check_object":    "project:abc-123",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:abc-123",
+				"history_check_relation": "historian",
+			},
+			transactionData: map[string]any{},
+			wantErr:         true,
+			errContains:     "indexing_config.object_id: template field 'resource-id' cannot be resolved",
+		},
+		{
+			name: "embedded reference outside token grammar in strict field should error",
+			indexingConfig: map[string]any{
+				"object_id":              "abc-123",
+				"access_check_object":    "project:{{resource-id}}",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:abc-123",
+				"history_check_relation": "historian",
+			},
+			transactionData: map[string]any{
+				"resource-id": "abc-123",
+			},
+			wantErr:     true,
+			errContains: "indexing_config.access_check_object: unsupported template reference",
+		},
+		{
+			name: "escaped braces in strict field are not an unsupported reference",
+			indexingConfig: map[string]any{
+				"object_id":              "abc-123",
+				"access_check_object":    `project:\{{x}}`,
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:abc-123",
+				"history_check_relation": "historian",
+			},
+			transactionData: map[string]any{},
+			wantErr:         false,
+			validate: func(t *testing.T, config *types.IndexingConfig) {
+				assert.Equal(t, "project:{{x}}", config.AccessCheckObject)
+			},
+		},
+		{
 			name: "missing template field in optional embedded string should succeed",
 			indexingConfig: map[string]any{
 				"object_id":              "{{ uid }}",

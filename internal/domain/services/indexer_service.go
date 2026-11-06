@@ -1339,8 +1339,9 @@ const templateEscape = `\{{`
 var templateTokenRegex = regexp.MustCompile(`\\\{\{|\{\{\s*[a-zA-Z0-9_.]+\s*\}\}`)
 
 // wholeTemplateRegex matches a string that is exactly one template reference,
-// whose resolved value keeps its original type.
-var wholeTemplateRegex = regexp.MustCompile(`^\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}$`)
+// whose resolved value keeps its original type. As in the original grammar, the
+// path may contain any character except braces (e.g. `{{resource-id}}`).
+var wholeTemplateRegex = regexp.MustCompile(`^\{\{([^{}]*)\}\}$`)
 
 // expandTemplates recursively expands {{ path }} references in value with values
 // from data. field is the top-level indexing_config key being expanded; strict
@@ -1392,14 +1393,22 @@ func expandTemplateString(data map[string]any, s string, field string, strict bo
 	}
 
 	if m := wholeTemplateRegex.FindStringSubmatch(s); m != nil {
-		if value, ok := resolve(m[1], false); ok {
+		fieldPath := strings.TrimSpace(m[1])
+		if value, ok := resolve(fieldPath, false); ok {
 			return value, nil
 		}
 		if strict {
-			return nil, unresolvedTemplateError(field, m[1])
+			return nil, unresolvedTemplateError(field, fieldPath)
 		}
-		logSkippedTemplate(logger, field, m[1], objectType)
+		logSkippedTemplate(logger, field, fieldPath, objectType)
 		return "", nil
+	}
+
+	// An embedded reference outside the token grammar (e.g. `x:{{resource-id}}`)
+	// would otherwise pass through as literal text; strict fields reject it so a
+	// document is never indexed under an unexpanded identity or access reference.
+	if strict && strings.Contains(templateTokenRegex.ReplaceAllString(s, ""), "{{") {
+		return nil, fmt.Errorf("indexing_config.%s: unsupported template reference in %q", field, s)
 	}
 
 	unresolved := ""
