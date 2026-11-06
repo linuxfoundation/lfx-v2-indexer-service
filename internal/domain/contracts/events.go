@@ -14,6 +14,9 @@ import (
 // It is emitted on subjects of the form lfx.{object_type}.{action}
 // (e.g., lfx.project.created, lfx.committee.deleted).
 type IndexingEvent struct {
+	// EventID is an optional stable publisher/event identity for audited events.
+	// Legacy events omit it and retain their existing wire shape.
+	EventID string `json:"event_id,omitempty"`
 	// DocumentID is the canonical OpenSearch document reference in the form
 	// "object_type:object_id" (e.g., "project:abc-123").
 	DocumentID string `json:"document_id"`

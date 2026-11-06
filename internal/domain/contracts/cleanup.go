@@ -6,9 +6,16 @@ package contracts
 
 import "context"
 
+// AuditedCleanup queues reconciliation that waits for the guarded canonical
+// document to become searchable before considering legacy duplicates clean.
+type AuditedCleanup interface {
+	CheckAuditedItem(objectRef string)
+}
+
 // CleanupRepository defines the contract for cleanup/janitor operations
 // Handles background cleanup of resources and maintains data consistency
 type CleanupRepository interface {
+	AuditedCleanup
 	// CheckItem queues a resource for the janitor to check
 	CheckItem(objectRef string)
 

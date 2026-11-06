@@ -27,9 +27,20 @@ import (
 // produces far more than expected without silently truncating the normal case.
 const janitorMaxDuplicates = 100
 
+// janitorMaxVisibilityRetries bounds pre-refresh retries; a permanently missing
+// or invalid canonical document requires operator reconciliation, not hot polling.
+const janitorMaxVisibilityRetries = 12
+
+// janitorRequest preserves audited visibility requirements across delayed retries.
+type janitorRequest struct {
+	objectRef               string
+	requireAuditedCanonical bool
+	visibilityAttempts      int
+}
+
 var (
 	// Global janitor channel for up to 50 queued item-janitor requests (matches production)
-	globalJanitorChan = make(chan *string, 50)
+	globalJanitorChan = make(chan janitorRequest, 50)
 	janitorOverflows  *expvar.Int
 )
 
@@ -71,6 +82,18 @@ func NewCleanupRepository(storageRepo contracts.StorageRepository, logger *slog.
 // CheckItem queues a resource for the janitor to check.
 // This matches the janitorCheckItem function from production janitor.go exactly.
 func (j *CleanupRepository) CheckItem(objectRef string) {
+	j.queueItem(janitorRequest{objectRef: objectRef})
+}
+
+// CheckAuditedItem prevents a pre-refresh search from treating a legacy live
+// duplicate as the only current document and silently abandoning reconciliation.
+func (j *CleanupRepository) CheckAuditedItem(objectRef string) {
+	j.queueItem(janitorRequest{objectRef: objectRef, requireAuditedCanonical: true})
+}
+
+// queueItem keeps queue limits and overflow accounting identical for both paths.
+func (j *CleanupRepository) queueItem(request janitorRequest) {
+	objectRef := request.objectRef
 	if objectRef == "" {
 		j.logger.Debug("Skipping empty object reference")
 		return
@@ -82,7 +105,7 @@ func (j *CleanupRepository) CheckItem(objectRef string) {
 		"queue_capacity", cap(globalJanitorChan))
 
 	select {
-	case globalJanitorChan <- &objectRef:
+	case globalJanitorChan <- request:
 		// The item was queued successfully.
 		j.logger.Debug("Janitor item queued successfully",
 			"object_ref", safeLogString(&objectRef),
@@ -153,7 +176,7 @@ func (j *CleanupRepository) StartItemLoop(ctx context.Context) {
 					"errors", errors,
 					"context_error", ctx.Err())
 				return
-			case objectRef, more := <-globalJanitorChan:
+			case request, more := <-globalJanitorChan:
 				if !more {
 					j.logger.Warn("Janitor channel closed unexpectedly",
 						"items_processed", itemsProcessed)
@@ -166,12 +189,13 @@ func (j *CleanupRepository) StartItemLoop(ctx context.Context) {
 				}
 
 				itemsProcessed++
+				objectRef := &request.objectRef
 				j.logger.Debug("Janitor item received for processing",
 					"object_ref", safeLogString(objectRef),
 					"items_processed", itemsProcessed,
 					"queue_length", len(globalJanitorChan))
 
-				result := j.processItem(ctx, objectRef)
+				result := j.processItemWithPolicy(ctx, request)
 				switch result {
 				case "skipped":
 					itemsSkipped++
@@ -217,16 +241,21 @@ func (j *CleanupRepository) Shutdown() {
 
 // processItem processes a single janitor item with enhanced logging
 func (j *CleanupRepository) processItem(ctx context.Context, objectRef *string) string {
-	if objectRef == nil || *objectRef == "" {
+	if objectRef == nil {
 		j.logger.Debug("Skipping nil or empty object reference")
 		return "skipped"
 	}
-	if strings.Contains(*objectRef, `"`) {
-		j.logger.Error("Invalid object reference contains quotes",
-			"object_ref", safeLogString(objectRef))
-		return "error"
-	}
+	return j.processItemWithPolicy(ctx, janitorRequest{objectRef: *objectRef})
+}
 
+// processItemWithPolicy defers audited reconciliation until the canonical guard
+// is visible to search; ordinary legacy cleanup retains its existing semantics.
+func (j *CleanupRepository) processItemWithPolicy(ctx context.Context, request janitorRequest) string {
+	objectRef := &request.objectRef
+	if *objectRef == "" {
+		j.logger.Debug("Skipping nil or empty object reference")
+		return "skipped"
+	}
 	j.logger.Debug("Janitor processing started",
 		"object_ref", safeLogString(objectRef))
 
@@ -255,6 +284,10 @@ func (j *CleanupRepository) processItem(ctx context.Context, objectRef *string) 
 		// the deletion-priority rule below — then break ties by updated_at
 		// so the normal (no-deletion) case still keeps the most recent hits.
 		"sort": []map[string]any{
+			// An audited canonical document is always preferable to legacy
+			// duplicates, including older tombstones. Keep it within the
+			// bounded result set before applying legacy deletion priority.
+			{"audit_source_revision": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "long"}},
 			// unmapped_type is required alongside missing: "_last" — missing
 			// only controls where a doc that has no value for an otherwise
 			// *mapped* field sorts to; it does not by itself let OpenSearch
@@ -267,7 +300,7 @@ func (j *CleanupRepository) processItem(ctx context.Context, objectRef *string) 
 			{"deleted_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
 			{"updated_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
 		},
-		"_source": []string{"created_at", "updated_at", "deleted_at"},
+		"_source": []string{"created_at", "updated_at", "deleted_at", "audit_source_revision"},
 		"query": map[string]any{
 			"bool": map[string]any{
 				"must": []map[string]any{
@@ -298,6 +331,29 @@ func (j *CleanupRepository) processItem(ctx context.Context, objectRef *string) 
 			"object_ref", safeLogString(objectRef),
 			"cap", janitorMaxDuplicates)
 		docs = docs[:janitorMaxDuplicates]
+	}
+	if request.requireAuditedCanonical {
+		visible := false
+		for _, doc := range docs {
+			if doc.ID == *objectRef && doc.Source["audit_source_revision"] != nil {
+				visible = true
+				break
+			}
+		}
+		if !visible {
+			if request.visibilityAttempts >= janitorMaxVisibilityRetries {
+				j.logger.Warn("Audited canonical document did not become searchable; visibility retries exhausted; reconciliation required",
+					"object_ref", safeLogString(objectRef),
+					"visibility_attempts", request.visibilityAttempts,
+					"retry_limit", janitorMaxVisibilityRetries)
+				return "error"
+			}
+			j.logger.Info("Audited canonical document is not searchable yet; scheduling janitor retry",
+				"object_ref", safeLogString(objectRef))
+			request.visibilityAttempts++
+			j.asyncRetry(ctx, request, *objectRef, "canonical_not_visible")
+			return "retry_scheduled"
+		}
 	}
 
 	// Log the number of hits with analysis
@@ -333,61 +389,72 @@ func (j *CleanupRepository) processItem(ctx context.Context, objectRef *string) 
 	deletedDocCount := 0
 	updatedDocCount := 0
 
+	// Audited writes are revision-guarded under the canonical object_ref ID.
+	// Prefer that ID over a legacy duplicate's deletion timestamp, which can
+	// otherwise flip the newer guarded document to latest=false.
 	for _, doc := range docs {
-		// Log the document details
-		j.logger.Debug("Analyzing document for conflict resolution",
-			"object_ref", safeLogString(objectRef),
-			"document_id", doc.ID,
-			"seq_no", safeLogInt64(doc.SeqNo),
-			"primary_term", safeLogInt64(doc.PrimaryTerm))
-
-		// Unmarshal the source into a TransactionBodyStub
-		hitBody := new(TransactionBodyStub)
-		sourceBytes, err := json.Marshal(doc.Source)
-		if err != nil {
-			j.logger.Error("Document marshal error during conflict resolution",
-				"object_ref", safeLogString(objectRef),
-				"document_id", doc.ID,
-				"error", err.Error())
-			continue
-		}
-
-		err = json.Unmarshal(sourceBytes, hitBody)
-		if err != nil {
-			j.logger.Error("Document unmarshal error during conflict resolution",
-				"object_ref", safeLogString(objectRef),
-				"document_id", doc.ID,
-				"error", err.Error())
-			// Skip this document and continue with the next one.
-			continue
-		}
-
-		// Check if the hit has a `deleted_at` field (deletion priority)
-		if hitBody.DeletedAt != nil && *hitBody.DeletedAt != "" {
-			deletedDocCount++
-			j.logger.Debug("Document with deletion timestamp found (takes priority)",
-				"object_ref", safeLogString(objectRef),
-				"document_id", doc.ID,
-				"deleted_at", *hitBody.DeletedAt)
-
-			// The hit has a `deleted_at` field, so it wins.
+		if doc.ID == *objectRef && doc.Source["audit_source_revision"] != nil {
 			winningID = doc.ID
 			break
 		}
-
-		// Check if the hit has an `updated_at` field
-		if hitBody.UpdatedAt != nil && *hitBody.UpdatedAt != "" {
-			updatedDocCount++
-			j.logger.Debug("Document with updated timestamp found",
+	}
+	if winningID == "" {
+		for _, doc := range docs {
+			// Log the document details
+			j.logger.Debug("Analyzing document for conflict resolution",
 				"object_ref", safeLogString(objectRef),
 				"document_id", doc.ID,
-				"updated_at", *hitBody.UpdatedAt,
-				"current_winner", winningID)
+				"seq_no", safeLogInt64(doc.SeqNo),
+				"primary_term", safeLogInt64(doc.PrimaryTerm))
 
-			// If the `updated_at` field is newer than the current `winningUpdatedAt` winner, it wins.
-			if winningID == "" || *hitBody.UpdatedAt > winningUpdatedAt {
+			// Unmarshal the source into a TransactionBodyStub
+			hitBody := new(TransactionBodyStub)
+			sourceBytes, err := json.Marshal(doc.Source)
+			if err != nil {
+				j.logger.Error("Document marshal error during conflict resolution",
+					"object_ref", safeLogString(objectRef),
+					"document_id", doc.ID,
+					"error", err.Error())
+				continue
+			}
+
+			err = json.Unmarshal(sourceBytes, hitBody)
+			if err != nil {
+				j.logger.Error("Document unmarshal error during conflict resolution",
+					"object_ref", safeLogString(objectRef),
+					"document_id", doc.ID,
+					"error", err.Error())
+				// Skip this document and continue with the next one.
+				continue
+			}
+
+			// Check if the hit has a `deleted_at` field (deletion priority)
+			if hitBody.DeletedAt != nil && *hitBody.DeletedAt != "" {
+				deletedDocCount++
+				j.logger.Debug("Document with deletion timestamp found (takes priority)",
+					"object_ref", safeLogString(objectRef),
+					"document_id", doc.ID,
+					"deleted_at", *hitBody.DeletedAt)
+
+				// The hit has a `deleted_at` field, so it wins.
 				winningID = doc.ID
-				winningUpdatedAt = *hitBody.UpdatedAt
+				break
+			}
+
+			// Check if the hit has an `updated_at` field
+			if hitBody.UpdatedAt != nil && *hitBody.UpdatedAt != "" {
+				updatedDocCount++
+				j.logger.Debug("Document with updated timestamp found",
+					"object_ref", safeLogString(objectRef),
+					"document_id", doc.ID,
+					"updated_at", *hitBody.UpdatedAt,
+					"current_winner", winningID)
+
+				// If the `updated_at` field is newer than the current `winningUpdatedAt` winner, it wins.
+				if winningID == "" || *hitBody.UpdatedAt > winningUpdatedAt {
+					winningID = doc.ID
+					winningUpdatedAt = *hitBody.UpdatedAt
+				}
 			}
 		}
 	}
@@ -436,7 +503,7 @@ func (j *CleanupRepository) processItem(ctx context.Context, objectRef *string) 
 					"conflict_type", "optimistic_lock")
 
 				// Async retry with production delays (5-10 seconds)
-				j.asyncRetry(ctx, *objectRef, vErr.DocumentID)
+				j.asyncRetry(ctx, request, vErr.DocumentID, "version_conflict")
 				// Don't attempt to update any other hits either; wait for the next check.
 				return "conflict_resolved"
 			}
@@ -511,8 +578,10 @@ func (j *CleanupRepository) updateLatestFlag(ctx context.Context, doc contracts.
 	return nil
 }
 
-// asyncRetry handles version conflicts with enhanced logging
-func (j *CleanupRepository) asyncRetry(ctx context.Context, objectRef, docID string) {
+// asyncRetry retains the request's visibility policy during conflict or
+// pre-refresh retries, using the existing shutdown-aware 5-9 second backoff.
+func (j *CleanupRepository) asyncRetry(ctx context.Context, request janitorRequest, docID, reason string) {
+	objectRef := request.objectRef
 	// Use cryptographically secure random number for retry delay (5-10 seconds)
 	randomDelay, err := rand.Int(rand.Reader, big.NewInt(5))
 	if err != nil {
@@ -521,9 +590,10 @@ func (j *CleanupRepository) asyncRetry(ctx context.Context, objectRef, docID str
 	}
 	retryDelay := time.Duration(5+randomDelay.Int64()) * time.Second
 
-	j.logger.Info("Scheduling janitor retry due to version conflict",
+	j.logger.Info("Scheduling janitor retry",
 		"object_ref", objectRef,
 		"document_id", docID,
+		"reason", reason,
 		"retry_delay", retryDelay)
 
 	j.retryWG.Add(1)
@@ -536,7 +606,7 @@ func (j *CleanupRepository) asyncRetry(ctx context.Context, objectRef, docID str
 				"object_ref", objectRef,
 				"document_id", docID,
 				"delay_elapsed", retryDelay)
-			j.CheckItem(objectRef)
+			j.queueItem(request)
 		case <-ctx.Done():
 			j.logger.Debug("Janitor retry cancelled due to context",
 				"object_ref", objectRef,

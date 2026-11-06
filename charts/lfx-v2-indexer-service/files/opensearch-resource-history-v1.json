@@ -1,0 +1,28 @@
+{
+  "mappings": {
+    "dynamic": "strict",
+    "properties": {
+      "publisher": { "type": "keyword" },
+      "event_id": { "type": "keyword" },
+      "object_type": { "type": "keyword" },
+      "object_id": { "type": "keyword" },
+      "action": { "type": "keyword" },
+      "resource_revision": { "type": "long" },
+      "occurred_at": { "type": "date" },
+      "ingested_at": { "type": "date" },
+      "history_check_object": { "type": "keyword" },
+      "history_check_relation": { "type": "keyword" },
+      "scope": {
+        "dynamic": "strict",
+        "properties": {
+          "before": { "type": "keyword" },
+          "after": { "type": "keyword" }
+        }
+      },
+      "audit": { "type": "object", "enabled": false },
+      "fingerprint": { "type": "keyword", "index": false },
+      "erased": { "type": "boolean" },
+      "erased_at": { "type": "date" }
+    }
+  }
+}

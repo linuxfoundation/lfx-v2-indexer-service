@@ -1,0 +1,11 @@
+{
+  "properties": {
+    "audit_source_revision": { "type": "long", "index": false },
+    "audit_event_key": { "type": "keyword", "index": false },
+    "audit_event_fingerprint": { "type": "keyword", "index": false },
+    "audit_mutation_key": { "type": "keyword", "index": false },
+    "audit_mutation_fingerprint": { "type": "keyword", "index": false },
+    "audit_projection_order_time": { "type": "keyword", "index": false },
+    "audit_projection_order_key": { "type": "keyword", "index": false }
+  }
+}
