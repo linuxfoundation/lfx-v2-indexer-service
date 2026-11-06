@@ -213,14 +213,9 @@ The server will:
 
 ### Template Support in `indexing_config`
 
-To reduce message payload size and eliminate redundancy, `indexing_config` supports template variables that reference fields from the `data` object using `{{ field_name }}` syntax.
+> **Deprecated:** template expansion is scheduled for removal (lfx-self-serve-ops#1367). New publishers should send concrete values; existing template users should migrate.
 
-**Benefits:**
-
-- **Reduced Payload Size**: Avoid repeating the same values multiple times
-- **Single Source of Truth**: Data field values are the canonical source
-- **Less Error-Prone**: No risk of mismatched values between data and config
-- **Type Preservation**: Templates can preserve original data types
+`indexing_config` supports template variables that reference fields from the `data` object using `{{ field_name }}` syntax.
 
 **Template Syntax:**
 
@@ -233,7 +228,16 @@ Templates use double curly braces: `{{ field_name }}`
 3. **Nested Fields**: `"{{ parent.id }}"` - Dot notation for nested objects
 4. **Arrays**: `["{{ uid }}", "{{ parent_id }}"]` - Templates in arrays
 5. **Multiple Templates**: `"{{ name }} - {{ description }}"` - Multiple in one string
-6. **Escaping**: `"\{{ not_a_template }}"` - Use backslash to escape
+6. **Escaping**: `"\{{ not_a_template }}"` - A backslash makes only the `{{` it precedes literal; other templates in the same string still expand
+
+**Expansion rules:**
+
+- Expansion is a single pass. Values substituted from `data` are never re-scanned, so a `data.name` of `"{{ slug }}"` is indexed as that literal text.
+- A reference is unresolvable when its path is absent from `data` or runs through a non-object (for example `{{ uid.x }}` when `uid` is a string).
+- Path grammar: a string that is exactly one reference may use any characters except braces in its path (`"{{resource-id}}"` resolves `data["resource-id"]`). A reference embedded in a larger string must use only letters, digits, `_`, and `.`. Any other embedded `{{ ... }}` is unsupported syntax: identity and authorization fields reject it (see below); every other field keeps it as literal text without logging a warning.
+- In identity and authorization fields (`object_id`, `access_check_object`, `access_check_relation`, `history_check_object`, `history_check_relation`, `parent_refs`) an unresolvable reference rejects the message. In these fields a reference that resolves to `null` or `""`, an object/array embedded in a larger string, or an unescaped `{{` outside the embedded grammar (such as `project:{{resource-id}}`) is also rejected, so a document is never indexed under a reference such as `project:` or an unexpanded template.
+- In every other field (`sort_name`, `name_and_aliases`, `fulltext`, `tags`, `contacts`) an unresolvable reference is replaced with an empty string and a warning is logged; unsupported embedded syntax is kept as literal text.
+- Every string in `indexing_config` is scanned, including end-user text a publisher copies into it, so a user-entered `{{ ... }}` is expanded (or blanked). To keep user text literal, reference it from `data` (`"sort_name": "{{ name }}"`) or escape it as `\{{`. Template expansion is scheduled for removal; new publishers should send concrete values.
 
 **Example with Templates:**
 
@@ -311,11 +315,8 @@ Templates use double curly braces: `{{ field_name }}`
 2. **Nested Access**: Use dot notation (e.g., `{{ parent.id }}`) for nested objects
 3. **Type Preservation**: Simple templates (`"{{ field }}"`) preserve the original type
 4. **String Conversion**: Embedded templates convert values to strings
-5. **Error Handling**: Missing fields in required whole-value templates become empty
-   and then fail required-field validation; missing fields in optional or embedded
-   templates are skipped with a warning and blank substitution. Traversing through
-   a non-object still fails processing.
-6. **Escaping**: Use `\{{ }}` to include literal curly braces in values
+5. **Error Handling**: See [Expansion rules](#template-support-in-indexing_config) above. Identity and authorization fields reject the message when a reference is missing, runs through a non-object, or resolves to null/empty (or to an object/array embedded in a string), and when an embedded `{{ ... }}` uses unsupported syntax; other fields blank an unresolvable reference and log a warning, and keep unsupported syntax as literal text
+6. **Escaping**: Use `\{{` in an `indexing_config` string to emit a literal `{{` (`data` values are never scanned)
 7. **Whitespace**: Whitespace inside templates is trimmed (e.g., `{{  uid  }}` → `uid`)
 
 **Type Preservation Example:**
@@ -337,10 +338,9 @@ Templates use double curly braces: `{{ field_name }}`
 
 **Best Practices:**
 
-- Use templates for repeated values (e.g., UIDs in multiple FGA fields)
-- Use nested field access to avoid flattening your data structure
-- Escape templates when you need literal `{{ }}` in your data
-- Ensure referenced fields exist in `data` to avoid processing errors
+- Send concrete values; templates are deprecated and scheduled for removal
+- Escape `{{` as `\{{` when an `indexing_config` string must contain literal braces
+- Ensure fields referenced from identity and authorization fields exist and are non-empty in `data`; otherwise the message is rejected
 
 ## Field Reference
 

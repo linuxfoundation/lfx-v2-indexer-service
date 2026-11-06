@@ -9,7 +9,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -1316,29 +1315,55 @@ func dedupeStrings(in []string) []string {
 	return out
 }
 
-// expandTemplates recursively expands template variables in the format {{ field_name }}
-// with values from the provided data map. Supports nested field access (e.g., {{ parent.id }})
-// and preserves original data types.
-func expandTemplates(data map[string]any, value any, objectType string, logger *slog.Logger) (any, error) {
+// strictTemplateFields are the indexing_config keys that carry document identity
+// or authorization targets. An unresolvable template in any of them fails the
+// message rather than indexing under an empty or truncated reference such as
+// "project:". Every other key (sort_name, fulltext, name_and_aliases, tags,
+// contacts, ...) may carry end-user text, so unresolvable templates there are
+// skipped with a warning and never fail the message.
+var strictTemplateFields = map[string]struct{}{
+	"object_id":              {},
+	"access_check_object":    {},
+	"access_check_relation":  {},
+	"history_check_object":   {},
+	"history_check_relation": {},
+	"parent_refs":            {},
+}
+
+const templateEscape = `\{{`
+
+// templateTokenRegex matches either an escaped opening brace pair (`\{{`) or a
+// template reference (`{{ path }}`). Matching both in one alternation lets a
+// single left-to-right pass unescape and expand, so substituted values are never
+// re-scanned for templates.
+var templateTokenRegex = regexp.MustCompile(`\\\{\{|\{\{\s*[a-zA-Z0-9_.]+\s*\}\}`)
+
+// wholeTemplateRegex matches a string that is exactly one template reference,
+// whose resolved value keeps its original type. As in the original grammar, the
+// path may contain any character except braces (e.g. `{{resource-id}}`).
+var wholeTemplateRegex = regexp.MustCompile(`^\{\{([^{}]*)\}\}$`)
+
+// expandTemplates recursively expands {{ path }} references in value with values
+// from data. field is the top-level indexing_config key being expanded; strict
+// makes any unresolvable reference an error (see strictTemplateFields).
+func expandTemplates(data map[string]any, value any, field string, strict bool, objectType string, logger *slog.Logger) (any, error) {
 	switch v := value.(type) {
 	case string:
-		return expandTemplateString(data, v, objectType, logger)
-	case []interface{}:
-		// Handle arrays - expand templates in each element
-		result := make([]interface{}, len(v))
+		return expandTemplateString(data, v, field, strict, objectType, logger)
+	case []any:
+		result := make([]any, len(v))
 		for i, item := range v {
-			expanded, err := expandTemplates(data, item, objectType, logger)
+			expanded, err := expandTemplates(data, item, field, strict, objectType, logger)
 			if err != nil {
 				return nil, err
 			}
 			result[i] = expanded
 		}
 		return result, nil
-	case map[string]interface{}:
-		// Handle nested objects - expand templates in each value
-		result := make(map[string]interface{}, len(v))
+	case map[string]any:
+		result := make(map[string]any, len(v))
 		for key, val := range v {
-			expanded, err := expandTemplates(data, val, objectType, logger)
+			expanded, err := expandTemplates(data, val, field, strict, objectType, logger)
 			if err != nil {
 				return nil, err
 			}
@@ -1346,120 +1371,112 @@ func expandTemplates(data map[string]any, value any, objectType string, logger *
 		}
 		return result, nil
 	default:
-		// Return non-string types as-is
 		return value, nil
 	}
 }
 
-// expandTemplateString expands template variables in a string.
-// If a referenced field is not present in data, the expansion is skipped (empty
-// string for whole-value templates, blank substitution for embedded ones) and a
-// warning is logged. Structural errors (e.g. traversing a non-object) are fatal.
-func expandTemplateString(data map[string]any, template string, objectType string, logger *slog.Logger) (any, error) {
-	// Check if this is an escaped template (e.g., \{{ field }})
-	if strings.Contains(template, "\\{{") {
-		// Remove escape characters
-		return strings.ReplaceAll(template, "\\{{", "{{"), nil
+// expandTemplateString expands {{ path }} references in s in a single pass.
+// `\{{` yields a literal `{{` and suppresses expansion of only that occurrence.
+// A string that is exactly one reference returns the referenced value with its
+// original type. A reference is unresolvable when the path is absent from data
+// or runs through a non-object; in strict fields it is also unresolvable when
+// the value is null or empty, or is an object/array embedded in a larger string.
+// Strict fields return an error; other fields substitute an empty string and
+// log a warning.
+func expandTemplateString(data map[string]any, s string, field string, strict bool, objectType string, logger *slog.Logger) (any, error) {
+	resolve := func(fieldPath string, embedded bool) (any, bool) {
+		value, ok := getNestedField(data, fieldPath)
+		if ok && strict && !usableStrictValue(value, embedded) {
+			return nil, false
+		}
+		return value, ok
 	}
 
-	// Check if this is a simple template (entire string is a template)
-	// This allows us to preserve the original type
-	if strings.HasPrefix(template, "{{") && strings.HasSuffix(template, "}}") && strings.Count(template, "{{") == 1 {
-		fieldPath := strings.TrimSpace(template[2 : len(template)-2])
-		value, err := getNestedField(data, fieldPath)
-		if err != nil {
-			if isFieldNotFoundError(err) {
-				// Upstream publishers embed infrastructure-specific template vars
-				// that have no LFX data counterpart. Warn and skip expansion
-				// rather than dropping the document.
-				logger.Warn("Skipping unresolvable template field",
-					"field", fieldPath,
-					"object_type", objectType)
-				return "", nil
+	if m := wholeTemplateRegex.FindStringSubmatch(s); m != nil {
+		fieldPath := strings.TrimSpace(m[1])
+		if value, ok := resolve(fieldPath, false); ok {
+			return value, nil
+		}
+		if strict {
+			return nil, unresolvedTemplateError(field, fieldPath)
+		}
+		logSkippedTemplate(logger, field, fieldPath, objectType)
+		return "", nil
+	}
+
+	// An embedded reference outside the token grammar (e.g. `x:{{resource-id}}`)
+	// would otherwise pass through as literal text; strict fields reject it so a
+	// document is never indexed under an unexpanded identity or access reference.
+	if strict && strings.Contains(templateTokenRegex.ReplaceAllString(s, ""), "{{") {
+		return nil, fmt.Errorf("indexing_config.%s: unsupported template reference in %q", field, s)
+	}
+
+	unresolved := ""
+	result := templateTokenRegex.ReplaceAllStringFunc(s, func(token string) string {
+		if token == templateEscape {
+			return "{{"
+		}
+		fieldPath := strings.TrimSpace(token[2 : len(token)-2])
+		if value, ok := resolve(fieldPath, true); ok {
+			return fmt.Sprint(value)
+		}
+		if strict {
+			if unresolved == "" {
+				unresolved = fieldPath
 			}
-			return nil, err
+			return token
 		}
-		// Return the original type
-		return value, nil
+		logSkippedTemplate(logger, field, fieldPath, objectType)
+		return ""
+	})
+	if unresolved != "" {
+		return nil, unresolvedTemplateError(field, unresolved)
 	}
-
-	// Handle templates embedded in strings (force string conversion)
-	result := template
-	templateRegex := regexp.MustCompile(`\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}`)
-	matches := templateRegex.FindAllStringSubmatch(template, -1)
-
-	for _, match := range matches {
-		fullMatch := match[0] // e.g., "{{ uid }}"
-		fieldPath := match[1] // e.g., "uid"
-
-		value, err := getNestedField(data, fieldPath)
-		if err != nil {
-			if isFieldNotFoundError(err) {
-				logger.Warn("Skipping unresolvable template field",
-					"field", fieldPath,
-					"object_type", objectType)
-				result = strings.ReplaceAll(result, fullMatch, "")
-				continue
-			}
-			return nil, err
-		}
-
-		// Convert value to string for embedding
-		var strValue string
-		switch v := value.(type) {
-		case string:
-			strValue = v
-		case int, int64, int32, int16, int8:
-			strValue = fmt.Sprintf("%d", v)
-		case float64, float32:
-			strValue = fmt.Sprintf("%v", v)
-		case bool:
-			strValue = fmt.Sprintf("%t", v)
-		default:
-			strValue = fmt.Sprintf("%v", v)
-		}
-
-		result = strings.ReplaceAll(result, fullMatch, strValue)
-	}
-
 	return result, nil
 }
 
-// errTemplateFieldNotFound is returned when a template references a key absent from
-// the data map. It is intentionally distinct from structural errors so callers can
-// choose to skip rather than fail.
-type errTemplateFieldNotFound struct{ field string }
-
-func (e *errTemplateFieldNotFound) Error() string {
-	return fmt.Sprintf("template field '%s' not found in data", e.field)
+// usableStrictValue reports whether a resolved value can stand in for a strict
+// (identity/authorization) template reference without producing an empty or
+// garbled reference such as "project:" or "project:<nil>".
+func usableStrictValue(value any, embedded bool) bool {
+	switch v := value.(type) {
+	case nil:
+		return false
+	case string:
+		return v != ""
+	case map[string]any, []any:
+		return !embedded
+	default:
+		return true
+	}
 }
 
-func isFieldNotFoundError(err error) bool {
-	var e *errTemplateFieldNotFound
-	return errors.As(err, &e)
+func unresolvedTemplateError(field, fieldPath string) error {
+	return fmt.Errorf("indexing_config.%s: template field '%s' cannot be resolved from data", field, fieldPath)
 }
 
-// getNestedField retrieves a value from a nested map using dot notation
-// e.g., "parent.id" retrieves data["parent"]["id"]
-func getNestedField(data map[string]any, fieldPath string) (any, error) {
-	parts := strings.Split(fieldPath, ".")
+func logSkippedTemplate(logger *slog.Logger, field, fieldPath, objectType string) {
+	logger.Warn("Skipping unresolvable template field",
+		"indexing_config_field", field,
+		"field", fieldPath,
+		"object_type", objectType)
+}
+
+// getNestedField retrieves a value from a nested map using dot notation, e.g.
+// "parent.id" retrieves data["parent"]["id"]. It reports false when any segment
+// is missing or an intermediate value is not an object.
+func getNestedField(data map[string]any, fieldPath string) (any, bool) {
 	var current any = data
-
-	for i, part := range parts {
+	for _, part := range strings.Split(fieldPath, ".") {
 		currentMap, ok := current.(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf("template field path '%s' is invalid: '%s' is not an object", fieldPath, strings.Join(parts[:i], "."))
+			return nil, false
 		}
-
-		value, exists := currentMap[part]
-		if !exists {
-			return nil, &errTemplateFieldNotFound{field: fieldPath}
+		if current, ok = currentMap[part]; !ok {
+			return nil, false
 		}
-
-		current = value
 	}
-
-	return current, nil
+	return current, true
 }
 
 // parseIndexingConfig parses a map[string]any into a strongly-typed IndexingConfig struct
@@ -1468,16 +1485,16 @@ func (s *IndexerService) parseIndexingConfig(indexingConfigData map[string]any, 
 	logger := s.logger
 	logger.Debug("Parsing indexing config", "indexing_config", indexingConfigData, "object_type", objectType)
 
-	// First, expand all templates in the indexing_config data
-	expandedData, err := expandTemplates(transactionData, indexingConfigData, objectType, logger)
-	if err != nil {
-		return nil, fmt.Errorf("failed to expand templates in indexing_config: %w", err)
-	}
-
-	// The expanded data should still be a map
-	data, ok := expandedData.(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("indexing_config must be an object after template expansion")
+	// Expand templates per top-level key so identity/authorization fields can be
+	// strict while free-text fields degrade gracefully.
+	data := make(map[string]any, len(indexingConfigData))
+	for key, value := range indexingConfigData {
+		_, strict := strictTemplateFields[key]
+		expanded, err := expandTemplates(transactionData, value, key, strict, objectType, logger)
+		if err != nil {
+			return nil, fmt.Errorf("failed to expand templates in indexing_config: %w", err)
+		}
+		data[key] = expanded
 	}
 	config := &types.IndexingConfig{}
 

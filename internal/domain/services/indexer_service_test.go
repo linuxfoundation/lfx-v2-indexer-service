@@ -692,7 +692,7 @@ func TestIndexerService_parseIndexingConfig_TemplateExpansion(t *testing.T) {
 			},
 		},
 		{
-			name: "missing template field should error",
+			name: "missing template field in object_id should error",
 			indexingConfig: map[string]any{
 				"object_id":              "{{ missing_field }}",
 				"access_check_object":    "project:proj-123",
@@ -704,7 +704,163 @@ func TestIndexerService_parseIndexingConfig_TemplateExpansion(t *testing.T) {
 				"uid": "proj-123",
 			},
 			wantErr:     true,
+			errContains: "indexing_config.object_id: template field 'missing_field' cannot be resolved",
+		},
+		{
+			name: "missing embedded template field in access_check_object should error",
+			indexingConfig: map[string]any{
+				"object_id":              "proj-123",
+				"access_check_object":    "project:{{ missing_field }}",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:proj-123",
+				"history_check_relation": "historian",
+			},
+			transactionData: map[string]any{
+				"uid": "proj-123",
+			},
+			wantErr:     true,
+			errContains: "indexing_config.access_check_object: template field 'missing_field' cannot be resolved",
+		},
+		{
+			name: "empty value embedded in strict field should error",
+			indexingConfig: map[string]any{
+				"object_id":              "proj-123",
+				"access_check_object":    "project:proj-123",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:{{ empty }}",
+				"history_check_relation": "historian",
+			},
+			transactionData: map[string]any{
+				"empty": "",
+			},
+			wantErr:     true,
+			errContains: "indexing_config.history_check_object: template field 'empty' cannot be resolved",
+		},
+		{
+			name: "null whole-value parent ref should error",
+			indexingConfig: map[string]any{
+				"object_id":              "proj-123",
+				"access_check_object":    "project:proj-123",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:proj-123",
+				"history_check_relation": "historian",
+				"parent_refs":            []interface{}{"{{ parent }}", "project:{{ meta }}"},
+			},
+			transactionData: map[string]any{
+				"parent": nil,
+				"meta":   map[string]any{"a": 1},
+			},
+			wantErr:     true,
+			errContains: "indexing_config.parent_refs: template field 'parent' cannot be resolved",
+		},
+		{
+			name: "object embedded in strict field should error",
+			indexingConfig: map[string]any{
+				"object_id":              "proj-123",
+				"access_check_object":    "project:{{ meta }}",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:proj-123",
+				"history_check_relation": "historian",
+			},
+			transactionData: map[string]any{
+				"meta": map[string]any{"a": 1},
+			},
+			wantErr:     true,
+			errContains: "indexing_config.access_check_object: template field 'meta' cannot be resolved",
+		},
+		{
+			name: "whole-value reference to hyphenated key should resolve",
+			indexingConfig: map[string]any{
+				"object_id":              "{{resource-id}}",
+				"access_check_object":    "project:abc-123",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:abc-123",
+				"history_check_relation": "historian",
+				"sort_name":              "{{ display name }}",
+			},
+			transactionData: map[string]any{
+				"resource-id":  "abc-123",
+				"display name": "Acme",
+			},
+			wantErr: false,
+			validate: func(t *testing.T, config *types.IndexingConfig) {
+				assert.Equal(t, "abc-123", config.ObjectID)
+				assert.Equal(t, "Acme", config.SortName)
+			},
+		},
+		{
+			name: "whole-value reference resolving to a non-string object_id should error",
+			indexingConfig: map[string]any{
+				"object_id":              "{{ count }}",
+				"access_check_object":    "project:abc-123",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:abc-123",
+				"history_check_relation": "historian",
+			},
+			transactionData: map[string]any{
+				"count": 42,
+			},
+			wantErr:     true,
 			errContains: "object_id is required and must be a non-empty string",
+		},
+		{
+			name: "missing hyphenated whole-value key in strict field should error",
+			indexingConfig: map[string]any{
+				"object_id":              "{{resource-id}}",
+				"access_check_object":    "project:abc-123",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:abc-123",
+				"history_check_relation": "historian",
+			},
+			transactionData: map[string]any{},
+			wantErr:         true,
+			errContains:     "indexing_config.object_id: template field 'resource-id' cannot be resolved",
+		},
+		{
+			name: "embedded reference outside token grammar in strict field should error",
+			indexingConfig: map[string]any{
+				"object_id":              "abc-123",
+				"access_check_object":    "project:{{resource-id}}",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:abc-123",
+				"history_check_relation": "historian",
+			},
+			transactionData: map[string]any{
+				"resource-id": "abc-123",
+			},
+			wantErr:     true,
+			errContains: "indexing_config.access_check_object: unsupported template reference",
+		},
+		{
+			name: "unsupported reference in parent_refs array element should error",
+			indexingConfig: map[string]any{
+				"object_id":              "abc-123",
+				"access_check_object":    "project:abc-123",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:abc-123",
+				"history_check_relation": "historian",
+				"parent_refs":            []interface{}{"org:org-1", "org:{{a-b}}"},
+			},
+			transactionData: map[string]any{
+				"a-b": "org-2",
+			},
+			wantErr:     true,
+			errContains: "indexing_config.parent_refs: unsupported template reference",
+		},
+		{
+			name: "escaped braces in strict field are not an unsupported reference",
+			indexingConfig: map[string]any{
+				"object_id":              "abc-123",
+				"access_check_object":    `project:\{{x}}`,
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:abc-123",
+				"history_check_relation": "historian",
+			},
+			transactionData: map[string]any{},
+			wantErr:         false,
+			validate: func(t *testing.T, config *types.IndexingConfig) {
+				assert.Equal(t, "project:{{x}}", config.AccessCheckObject)
+			},
 		},
 		{
 			name: "missing template field in optional embedded string should succeed",
@@ -726,7 +882,7 @@ func TestIndexerService_parseIndexingConfig_TemplateExpansion(t *testing.T) {
 			},
 		},
 		{
-			name: "invalid nested field path should error",
+			name: "nested path through non-object in parent_refs should error",
 			indexingConfig: map[string]any{
 				"object_id":              "{{ uid }}",
 				"access_check_object":    "project:{{ uid }}",
@@ -740,7 +896,78 @@ func TestIndexerService_parseIndexingConfig_TemplateExpansion(t *testing.T) {
 				"parent": "not-an-object",
 			},
 			wantErr:     true,
-			errContains: "is not an object",
+			errContains: "indexing_config.parent_refs: template field 'parent.invalid.path' cannot be resolved",
+		},
+		{
+			// lfx-self-serve-ops#1367: user text copied into search fields must not
+			// fail the message when it happens to look like a template.
+			name: "nested path through non-object in search fields is skipped",
+			indexingConfig: map[string]any{
+				"object_id":              "committee-1",
+				"access_check_object":    "committee:committee-1",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "committee:committee-1",
+				"history_check_relation": "auditor",
+				"sort_name":              "{{ uid.x }}",
+				"name_and_aliases":       []interface{}{"{{ uid.x }}"},
+				"fulltext":               "Board {{ uid.x }} minutes",
+				"tags":                   []interface{}{"display_name:{{ uid.x }}"},
+				"contacts": []interface{}{
+					map[string]interface{}{"name": "{{ uid.x }}"},
+				},
+			},
+			transactionData: map[string]any{
+				"uid": "committee-1",
+			},
+			wantErr: false,
+			validate: func(t *testing.T, config *types.IndexingConfig) {
+				assert.Equal(t, "committee-1", config.ObjectID)
+				assert.Equal(t, "", config.SortName)
+				assert.Equal(t, []string{""}, config.NameAndAliases)
+				assert.Equal(t, "Board  minutes", config.Fulltext)
+				assert.Equal(t, []string{"display_name:"}, config.Tags)
+				require.Len(t, config.Contacts, 1)
+				assert.Equal(t, "", config.Contacts[0].Name)
+			},
+		},
+		{
+			name: "substituted values are not expanded again",
+			indexingConfig: map[string]any{
+				"object_id":              "{{ uid }}",
+				"access_check_object":    "project:{{ uid }}",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:{{ uid }}",
+				"history_check_relation": "historian",
+				"fulltext":               "{{ name }} {{ slug }}",
+			},
+			transactionData: map[string]any{
+				"uid":  "proj-123",
+				"name": "{{ slug }}",
+				"slug": "my-slug",
+			},
+			wantErr: false,
+			validate: func(t *testing.T, config *types.IndexingConfig) {
+				assert.Equal(t, "{{ slug }} my-slug", config.Fulltext)
+			},
+		},
+		{
+			name: "escape applies only to the braces it precedes",
+			indexingConfig: map[string]any{
+				"object_id":              "{{ uid }}",
+				"access_check_object":    "project:{{ uid }}",
+				"access_check_relation":  "viewer",
+				"history_check_object":   "project:{{ uid }}",
+				"history_check_relation": "historian",
+				"fulltext":               "\\{{ literal }} {{ name }}",
+			},
+			transactionData: map[string]any{
+				"uid":  "proj-123",
+				"name": "My Project",
+			},
+			wantErr: false,
+			validate: func(t *testing.T, config *types.IndexingConfig) {
+				assert.Equal(t, "{{ literal }} My Project", config.Fulltext)
+			},
 		},
 		{
 			name: "mixed templates and literals in array",
@@ -1665,4 +1892,57 @@ func TestIndexerService_ProcessTransaction_InvalidObjectID_Delete(t *testing.T) 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), constants.ErrInvalidObjectID)
 	assert.Empty(t, mockStorageRepo.IndexCalls, "expected no writes to OpenSearch for corrupted object_id")
+}
+
+// TestIndexerService_ProcessTransaction_TemplateShapedUserText is the regression
+// for lfx-self-serve-ops#1367: a committee named with template-shaped text must
+// still be indexed, and a later visibility change must reach the index.
+func TestIndexerService_ProcessTransaction_TemplateShapedUserText(t *testing.T) {
+	storage := mocks.NewMockStorageRepository()
+	messaging := mocks.NewMockMessagingRepository()
+	logger, _ := logging.TestLogger(t)
+	service := NewIndexerService(storage, messaging, logger)
+
+	const name = "{{ uid.x }}"
+	for _, step := range []struct {
+		action constants.MessageAction
+		public bool
+	}{
+		{action: constants.ActionCreated, public: true},
+		{action: constants.ActionUpdated, public: false},
+	} {
+		public := step.public
+		envelope := types.IndexerMessageEnvelope{
+			Action:  step.action,
+			Headers: map[string]string{constants.AuthorizationHeader: "Bearer test-token"},
+			Data:    map[string]any{"uid": "committee-1", "name": name, "public": public},
+			IndexingConfig: &types.IndexingConfig{
+				ObjectID:             "committee-1",
+				Public:               &public,
+				AccessCheckObject:    "committee:committee-1",
+				AccessCheckRelation:  "viewer",
+				HistoryCheckObject:   "committee:committee-1",
+				HistoryCheckRelation: "auditor",
+				SortName:             name,
+				NameAndAliases:       []string{name},
+				Fulltext:             name + " description",
+			},
+		}
+		payload, err := json.Marshal(envelope)
+		require.NoError(t, err)
+		var message map[string]any
+		require.NoError(t, json.Unmarshal(payload, &message))
+
+		transaction, err := service.CreateTransactionFromMessage(message, "committee", false)
+		require.NoError(t, err, step.action)
+		result, err := service.ProcessTransaction(context.Background(), transaction, "resources")
+		require.NoError(t, err, step.action)
+		assert.True(t, result.Success, step.action)
+	}
+
+	require.Len(t, storage.IndexCalls, 2)
+	var body contracts.TransactionBody
+	require.NoError(t, json.Unmarshal([]byte(storage.IndexCalls[1].Body), &body))
+	assert.Equal(t, "committee:committee-1", storage.IndexCalls[1].DocID)
+	assert.False(t, body.Public, "the later private update must be reflected in the index")
 }
