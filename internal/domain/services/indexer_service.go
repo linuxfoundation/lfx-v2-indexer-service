@@ -1323,7 +1323,7 @@ func rejectTemplateReference(field, value string) error {
 // performed.
 func (s *IndexerService) parseIndexingConfig(data map[string]any, objectType string) (*types.IndexingConfig, error) {
 	logger := s.logger
-	logger.Debug("Parsing indexing config", "indexing_config", data, "object_type", objectType)
+	logger.Debug("Parsing indexing config", "object_type", objectType, "field_count", len(data))
 
 	config := &types.IndexingConfig{}
 
@@ -1432,7 +1432,7 @@ func (s *IndexerService) parseIndexingConfig(data map[string]any, objectType str
 		config.Contacts = contacts
 	}
 
-	logger.Debug("Parsed indexing config", "config", config)
+	logger.Debug("Parsed indexing config", "object_type", objectType, "contact_count", len(config.Contacts))
 
 	return config, nil
 }
