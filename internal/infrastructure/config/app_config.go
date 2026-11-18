@@ -22,10 +22,10 @@ import (
 // explicitly-set one, so the two stay consistent with each other.
 const ackWaitSafetyMargin = 10 * time.Second
 
-// An audited retry can create/verify the delivery receipt, create/verify
-// mutation history, then perform a guarded current write: five sequential
-// OpenSearch requests in the worst case.
-const auditMaxOpenSearchRequests = 5
+// Concurrent first deliveries can create/verify the receipt (2 requests), find
+// history absent (1), race its create/verify (2), then update current state (1).
+// Attribution's independent I/O budget is added by auditProcessingBudget.
+const auditMaxOpenSearchRequests = 6
 
 // drainTimeoutSafetyMargin is added on top of OpenSearch.Timeout +
 // OpenSearch.BatchMaxWait when validating NATS.DrainTimeout, so a detached
@@ -390,7 +390,7 @@ func (c *AppConfig) validateNATS() error {
 	minAckWait := c.minimumAckWait()
 	if c.NATS.AckWait < minAckWait {
 		if c.Audit.Enabled {
-			return fmt.Errorf("NATS ack wait (%v) must be at least max(5 * OpenSearch timeout + 10s, OpenSearch timeout + batch max wait + 10s) (%v)", c.NATS.AckWait, minAckWait)
+			return fmt.Errorf("NATS ack wait (%v) must cover six OpenSearch requests plus attribution (%v), or legacy batching if larger, plus safety margin (%v)", c.NATS.AckWait, constants.AuditAttributionBudget, minAckWait)
 		}
 		return fmt.Errorf("NATS ack wait (%v) must be at least OpenSearch timeout plus batch max wait plus safety margin (%v)", c.NATS.AckWait, minAckWait)
 	}
@@ -404,11 +404,11 @@ func (c *AppConfig) validateNATS() error {
 	// publish its domain event or Ack the message.
 	minDrainTimeout := c.OpenSearch.Timeout + c.OpenSearch.BatchMaxWait + drainTimeoutSafetyMargin
 	if c.Audit.Enabled {
-		minDrainTimeout = max(minDrainTimeout, auditMaxOpenSearchRequests*c.OpenSearch.Timeout+drainTimeoutSafetyMargin)
+		minDrainTimeout = max(minDrainTimeout, c.auditProcessingBudget()+drainTimeoutSafetyMargin)
 	}
 	if c.NATS.DrainTimeout < minDrainTimeout {
 		if c.Audit.Enabled {
-			return fmt.Errorf("NATS drain timeout (%v) must be at least max(5 * OpenSearch timeout + 5s, OpenSearch timeout + batch max wait + 5s) (%v)", c.NATS.DrainTimeout, minDrainTimeout)
+			return fmt.Errorf("NATS drain timeout (%v) must cover six OpenSearch requests plus attribution (%v), or legacy batching if larger, plus safety margin (%v)", c.NATS.DrainTimeout, constants.AuditAttributionBudget, minDrainTimeout)
 		}
 		return fmt.Errorf("NATS drain timeout (%v) must be at least OpenSearch timeout plus batch max wait plus safety margin (%v)", c.NATS.DrainTimeout, minDrainTimeout)
 	}
@@ -421,11 +421,17 @@ func (c *AppConfig) validateNATS() error {
 func (c *AppConfig) minimumAckWait() time.Duration {
 	legacy := c.OpenSearch.Timeout + c.OpenSearch.BatchMaxWait + ackWaitSafetyMargin
 	if c.Audit.Enabled {
-		if audited := auditMaxOpenSearchRequests*c.OpenSearch.Timeout + ackWaitSafetyMargin; audited > legacy {
+		if audited := c.auditProcessingBudget() + ackWaitSafetyMargin; audited > legacy {
 			return audited
 		}
 	}
 	return legacy
+}
+
+// auditProcessingBudget includes all sequential external work before ACK,
+// including optional identity-cache operations and authentication key fetches.
+func (c *AppConfig) auditProcessingBudget() time.Duration {
+	return auditMaxOpenSearchRequests*c.OpenSearch.Timeout + constants.AuditAttributionBudget
 }
 
 // validateOpenSearch validates OpenSearch configuration

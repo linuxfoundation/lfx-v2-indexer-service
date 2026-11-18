@@ -40,6 +40,13 @@ type AuditAdmission struct {
 	policies map[string]AuditPublisherPolicy
 }
 
+// AdmittedAudit binds a decoded envelope to its authenticated dispatch actor.
+// Actor JWT evidence does not replace this trusted-publisher admission.
+type AdmittedAudit struct {
+	Envelope  *types.IndexerMessageEnvelope
+	Principal string
+}
+
 // validateContent resolves a snapshot validator only within its registered
 // publisher/resource namespace; no schema is globally trusted by name alone.
 func (a *AuditAdmission) validateContent(publisher, resource string, content types.AuditContent) error {
@@ -106,7 +113,7 @@ func NewAuditAdmission(auth contracts.TokenValidator, policies []AuditPublisherP
 // Admit checks the wire contract and snapshot schema, then authenticates the
 // publishing service and verifies its ownership of the supplied claims.
 // It does not enable writes or decide erasure/reconciliation policy.
-func (a *AuditAdmission) Admit(ctx context.Context, payload []byte, objectType string) (*types.IndexerMessageEnvelope, error) {
+func (a *AuditAdmission) Admit(ctx context.Context, payload []byte, objectType string) (*AdmittedAudit, error) {
 	if a == nil || a.auth == nil || len(a.policies) == 0 {
 		return nil, fmt.Errorf("audit admission is not configured")
 	}
@@ -127,5 +134,5 @@ func (a *AuditAdmission) Admit(ctx context.Context, payload []byte, objectType s
 		// Do not return auth errors: they can contain JWT contents or identity data.
 		return nil, fmt.Errorf("audit publisher authentication failed")
 	}
-	return envelope, nil
+	return &AdmittedAudit{Envelope: envelope, Principal: principal.Principal}, nil
 }

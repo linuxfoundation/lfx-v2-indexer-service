@@ -30,7 +30,7 @@ var errNonJWTToken = errors.New("token is not a JWT")
 // fetch can't exceed the ackWaitSafetyMargin (10s) that app_config.go's
 // AckWait derivation reserves for everything outside the OpenSearch flush
 // path, including principal/JWKS resolution.
-const jwksHTTPTimeout = 5 * time.Second
+const jwksHTTPTimeout = constants.JWTKeyFetchTimeout
 
 // HeimdallClaims contains extra custom claims we want to parse from the JWT token
 type HeimdallClaims struct {
@@ -46,7 +46,7 @@ func (c *HeimdallClaims) Validate(ctx context.Context) error {
 		logger.WarnContext(ctx, "Principal validation failed: missing principal")
 		return errors.New(constants.ErrPrincipalMissing)
 	}
-	logger.DebugContext(ctx, "Principal validation passed", "principal", c.Principal)
+	logger.DebugContext(ctx, "Principal validation passed")
 	return nil
 }
 
@@ -155,6 +155,33 @@ func (r *AuthRepository) ValidateToken(ctx context.Context, token string) (*cont
 		"is_machine_user", r.isMachineUser(principal.Principal))
 
 	return principal, nil
+}
+
+// ValidateActorToken uses the existing issuer/audience/signature/time validator
+// but requires Heimdall's explicit principal claim. Unlike legacy dispatch
+// authentication, actor evidence must not fall back to sub or log user claims.
+func (r *AuthRepository) ValidateActorToken(ctx context.Context, token string) (*contracts.Principal, error) {
+	if len(token) >= len(constants.BearerPrefix) && strings.EqualFold(token[:len(constants.BearerPrefix)], constants.BearerPrefix) {
+		token = token[len(constants.BearerPrefix):]
+	}
+	if token == "" {
+		return nil, fmt.Errorf("invalid actor evidence")
+	}
+	claims, err := r.validator.ValidateToken(ctx, token)
+	if err != nil {
+		// Validator failures can contain credential/claim details. They are
+		// intentionally not returned to logs or protocol errors.
+		return nil, fmt.Errorf("invalid actor evidence")
+	}
+	validated, ok := claims.(*validator.ValidatedClaims)
+	if !ok || validated == nil {
+		return nil, fmt.Errorf("invalid actor evidence")
+	}
+	custom, ok := validated.CustomClaims.(*HeimdallClaims)
+	if !ok || custom == nil || custom.Principal == "" {
+		return nil, fmt.Errorf("invalid actor evidence")
+	}
+	return &contracts.Principal{Principal: custom.Principal, Email: custom.Email}, nil
 }
 
 // ParsePrincipals extracts direct and indirect LFX principals from the

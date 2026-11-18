@@ -23,7 +23,7 @@ import (
 )
 
 func auditResponseWriters() map[string]func(context.Context, *opensearch.Client, time.Duration) error {
-	record := &contracts.HistoryRecord{Publisher: "test-publisher", EventID: "fixture-event", Fingerprint: strings.Repeat("a", 64), Audit: types.AuditEvent{Origin: types.AuditOriginMutation}}
+	record := &contracts.HistoryRecord{Publisher: "test-publisher", EventID: "fixture-event", Fingerprint: strings.Repeat("a", 64), Audit: contracts.HistoryAudit{Origin: types.AuditOriginMutation}}
 	receipt := contracts.AuditDeliveryReceipt{Publisher: record.Publisher, EventID: record.EventID, Fingerprint: record.Fingerprint, Origin: types.AuditOriginMutation}
 	return map[string]func(context.Context, *opensearch.Client, time.Duration) error{
 		"history": func(ctx context.Context, client *opensearch.Client, timeout time.Duration) error {

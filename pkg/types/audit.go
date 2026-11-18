@@ -18,7 +18,9 @@ import (
 )
 
 // AuditSchemaVersion is the versioned audit-capable envelope, not the NATS
-// subject's platform V1/V2 designation. The consumer does not admit it yet.
+// subject's platform naming. Consumer admission is opt-in and fail-closed.
+// The owner-approved pre-adoption attribution correction retains version 2;
+// see docs/audit-v2-contract.md for the narrowly scoped compatibility exception.
 const AuditSchemaVersion = 2
 
 // MaxAuditEnvelopeBytes bounds the complete JSON envelope before decoding.
@@ -40,8 +42,9 @@ const (
 	AuditOriginSyncEcho AuditOrigin = "sync_echo"
 )
 
-// AuditEvent is immutable source metadata captured with the committed mutation.
-// Do not persist bearer tokens or use processing-attempt IDs as EventID.
+// AuditEvent is source metadata captured with the committed mutation. Optional
+// actor evidence may live in the source outbox until its retention limit, but
+// the indexer must strip JWTs before persistence. EventID is never an attempt ID.
 type AuditEvent struct {
 	EventID          string           `json:"event_id"`
 	Publisher        string           `json:"publisher"`
@@ -53,37 +56,22 @@ type AuditEvent struct {
 	Content          *AuditContent    `json:"content,omitempty"`
 }
 
-// AuditAttribution retains correlation references and immutable user profile
-// snapshots for initiating/effective actors, independent of account existence.
-// Authentication and delegation authority must be checked separately.
+// AuditAttribution is publisher input: actor refs and optional signed evidence.
+// Verification and retained identity are indexer-owned output, never assertions
+// accepted from a publisher. Dispatch authorization identifies the publisher.
 type AuditAttribution struct {
-	ActorRef              string             `json:"actor_ref"`
-	EffectiveActorRef     string             `json:"effective_actor_ref"`
-	ActorProfile          *AuditActorProfile `json:"actor_profile,omitempty"`
-	EffectiveActorProfile *AuditActorProfile `json:"effective_actor_profile,omitempty"`
+	ActorRef          string `json:"actor_ref"`
+	EffectiveActorRef string `json:"effective_actor_ref"`
+	ActorJWT          string `json:"actor_jwt,omitempty"`
+	EffectiveActorJWT string `json:"effective_actor_jwt,omitempty"`
 }
 
-// AuditProfileAvailability distinguishes captured attributes (possibly partial)
-// from an explicitly unavailable user profile. It is not an authorization grant.
-type AuditProfileAvailability string
-
-const (
-	// AuditProfileCaptured means at least one requested attribute was captured.
-	AuditProfileCaptured AuditProfileAvailability = "captured"
-	// AuditProfileUnavailable records absence/failure at source-operation time.
-	AuditProfileUnavailable AuditProfileAvailability = "unavailable"
-)
-
-// AuditActorProfile is the approved denormalized user attribution snapshot.
-// Null attributes are explicitly unavailable, not instructions to resolve them
-// later. Do not refresh these values during delivery, replay, or history reads.
-// AvatarURL preserves a credential-free URL, not a copy of the image bytes.
-type AuditActorProfile struct {
-	Availability AuditProfileAvailability `json:"availability"`
-	Name         *string                  `json:"name"`
-	AvatarURL    *string                  `json:"avatar_url"`
-	Email        *string                  `json:"email"`
-	Username     *string                  `json:"username"`
+// AuditActorIdentity is the indexer-owned retained user identity. The username
+// comes from the actor ref and email from matched token evidence or auth-service.
+// Display names, avatar URLs and credentials never belong in this record.
+type AuditActorIdentity struct {
+	Username *string `json:"username"`
+	Email    *string `json:"email"`
 }
 
 // AuditScope captures before/after ownership. References are opaque resource
@@ -180,8 +168,14 @@ func (e *IndexerMessageEnvelope) ValidateV2(objectType string, validateContent A
 	return e.validateV2(objectType, validateContent, true)
 }
 
+// ValidateV2Source validates source metadata without requiring dispatch headers.
+// Like builder preflight, this is not publisher authentication or admission.
+func (e *IndexerMessageEnvelope) ValidateV2Source(objectType string, validateContent AuditContentValidator) error {
+	return e.validateV2(objectType, validateContent, false)
+}
+
 // validateV2 applies common wire/builder semantics while letting persisted,
-// credential-free builder messages defer transport authentication until dispatch.
+// header-free builder messages defer transport authentication until dispatch.
 func (e *IndexerMessageEnvelope) validateV2(objectType string, validateContent AuditContentValidator, requireAuthentication bool) error {
 	if e == nil || e.SchemaVersion != AuditSchemaVersion || e.Audit == nil {
 		return fmt.Errorf("schema_version 2 and audit are required")
@@ -217,9 +211,6 @@ func (e *IndexerMessageEnvelope) validateV2(objectType string, validateContent A
 	}
 	if !auditActorRef(audit.Attribution.ActorRef) || !auditActorRef(audit.Attribution.EffectiveActorRef) {
 		return fmt.Errorf("explicit audit actor and effective actor references are required")
-	}
-	if err := audit.Attribution.validateProfiles(); err != nil {
-		return err
 	}
 	for _, refs := range [][]string{audit.Scope.Before, audit.Scope.After} {
 		for _, ref := range refs {
@@ -332,4 +323,10 @@ func auditRef(value string) bool {
 func auditActorRef(value string) bool {
 	kind, _, _ := strings.Cut(value, ":")
 	return (kind == "user" || kind == "service") && auditRef(value)
+}
+
+// ValidAuditActorRef validates a user:<principal> or service:<client name> ref.
+// It checks syntax only, never actor authentication or delegation authority.
+func ValidAuditActorRef(value string) bool {
+	return auditActorRef(value)
 }

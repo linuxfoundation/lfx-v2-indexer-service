@@ -14,10 +14,29 @@ import (
 
 // MockAuditHistoryRepository models immutable fingerprints and erasure fences.
 type MockAuditHistoryRepository struct {
-	mu      sync.Mutex
-	Records map[string]string
-	Erased  map[string]bool
-	Fail    bool
+	mu         sync.Mutex
+	Records    map[string]string
+	Erased     map[string]bool
+	Fail       bool
+	LastRecord *contracts.HistoryRecord
+}
+
+// VerifyExisting checks retained fingerprints and erasure before enrichment.
+func (h *MockAuditHistoryRepository) VerifyExisting(_ context.Context, record *contracts.HistoryRecord) (bool, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.Fail {
+		return false, fmt.Errorf("history unavailable")
+	}
+	key := record.Publisher + ":" + record.EventID
+	if h.Erased[key] {
+		return false, &contracts.HistoryErasedError{}
+	}
+	fingerprint, exists := h.Records[key]
+	if exists && fingerprint != record.Fingerprint {
+		return false, fmt.Errorf("identity conflict")
+	}
+	return exists, nil
 }
 
 // CreateOrVerify supports storage failures, identical replay and identity misuse.
@@ -41,6 +60,7 @@ func (h *MockAuditHistoryRepository) CreateOrVerify(_ context.Context, record *c
 		h.Records = map[string]string{}
 	}
 	h.Records[key] = record.Fingerprint
+	h.LastRecord = record
 	return true, nil
 }
 

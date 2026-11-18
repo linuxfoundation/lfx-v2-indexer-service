@@ -61,7 +61,7 @@ func TestNewMessageV2RejectsInvalidInputs(t *testing.T) {
 		{"schema_allowlist", func(e *IndexerMessageEnvelope) {
 			e.Audit.Content.After = json.RawMessage(`{"secret":"fixture-private-value"}`)
 		}},
-		{"profile", func(e *IndexerMessageEnvelope) { e.Audit.Attribution.ActorProfile = nil }},
+		{"actor_ref", func(e *IndexerMessageEnvelope) { e.Audit.Attribution.ActorRef = "" }},
 		{"projection_content", func(e *IndexerMessageEnvelope) { e.Audit.Origin = AuditOriginBackfill }},
 		{"data", func(e *IndexerMessageEnvelope) { e.Data = make(chan int) }},
 		{"raw_data_utf8", func(e *IndexerMessageEnvelope) { e.Data = json.RawMessage("{\"name\":\"\xff\"}") }},
@@ -101,12 +101,12 @@ func TestMessageV2RetryIsolation(t *testing.T) {
 	require.NoError(t, err)
 	// Mutating caller-owned data or a dispatch envelope cannot change the event.
 	e.Audit.EventID = "changed"
-	*e.Audit.Attribution.ActorProfile.Name = "Changed Fixture"
+	e.Audit.Attribution.ActorJWT = "changed-evidence"
 	e.Audit.Scope.Before[0] = "project:changed"
 	e.IndexingConfig.ObjectID = "changed"
 	e.Data.(map[string]any)["name"] = "Changed Fixture"
 	first.Audit.Content.Before[0] = '['
-	first.Audit.Attribution.ActorProfile.Email = nil
+	first.Audit.Attribution.ActorJWT = "other-evidence"
 	first.Headers[constants.AuthorizationHeader] = "changed"
 	restored, err := RestoreMessageV2(original, "fixture_resource", fixtureAuditValidator)
 	require.NoError(t, err)
@@ -141,57 +141,20 @@ func TestMessageV2RetryIsolation(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestNewAuditActorProfile(t *testing.T) {
-	for _, tt := range []struct {
-		name       string
-		attributes AuditProfileAttributes
-		valid      bool
-	}{
-		{"unavailable", AuditProfileAttributes{}, true},
-		{"partial", AuditProfileAttributes{Name: auditFixtureString("Test User 1")}, true},
-		{"full", AuditProfileAttributes{Name: auditFixtureString("Test User 1"), Email: auditFixtureString("user-1@example.com"), Username: auditFixtureString("testuser01"), AvatarURL: auditFixtureString("https://example.com/avatar.png")}, true},
-		{"empty", AuditProfileAttributes{Name: auditFixtureString("")}, false},
-		{"unsafe_avatar", AuditProfileAttributes{AvatarURL: auditFixtureString("https://example.com/avatar?token=fixture-private-value")}, false},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			profile, err := NewAuditActorProfile(tt.attributes)
-			if !tt.valid {
-				require.Error(t, err)
-				require.NotContains(t, err.Error(), "fixture-private-value")
-				return
-			}
-			require.NoError(t, err)
-			payload, err := json.Marshal(profile)
-			require.NoError(t, err)
-			if tt.name == "unavailable" {
-				require.JSONEq(t, `{"availability":"unavailable","name":null,"avatar_url":null,"email":null,"username":null}`, string(payload))
-			}
-			if tt.attributes.Name != nil {
-				*tt.attributes.Name = "Changed Fixture"
-				require.Equal(t, "Test User 1", *profile.Name)
-			}
-		})
-	}
-}
-
 func TestNewAuditAttribution(t *testing.T) {
-	unavailable, err := NewAuditActorProfile(AuditProfileAttributes{})
-	require.NoError(t, err)
 	for _, tt := range []struct {
 		name      string
 		actor     AuditActor
 		effective *AuditActor
 		valid     bool
 	}{
-		{"user", AuditActor{"user:testuser01", fixtureAuditProfile()}, nil, true},
-		{"unavailable", AuditActor{"user:testuser01", unavailable}, nil, true},
+		{"user", AuditActor{"user:testuser01", "fixture-evidence"}, nil, true},
+		{"unsigned", AuditActor{Ref: "user:testuser01"}, nil, true},
 		{"service", AuditActor{Ref: "service:test-publisher"}, nil, true},
-		{"delegation", AuditActor{"user:testuser01", fixtureAuditProfile()}, &AuditActor{"user:testuser02", unavailable}, true},
-		{"service_delegation", AuditActor{Ref: "service:test-publisher"}, &AuditActor{"user:testuser02", unavailable}, true},
-		{"missing_user_profile", AuditActor{Ref: "user:testuser01"}, nil, false},
-		{"service_profile", AuditActor{"service:test-publisher", unavailable}, nil, false},
+		{"delegation", AuditActor{"user:testuser01", "actor-evidence"}, &AuditActor{"user:testuser02", "effective-evidence"}, true},
+		{"service_delegation", AuditActor{Ref: "service:test-publisher"}, &AuditActor{Ref: "user:testuser02"}, true},
 		{"missing_ref", AuditActor{}, nil, false},
-		{"same_ref_different_profile", AuditActor{"user:testuser01", fixtureAuditProfile()}, &AuditActor{"user:testuser01", unavailable}, false},
+		{"invalid_ref", AuditActor{Ref: "user:"}, nil, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			attribution, err := NewAuditAttribution(tt.actor, tt.effective)
@@ -200,13 +163,14 @@ func TestNewAuditAttribution(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			if tt.actor.Profile != nil {
-				require.NotSame(t, tt.actor.Profile, attribution.ActorProfile)
-				if tt.effective == nil {
-					require.Equal(t, attribution.ActorProfile, attribution.EffectiveActorProfile)
-					require.NotSame(t, attribution.ActorProfile, attribution.EffectiveActorProfile)
-				}
+			effective := tt.actor
+			if tt.effective != nil {
+				effective = *tt.effective
 			}
+			require.Equal(t, AuditAttribution{
+				ActorRef: tt.actor.Ref, ActorJWT: tt.actor.JWT,
+				EffectiveActorRef: effective.Ref, EffectiveActorJWT: effective.JWT,
+			}, attribution)
 		})
 	}
 }

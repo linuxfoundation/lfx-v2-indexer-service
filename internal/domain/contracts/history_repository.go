@@ -15,5 +15,8 @@ func (*HistoryErasedError) Error() string { return "history event has been expli
 // HistoryRepository appends or verifies an immutable event. A false result
 // means an identical record already existed; a conflict must return an error.
 type HistoryRepository interface {
+	// VerifyExisting checks an existing fingerprint and erasure fence before
+	// resolving first-append identity. Absence returns false; errors fail closed.
+	VerifyExisting(ctx context.Context, record *HistoryRecord) (exists bool, err error)
 	CreateOrVerify(ctx context.Context, record *HistoryRecord) (created bool, err error)
 }

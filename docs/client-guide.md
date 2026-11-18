@@ -90,21 +90,7 @@ approved production snapshot schema or authorization policy.
     "origin": "mutation",
     "attribution": {
       "actor_ref": "user:testuser01",
-      "effective_actor_ref": "user:testuser01",
-      "actor_profile": {
-        "availability": "captured",
-        "name": "Test User 1",
-        "avatar_url": "https://example.com/avatar.png",
-        "email": "user-1@example.com",
-        "username": "testuser01"
-      },
-      "effective_actor_profile": {
-        "availability": "captured",
-        "name": "Test User 1",
-        "avatar_url": "https://example.com/avatar.png",
-        "email": "user-1@example.com",
-        "username": "testuser01"
-      }
+      "effective_actor_ref": "user:testuser01"
     },
     "scope": {
       "before": ["project:fixture-project"],
@@ -126,18 +112,14 @@ approved production snapshot schema or authorization policy.
 - Preserve event identity, source occurrence time/revision, attribution, scope,
   and approved snapshots on every retry. A new processing attempt is not a new
   business mutation.
-- Capture the initiating/effective user's name, avatar URL, email, and username
-  in the profile snapshots at source-operation time, not through a lookup during
-  delivery or history reads. Equal refs require equal profiles. Each user profile
-  explicitly includes all four attributes, using null when unavailable, and
-  `availability: "captured"` for at least one captured attribute or `"unavailable"`
-  when all are null. Service actors have no human profile. No live user account
-  is required to interpret the recorded snapshot; later renames/deletion do not
-  refresh it. Avatar URLs are not archived image bytes and must be credential-free,
-  HTTPS, and query/fragment-free; use null when no approved stable URL is available.
-- Actor profile snapshots are personal history data, not public search data or
-   log context. History authorization, indefinite audit retention, and erasure/replay
-  controls must cover them before audited processing can be enabled.
+- Supply explicit actor refs and optional `actor_jwt`/`effective_actor_jwt` evidence.
+  The indexer checks matching signed principals, then strips JWTs. Missing/expired
+  evidence is unverified, not rejected. Publishers must not send profiles,
+  identities or verification flags, even as null/false. The indexer retains only
+  username/email; history readers resolve name/avatar live. See the actor rules in
+  [the audit contract](audit-v2-contract.md#attribution-and-authentication).
+- Retained identity is private audit data, never public search data or log context.
+  History authorization, retention and erasure/replay controls must cover it.
 - Creates require after scope/snapshot only; updates require both sides; deletes
   require before scope/snapshot only and matching UID/config identity. All audited
   deletes require complete concrete `IndexingConfig`; no legacy mismatch fallback.
@@ -506,25 +488,17 @@ All helpers are in `github.com/linuxfoundation/lfx-v2-indexer-service/pkg/types`
 
 | Helper | Purpose |
 | --- | --- |
-| `NewAuditActorProfile(AuditProfileAttributes)` | Copy the four approved attributes, infer captured/unavailable availability, emit explicit nulls |
-| `NewAuditAttribution(actor, effective)` | Copy initiating/effective refs and profiles; nil effective means the same actor, not a second lookup |
+| `NewAuditAttribution(actor, effective)` | Capture refs and optional actor JWT evidence; nil effective means the same actor |
 | `NewAuditSnapshots(schema, before, after)` | Copy raw object snapshots and set the snapshots representation; nil means an absent side |
 | `NewMessageV2(objectType, MessageV2Options, validator)` | Construct, fully preflight, and freeze a header-free version 2 event |
 | `RestoreMessageV2(payload, objectType, validator)` | Strictly validate frozen outbox JSON, rejecting transport headers |
 | `event.Envelope(freshAuthorization, validator)` | Return an independent dispatch envelope with fresh lowercase authorization |
 
-For example, after capturing the initiating user's approved attributes:
+For example, after capturing the initiating actor and optional signed evidence:
 
 ```go
-profile, err := types.NewAuditActorProfile(types.AuditProfileAttributes{
-    Name: capturedName, AvatarURL: capturedAvatar, Email: capturedEmail,
-    Username: capturedUsername, // *string; nil explicitly means unavailable
-})
-if err != nil {
-    return err
-}
 attribution, err := types.NewAuditAttribution(types.AuditActor{
-    Ref: initiatingActorRef, Profile: profile,
+    Ref: initiatingActorRef, JWT: actorJWT, // optional; never the relay credential
 }, nil) // For delegation, supply a separately captured effective AuditActor.
 if err != nil {
     return err
@@ -570,9 +544,9 @@ the library cannot identify secrets hidden in arbitrary top-level resource data.
   `AuditOriginSyncEcho` explicitly and leave `Content` nil. Identity/time/revision,
   attribution, action-specific scope, data, and config remain required. Do not
   use projection origins to suppress a real mutation's audit requirement.
-- **Unavailable user:** pass `AuditProfileAttributes{}` to record all four nulls
-  and `availability: "unavailable"`. A missing user profile is not equivalent.
-- **Service actor:** use an explicit `service:` ref and nil profile; never infer
+- **Unsigned user:** keep the explicit user ref and omit JWT evidence. The indexer
+  retains username and resolves primary email, retrying transient lookup failures.
+- **Service actor:** use an explicit `service:` ref; never infer
   a service actor from missing request authentication.
 
 Snapshot construction checks JSON object shape; **only complete message
@@ -598,14 +572,16 @@ approval. No production audited enablement flag is introduced here.
 
 At dispatch, restore the immutable event, call `event.Envelope` with fresh service
 authorization, then validate/marshal and use JetStream synchronous publish as in
-the example. Never persist that dispatch envelope, bearer tokens, raw headers,
-or arbitrary directory profiles in an outbox. The library stores frozen JSON with
+the example. Never persist that dispatch envelope, dispatch credentials, raw
+headers or directory profiles in an outbox. Optional actor JWT evidence remains
+in the frozen source payload until outbox retention prunes it. Protect that store
+and do not log its contents. The library stores frozen JSON with
 null headers; it is deliberately not directly dispatchable. Retain the resource
 type alongside it because the subject is not encoded in the envelope.
 
 A `PubAck` means **broker persistence only**, not successful indexing or history
 storage. Timeout/unknown outcome means retry the same event; preserve its original
-identity and captured profiles. JetStream message-ID deduplication is bounded by
+identity and captured attribution. JetStream message-ID deduplication is bounded by
 the broker's deduplication window and is not audit idempotency. Retain the repair
 source for the recovery window and monitor exhausted consumer deliveries.
 

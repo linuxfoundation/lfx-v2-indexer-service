@@ -95,12 +95,8 @@ func run() error {
 }
 
 func buildEvent() (*types.MessageV2, error) {
-	name := "Test User 1"
-	profile, err := types.NewAuditActorProfile(types.AuditProfileAttributes{Name: &name})
-	if err != nil {
-		return nil, err
-	}
-	attribution, err := types.NewAuditAttribution(types.AuditActor{Ref: "user:testuser01", Profile: profile}, nil)
+	// Actor JWT evidence is optional; do not substitute the relay credential.
+	attribution, err := types.NewAuditAttribution(types.AuditActor{Ref: "user:testuser01"}, nil)
 	if err != nil {
 		return nil, err
 	}

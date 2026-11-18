@@ -26,7 +26,7 @@ func TestHistoryRepository_CreateOrVerify(t *testing.T) {
 		Publisher: "test-publisher", EventID: "fixture-event-1", ObjectType: "fixture_resource",
 		ObjectID: "fixture-resource", Fingerprint: strings.Repeat("a", 64),
 		IngestedAt: time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC),
-		Audit:      types.AuditEvent{Origin: types.AuditOriginMutation},
+		Audit:      contracts.HistoryAudit{Origin: types.AuditOriginMutation},
 	}
 	for _, tt := range []struct {
 		name       string
@@ -97,9 +97,67 @@ func TestHistoryRepository_CreateOrVerify(t *testing.T) {
 func TestHistoryRepository_RejectProjection(t *testing.T) {
 	client, err := opensearch.NewClient(opensearch.Config{Addresses: []string{"http://127.0.0.1:1"}})
 	require.NoError(t, err)
-	record := &contracts.HistoryRecord{Publisher: "fixture", EventID: "event", Fingerprint: strings.Repeat("a", 64), Audit: types.AuditEvent{Origin: types.AuditOriginReindex}}
+	record := &contracts.HistoryRecord{Publisher: "fixture", EventID: "event", Fingerprint: strings.Repeat("a", 64), Audit: contracts.HistoryAudit{Origin: types.AuditOriginReindex}}
 	_, err = NewHistoryRepository(client).CreateOrVerify(context.Background(), record)
 	require.ErrorContains(t, err, "projection-only")
+}
+
+func TestHistoryRepository_VerifyExisting(t *testing.T) {
+	record := &contracts.HistoryRecord{
+		Publisher: "test-publisher", EventID: "fixture-event-1", ObjectType: "fixture_resource",
+		ObjectID: "fixture-resource", Fingerprint: strings.Repeat("a", 64),
+	}
+	for _, tt := range []struct {
+		name      string
+		status    int
+		body      string
+		exists    bool
+		wantError string
+	}{
+		{name: "absent", status: http.StatusNotFound, body: `{"_index":"resource-history-v1","_id":"test-publisher:fixture-event-1","found":false}`},
+		{name: "404 storage error", status: http.StatusNotFound, body: `{"error":{"type":"index_not_found_exception","reason":"private-response"},"status":404}`, wantError: "invalid not-found response"},
+		{name: "404 empty body", status: http.StatusNotFound, wantError: "invalid not-found response"},
+		{name: "404 malformed", status: http.StatusNotFound, body: `{`, wantError: "invalid not-found response"},
+		{name: "404 missing found", status: http.StatusNotFound, body: `{}`, wantError: "invalid not-found response"},
+		{name: "404 null found", status: http.StatusNotFound, body: `{"found":null}`, wantError: "invalid not-found response"},
+		{name: "404 wrong found type", status: http.StatusNotFound, body: `{"found":"false"}`, wantError: "invalid not-found response"},
+		{name: "404 claims found", status: http.StatusNotFound, body: `{"found":true}`, wantError: "invalid not-found response"},
+		{name: "404 duplicate found", status: http.StatusNotFound, body: `{"found":true,"found":false}`, wantError: "invalid not-found response"},
+		{name: "404 error with found false", status: http.StatusNotFound, body: `{"found":false,"error":null}`, wantError: "invalid not-found response"},
+		{name: "404 source with found false", status: http.StatusNotFound, body: `{"found":false,"_source":{}}`, wantError: "invalid not-found response"},
+		{name: "404 trailing JSON", status: http.StatusNotFound, body: `{"found":false}{}`, wantError: "invalid not-found response"},
+		{name: "404 oversized", status: http.StatusNotFound, body: `{"found":false,"extra":"` + strings.Repeat("x", 8192) + `"}`, wantError: "invalid not-found response"},
+		{name: "retained", status: http.StatusOK, exists: true},
+		{name: "erased", status: http.StatusOK, body: `{"_source":{"erased":true}}`, wantError: "explicitly erased"},
+		{name: "mismatch", status: http.StatusOK, body: `{"_source":{"fingerprint":"different"}}`, wantError: "different content"},
+		{name: "malformed", status: http.StatusOK, body: `{`, wantError: "decode existing"},
+		{name: "unavailable", status: http.StatusServiceUnavailable, body: "private-response", wantError: "status 503"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				require.Equal(t, http.MethodGet, r.Method)
+				require.Equal(t, "/resource-history-v1/_doc/test-publisher:fixture-event-1", r.URL.Path)
+				require.NotContains(t, r.URL.Query().Get("_source_includes"), "audit")
+				w.WriteHeader(tt.status)
+				if tt.body != "" {
+					_, _ = w.Write([]byte(tt.body))
+				} else if tt.exists {
+					_ = json.NewEncoder(w).Encode(map[string]any{"_source": record})
+				}
+			}))
+			defer server.Close()
+			client, err := opensearch.NewClient(opensearch.Config{Addresses: []string{server.URL}, DisableRetry: true})
+			require.NoError(t, err)
+			exists, err := NewHistoryRepository(client).VerifyExisting(context.Background(), record)
+			if tt.wantError != "" {
+				require.ErrorContains(t, err, tt.wantError)
+				require.NotContains(t, err.Error(), "private-response")
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, tt.exists, exists)
+		})
+	}
 }
 
 // TestHistoryRepository_ErasureFencesReplay verifies targeted replacement removes
@@ -131,7 +189,7 @@ func TestHistoryRepository_ErasureFencesReplay(t *testing.T) {
 	client, err := opensearch.NewClient(opensearch.Config{Addresses: []string{server.URL}})
 	require.NoError(t, err)
 	repo := NewHistoryRepository(client)
-	record := &contracts.HistoryRecord{Publisher: "test-publisher", EventID: "fixture-event-1", Fingerprint: strings.Repeat("a", 64), Audit: types.AuditEvent{Origin: types.AuditOriginMutation}}
+	record := &contracts.HistoryRecord{Publisher: "test-publisher", EventID: "fixture-event-1", Fingerprint: strings.Repeat("a", 64), Audit: contracts.HistoryAudit{Origin: types.AuditOriginMutation}}
 	_, err = repo.CreateOrVerify(context.Background(), record)
 	require.NoError(t, err)
 	err = repo.Erase(context.Background(), record.Publisher, record.EventID, time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC))

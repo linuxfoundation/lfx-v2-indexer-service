@@ -16,6 +16,7 @@ import (
 // Cache is the FGA cache selected by configuration.
 type Cache struct {
 	contracts.FGACache
+	contracts.IdentityCache
 	// Backend is the backend in use, which is "none" when the configured one
 	// could not be used.
 	Backend string
@@ -45,11 +46,11 @@ func New(cfg config.CacheConfig, nc *natsgo.Conn, logger *slog.Logger) *Cache {
 			return off()
 		}
 		c := newFailSafe(newNATSKVStore(js, cfg.Bucket), cfg.Timeout, cfg.RetryInterval, logger)
-		return &Cache{FGACache: c, Backend: cfg.Backend, close: c.Close}
+		return &Cache{FGACache: c, IdentityCache: c, Backend: cfg.Backend, close: c.Close}
 	case config.CacheBackendValkey:
 		store := newValkeyStore(cfg)
 		c := newFailSafe(store, cfg.Timeout, cfg.RetryInterval, logger)
-		return &Cache{FGACache: c, Backend: cfg.Backend, close: func() {
+		return &Cache{FGACache: c, IdentityCache: c, Backend: cfg.Backend, close: func() {
 			c.Close()
 			store.close()
 		}}
@@ -62,5 +63,5 @@ func New(cfg config.CacheConfig, nc *natsgo.Conn, logger *slog.Logger) *Cache {
 }
 
 func off() *Cache {
-	return &Cache{FGACache: noneCache{}, Backend: config.CacheBackendNone, close: func() {}}
+	return &Cache{FGACache: noneCache{}, IdentityCache: noneCache{}, Backend: config.CacheBackendNone, close: func() {}}
 }

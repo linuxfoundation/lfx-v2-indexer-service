@@ -20,13 +20,20 @@ import (
 // guarded current write. The consumer rejects v2 by default; enablement
 // requires approved policies and the private index setup.
 type AuditWorkflow struct {
-	admission *services.AuditAdmission
-	history   contracts.HistoryRepository
-	receipts  contracts.AuditDeliveryReceiptRepository
-	current   contracts.AuditProjection
-	notifier  contracts.MessagePublisher
-	cleanup   contracts.AuditedCleanup
-	now       func() time.Time
+	admission   *services.AuditAdmission
+	history     contracts.HistoryRepository
+	receipts    contracts.AuditDeliveryReceiptRepository
+	current     contracts.AuditProjection
+	notifier    contracts.MessagePublisher
+	cleanup     contracts.AuditedCleanup
+	attribution *services.AuditAttributionService
+	now         func() time.Time
+}
+
+// SetAttributionService installs credential verification and retained identity.
+// Audited processing fails closed if the service has not been installed.
+func (w *AuditWorkflow) SetAttributionService(attribution *services.AuditAttributionService) {
+	w.attribution = attribution
 }
 
 // NewAuditWorkflow requires all dependencies; nil cannot ACK an event.
@@ -47,10 +54,20 @@ func (w *AuditWorkflow) Process(ctx context.Context, payload []byte, subject str
 	if !ok {
 		return fmt.Errorf("invalid audited subject")
 	}
-	envelope, err := w.admission.Admit(ctx, payload, objectType)
+	if w.attribution == nil {
+		return fmt.Errorf("audit attribution is not configured")
+	}
+	admitted, err := w.admission.Admit(ctx, payload, objectType)
 	if err != nil {
 		return err
 	}
+	envelope := admitted.Envelope
+	evidence := w.attribution.Verify(ctx, envelope.Audit.Attribution, admitted.Principal)
+	// This envelope is the private result of strict decoding, never the source
+	// publisher's frozen event. Do not retain actor or dispatch credentials past
+	// verification. Source preflight does not repeat publisher authentication.
+	envelope.Audit.Attribution.ActorJWT, envelope.Audit.Attribution.EffectiveActorJWT = "", ""
+	envelope.Headers = nil
 	fingerprint, err := contracts.AuditFingerprint(envelope, objectType)
 	if err != nil {
 		return err
@@ -66,10 +83,22 @@ func (w *AuditWorkflow) Process(ctx context.Context, payload []byte, subject str
 		if err != nil {
 			return err
 		}
-		if _, err := w.history.CreateOrVerify(ctx, record); err != nil {
-			// An erased ID contains no trustworthy action/resource proof.
-			// Never allow it to drive a current write, even if it claims delete.
-			return fmt.Errorf("append audit history: %w", err)
+		exists, err := w.history.VerifyExisting(ctx, record)
+		if err != nil {
+			return fmt.Errorf("verify audit history: %w", err)
+		}
+		if !exists {
+			attribution, err := w.attribution.Resolve(ctx, evidence)
+			if err != nil {
+				return err
+			}
+			record.Audit.Attribution = attribution
+			record.ActorVerified, record.EffectiveActorVerified = attribution.ActorVerified, attribution.EffectiveActorVerified
+			if _, err := w.history.CreateOrVerify(ctx, record); err != nil {
+				// An erased ID contains no trustworthy action/resource proof.
+				// Never allow it to drive a current write, even if it claims delete.
+				return fmt.Errorf("append audit history: %w", err)
+			}
 		}
 	}
 	body, applied, err := w.current.ApplyIfNewer(ctx, envelope, objectType, fingerprint)

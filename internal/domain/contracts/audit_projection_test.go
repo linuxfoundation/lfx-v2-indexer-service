@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
-	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/types"
 )
 
 func TestAuditProjectionBody(t *testing.T) {
@@ -70,8 +69,8 @@ func TestAuditProjectionBody_DelegatedAttribution(t *testing.T) {
 					want = append(want, "user:delegated-fixture")
 				}
 				private := "private-profile-marker"
-				e.Audit.Attribution.ActorProfile = &types.AuditActorProfile{Name: &private}
-				e.Audit.Attribution.EffectiveActorProfile = &types.AuditActorProfile{Name: &private}
+				e.Audit.Attribution.ActorJWT = private
+				e.Audit.Attribution.EffectiveActorJWT = private
 				body, err := AuditProjectionBody(e, "fixture_resource")
 				require.NoError(t, err)
 				var by, principals []string

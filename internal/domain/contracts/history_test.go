@@ -42,6 +42,8 @@ func historyFixtureValidator(publisher, objectType string, content types.AuditCo
 func TestNewHistoryRecord(t *testing.T) {
 	now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
 	e := historyFixture()
+	e.Audit.Attribution.ActorJWT = "private-actor-evidence"
+	e.Audit.Attribution.EffectiveActorJWT = "private-effective-evidence"
 	first, err := NewHistoryRecord(e, "fixture_resource", historyFixtureValidator, now)
 	require.NoError(t, err)
 	require.Equal(t, now, first.IngestedAt)
@@ -49,17 +51,27 @@ func TestNewHistoryRecord(t *testing.T) {
 	encoded, err := json.Marshal(first)
 	require.NoError(t, err)
 	require.NotContains(t, string(encoded), "token-not-persisted")
+	require.NotContains(t, string(encoded), "private-actor-evidence")
+	require.NotContains(t, string(encoded), "private-effective-evidence")
+	require.NotContains(t, string(encoded), "actor_jwt")
 	require.NotContains(t, string(encoded), "9007199254740993") // projection data is only fingerprinted
 	e.Audit.Content.Before = json.RawMessage(`{"name":"Mutated after record creation"}`)
 	require.JSONEq(t, `{"name":"Before"}`, string(first.Audit.Content.Before))
 	e.Audit.Content.Before = json.RawMessage(`{"name":"Before"}`)
 
 	e.Headers[constants.AuthorizationHeader] = "Bearer new-credential"
+	e.Audit.Attribution.ActorJWT = "refreshed-actor-evidence"
+	e.Audit.Attribution.EffectiveActorJWT = "refreshed-effective-evidence"
 	e.Audit.Content.After = json.RawMessage(`{ "name" : "After" }`)
 	second, err := NewHistoryRecord(e, "fixture_resource", historyFixtureValidator, now.Add(time.Second))
 	require.NoError(t, err)
 	require.Equal(t, first.Fingerprint, second.Fingerprint)
 	require.Equal(t, now.Add(time.Second), second.IngestedAt) // store keeps the first one
+	e.Audit.Attribution.ActorRef = "service:other-fixture"
+	otherActor, err := AuditFingerprint(e, "fixture_resource")
+	require.NoError(t, err)
+	require.NotEqual(t, first.Fingerprint, otherActor, "actor refs remain immutable fingerprint input")
+	e.Audit.Attribution.ActorRef = "service:fixture"
 
 	e.Data.(map[string]any)["count"] = json.Number("9007199254740994")
 	changed, err := NewHistoryRecord(e, "fixture_resource", historyFixtureValidator, now)

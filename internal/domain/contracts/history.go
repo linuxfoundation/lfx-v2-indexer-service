@@ -20,26 +20,54 @@ import (
 // immutable delivery content. It deliberately omits transport headers and raw
 // projection data; only registered audit snapshots are retained in history.
 type HistoryRecord struct {
-	Publisher            string                  `json:"publisher"`
-	EventID              string                  `json:"event_id"`
-	ObjectType           string                  `json:"object_type"`
-	ObjectID             string                  `json:"object_id"`
-	Action               constants.MessageAction `json:"action"`
-	ResourceRevision     uint64                  `json:"resource_revision"`
-	OccurredAt           time.Time               `json:"occurred_at"`
-	IngestedAt           time.Time               `json:"ingested_at"`
-	HistoryCheckObject   string                  `json:"history_check_object"`
-	HistoryCheckRelation string                  `json:"history_check_relation"`
-	Scope                types.AuditScope        `json:"scope"`
-	Audit                types.AuditEvent        `json:"audit"`
-	Fingerprint          string                  `json:"fingerprint"`
+	Publisher              string                  `json:"publisher"`
+	EventID                string                  `json:"event_id"`
+	ObjectType             string                  `json:"object_type"`
+	ObjectID               string                  `json:"object_id"`
+	Action                 constants.MessageAction `json:"action"`
+	ResourceRevision       uint64                  `json:"resource_revision"`
+	OccurredAt             time.Time               `json:"occurred_at"`
+	IngestedAt             time.Time               `json:"ingested_at"`
+	HistoryCheckObject     string                  `json:"history_check_object"`
+	HistoryCheckRelation   string                  `json:"history_check_relation"`
+	Scope                  types.AuditScope        `json:"scope"`
+	ActorRef               string                  `json:"actor_ref"`
+	EffectiveActorRef      string                  `json:"effective_actor_ref"`
+	ActorVerified          bool                    `json:"actor_verified"`
+	EffectiveActorVerified bool                    `json:"effective_actor_verified"`
+	Audit                  HistoryAudit            `json:"audit"`
+	Fingerprint            string                  `json:"fingerprint"`
+}
+
+// HistoryAttribution is indexer-owned output. It cannot represent credentials
+// or display profiles, and is deliberately separate from publisher input.
+type HistoryAttribution struct {
+	ActorRef               string                    `json:"actor_ref"`
+	EffectiveActorRef      string                    `json:"effective_actor_ref"`
+	ActorVerified          bool                      `json:"actor_verified"`
+	EffectiveActorVerified bool                      `json:"effective_actor_verified"`
+	ActorIdentity          *types.AuditActorIdentity `json:"actor_identity,omitempty"`
+	EffectiveActorIdentity *types.AuditActorIdentity `json:"effective_actor_identity,omitempty"`
+}
+
+// HistoryAudit retains only approved source metadata and derived attribution.
+// Unlike the incoming AuditEvent, this storage type has no JWT fields.
+type HistoryAudit struct {
+	EventID          string              `json:"event_id"`
+	Publisher        string              `json:"publisher"`
+	OccurredAt       time.Time           `json:"occurred_at"`
+	ResourceRevision uint64              `json:"resource_revision"`
+	Origin           types.AuditOrigin   `json:"origin"`
+	Attribution      HistoryAttribution  `json:"attribution"`
+	Scope            types.AuditScope    `json:"scope"`
+	Content          *types.AuditContent `json:"content,omitempty"`
 }
 
 // NewHistoryRecord validates the structural contract and approved snapshot
 // schema. This does NOT establish publisher/actor authority, retention or
 // erasure admission; callers must enforce those before writing this record.
 func NewHistoryRecord(envelope *types.IndexerMessageEnvelope, objectType string, validate types.AuditContentValidator, ingestedAt time.Time) (*HistoryRecord, error) {
-	if err := envelope.ValidateV2(objectType, validate); err != nil {
+	if err := envelope.ValidateV2Source(objectType, validate); err != nil {
 		return nil, err
 	}
 	if envelope.Audit.Origin != types.AuditOriginMutation {
@@ -54,11 +82,13 @@ func NewHistoryRecord(envelope *types.IndexerMessageEnvelope, objectType string,
 	}
 	// Copy the approved audit payload so later mutations of a caller-owned
 	// envelope cannot change the stored snapshot after we fingerprinted it.
-	auditBytes, err := json.Marshal(envelope.Audit)
+	source := *envelope.Audit
+	source.Attribution.ActorJWT, source.Attribution.EffectiveActorJWT = "", ""
+	auditBytes, err := json.Marshal(source)
 	if err != nil {
 		return nil, fmt.Errorf("freeze audit metadata: %w", err)
 	}
-	var audit types.AuditEvent
+	var audit HistoryAudit
 	if err := json.Unmarshal(auditBytes, &audit); err != nil {
 		return nil, fmt.Errorf("freeze audit metadata: %w", err)
 	}
@@ -70,6 +100,7 @@ func NewHistoryRecord(envelope *types.IndexerMessageEnvelope, objectType string,
 		HistoryCheckObject:   envelope.IndexingConfig.HistoryCheckObject,
 		HistoryCheckRelation: envelope.IndexingConfig.HistoryCheckRelation,
 		Scope:                audit.Scope, Audit: audit, Fingerprint: fingerprint,
+		ActorRef: audit.Attribution.ActorRef, EffectiveActorRef: audit.Attribution.EffectiveActorRef,
 	}, nil
 }
 
@@ -83,6 +114,7 @@ func AuditFingerprint(envelope *types.IndexerMessageEnvelope, objectType string)
 	// Go's JSON encoder sorts object keys and preserves json.Number values.
 	audit := *envelope.Audit
 	audit.OccurredAt = audit.OccurredAt.UTC()
+	audit.Attribution.ActorJWT, audit.Attribution.EffectiveActorJWT = "", ""
 	immutable := struct {
 		Action         constants.MessageAction `json:"action"`
 		ObjectType     string                  `json:"object_type"`

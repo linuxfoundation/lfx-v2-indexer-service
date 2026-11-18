@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats-server/v2/server"
+	natsgo "github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
 
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
@@ -27,6 +29,19 @@ import (
 )
 
 const auditFixturePolicy = `{"publishers":[{"publisher":"test-publisher","principal":"fixture@clients","can_attest_actors":true,"resources":{"fixture_resource":{"origins":["mutation"],"schemas":{"fixture.audit.v1":{"fields":{"name":{"type":"string","required":true}}}}}}}]}`
+
+func auditTestNATS(t *testing.T) *natsgo.Conn {
+	t.Helper()
+	s, err := server.NewServer(&server.Options{Host: "127.0.0.1", Port: -1, NoLog: true, NoSigs: true})
+	require.NoError(t, err)
+	go s.Start()
+	require.True(t, s.ReadyForConnections(5*time.Second))
+	t.Cleanup(s.Shutdown)
+	nc, err := natsgo.Connect(s.ClientURL())
+	require.NoError(t, err)
+	t.Cleanup(nc.Close)
+	return nc
+}
 
 // auditMappingFixtures shares the provisioned private/current schemas across
 // startup and trace-export tests without manufacturing a second mapping contract.
@@ -97,6 +112,7 @@ func TestAuditStartup_FailClosed(t *testing.T) {
 			auth := mocks.NewMockAuthRepository()
 			auth.ValidateTokenResponse = &contracts.Principal{Principal: "fixture@clients"}
 			c.AuthRepository, c.MessagingRepository = auth, mocks.NewMockMessagingRepository()
+			c.NATSConnection = auditTestNATS(t)
 			err := c.initializeApplication()
 			if tt.wantError != "" {
 				require.ErrorContains(t, err, tt.wantError)
