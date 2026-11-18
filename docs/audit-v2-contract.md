@@ -233,12 +233,11 @@ ownership; history-read policy must govern former/private/cross-project states.
 Every version 2 message, **including deletes**, requires a complete
 `IndexingConfig` with concrete object ID, ordinary access object/relation, and
 history object/relation. A delete UID must match the config ID. The legacy
-mismatch fallback is not permitted for audited deletes. Version 2 **never
-expands config strings**: materialize intended substitutions before storing the
-immutable outbox event. IDs and authorization references must still be concrete
-and syntactically valid; free text and contact profiles may contain literal
-template-shaped prose such as `{{ .Values.image }}` or `}}`. Future version 2
-processing must not route config through the legacy template expander.
+mismatch fallback is not permitted for audited deletes. Version 2 config strings
+are literal: materialize intended values before storing the immutable outbox
+event. IDs and authorization references must still be concrete and
+syntactically valid; free text and contact profiles may contain literal
+template-shaped prose such as `{{ .Values.image }}` or `}}`.
 
 History authorization metadata is captured at mutation time, not reconstructed
 from an overwritten current search document. The durable deleted-resource

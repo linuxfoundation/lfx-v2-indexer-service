@@ -541,8 +541,7 @@ func TestIndexerService_parseIndexingConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Pass empty transaction data for backward compatibility tests
-			config, err := service.parseIndexingConfig(tt.input, map[string]any{}, "test_object")
+			config, err := service.parseIndexingConfig(tt.input, "test_object")
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -559,595 +558,106 @@ func TestIndexerService_parseIndexingConfig(t *testing.T) {
 	}
 }
 
-func TestIndexerService_parseIndexingConfig_TemplateExpansion(t *testing.T) {
-	// Setup
+// TestIndexerService_parseIndexingConfig_LiteralValues pins that indexing_config
+// values are taken literally (lfx-self-serve-ops#1367): template-shaped text is
+// never expanded, and identity/authorization fields reject a leftover template
+// reference instead of indexing every resource under the same literal ID.
+func TestIndexerService_parseIndexingConfig_LiteralValues(t *testing.T) {
 	mockStorageRepo := mocks.NewMockStorageRepository()
 	mockMessagingRepo := mocks.NewMockMessagingRepository()
 	logger, _ := logging.TestLogger(t)
 	service := NewIndexerService(mockStorageRepo, mockMessagingRepo, logger)
 
-	tests := []struct {
-		name            string
-		indexingConfig  map[string]any
-		transactionData map[string]any
-		wantErr         bool
-		errContains     string
-		validate        func(t *testing.T, config *types.IndexingConfig)
-	}{
-		{
-			name: "simple string template in object_id",
-			indexingConfig: map[string]any{
-				"object_id":              "{{ uid }}",
-				"access_check_object":    "project:proj-123",
-				"access_check_relation":  "viewer",
-				"history_check_object":   "project:proj-123",
-				"history_check_relation": "historian",
-			},
-			transactionData: map[string]any{
-				"uid": "proj-123",
-			},
-			wantErr: false,
-			validate: func(t *testing.T, config *types.IndexingConfig) {
-				assert.Equal(t, "proj-123", config.ObjectID)
-			},
-		},
-		{
-			name: "template with prefix and suffix",
-			indexingConfig: map[string]any{
-				"object_id":              "proj-123",
-				"access_check_object":    "project:{{ uid }}",
-				"access_check_relation":  "viewer",
-				"history_check_object":   "project:{{ uid }}",
-				"history_check_relation": "historian",
-			},
-			transactionData: map[string]any{
-				"uid": "proj-123",
-			},
-			wantErr: false,
-			validate: func(t *testing.T, config *types.IndexingConfig) {
-				assert.Equal(t, "project:proj-123", config.AccessCheckObject)
-				assert.Equal(t, "project:proj-123", config.HistoryCheckObject)
-			},
-		},
-		{
-			name: "nested field access with dot notation",
-			indexingConfig: map[string]any{
-				"object_id":              "{{ uid }}",
-				"access_check_object":    "project:{{ uid }}",
-				"access_check_relation":  "viewer",
-				"history_check_object":   "project:{{ uid }}",
-				"history_check_relation": "historian",
-				"parent_refs":            []interface{}{"org:{{ parent.id }}"},
-			},
-			transactionData: map[string]any{
-				"uid": "proj-123",
-				"parent": map[string]any{
-					"id": "org-456",
-				},
-			},
-			wantErr: false,
-			validate: func(t *testing.T, config *types.IndexingConfig) {
-				assert.Equal(t, "proj-123", config.ObjectID)
-				assert.Equal(t, []string{"org:org-456"}, config.ParentRefs)
-			},
-		},
-		{
-			name: "multiple templates in array",
-			indexingConfig: map[string]any{
-				"object_id":              "{{ uid }}",
-				"access_check_object":    "project:{{ uid }}",
-				"access_check_relation":  "viewer",
-				"history_check_object":   "project:{{ uid }}",
-				"history_check_relation": "historian",
-				"name_and_aliases":       []interface{}{"{{ name }}", "{{ short_name }}"},
-				"parent_refs":            []interface{}{"org:{{ parent_id }}", "project:{{ uid }}"},
-			},
-			transactionData: map[string]any{
-				"uid":        "proj-123",
-				"name":       "My Project",
-				"short_name": "MP",
-				"parent_id":  "org-456",
-			},
-			wantErr: false,
-			validate: func(t *testing.T, config *types.IndexingConfig) {
-				assert.Equal(t, []string{"My Project", "MP"}, config.NameAndAliases)
-				assert.Equal(t, []string{"org:org-456", "project:proj-123"}, config.ParentRefs)
-			},
-		},
-		{
-			name: "type preservation - integer",
-			indexingConfig: map[string]any{
-				"object_id":              "{{ uid }}",
-				"access_check_object":    "project:{{ uid }}",
-				"access_check_relation":  "viewer",
-				"history_check_object":   "project:{{ uid }}",
-				"history_check_relation": "historian",
-				"sort_name":              "{{ name }}",
-			},
-			transactionData: map[string]any{
-				"uid":  "proj-123",
-				"name": "Test Project",
-			},
-			wantErr: false,
-			validate: func(t *testing.T, config *types.IndexingConfig) {
-				assert.Equal(t, "Test Project", config.SortName)
-			},
-		},
-		{
-			name: "escaped template should be literal",
-			indexingConfig: map[string]any{
-				"object_id":              "proj-123",
-				"access_check_object":    "project:proj-123",
-				"access_check_relation":  "viewer",
-				"history_check_object":   "project:proj-123",
-				"history_check_relation": "historian",
-				"sort_name":              "\\{{ not_a_template }}",
-			},
-			transactionData: map[string]any{
-				"uid": "proj-123",
-			},
-			wantErr: false,
-			validate: func(t *testing.T, config *types.IndexingConfig) {
-				assert.Equal(t, "{{ not_a_template }}", config.SortName)
-			},
-		},
-		{
-			name: "missing template field in object_id should error",
-			indexingConfig: map[string]any{
-				"object_id":              "{{ missing_field }}",
-				"access_check_object":    "project:proj-123",
-				"access_check_relation":  "viewer",
-				"history_check_object":   "project:proj-123",
-				"history_check_relation": "historian",
-			},
-			transactionData: map[string]any{
-				"uid": "proj-123",
-			},
-			wantErr:     true,
-			errContains: "indexing_config.object_id: template field 'missing_field' cannot be resolved",
-		},
-		{
-			name: "missing embedded template field in access_check_object should error",
-			indexingConfig: map[string]any{
-				"object_id":              "proj-123",
-				"access_check_object":    "project:{{ missing_field }}",
-				"access_check_relation":  "viewer",
-				"history_check_object":   "project:proj-123",
-				"history_check_relation": "historian",
-			},
-			transactionData: map[string]any{
-				"uid": "proj-123",
-			},
-			wantErr:     true,
-			errContains: "indexing_config.access_check_object: template field 'missing_field' cannot be resolved",
-		},
-		{
-			name: "empty value embedded in strict field should error",
-			indexingConfig: map[string]any{
-				"object_id":              "proj-123",
-				"access_check_object":    "project:proj-123",
-				"access_check_relation":  "viewer",
-				"history_check_object":   "project:{{ empty }}",
-				"history_check_relation": "historian",
-			},
-			transactionData: map[string]any{
-				"empty": "",
-			},
-			wantErr:     true,
-			errContains: "indexing_config.history_check_object: template field 'empty' cannot be resolved",
-		},
-		{
-			name: "null whole-value parent ref should error",
-			indexingConfig: map[string]any{
-				"object_id":              "proj-123",
-				"access_check_object":    "project:proj-123",
-				"access_check_relation":  "viewer",
-				"history_check_object":   "project:proj-123",
-				"history_check_relation": "historian",
-				"parent_refs":            []interface{}{"{{ parent }}", "project:{{ meta }}"},
-			},
-			transactionData: map[string]any{
-				"parent": nil,
-				"meta":   map[string]any{"a": 1},
-			},
-			wantErr:     true,
-			errContains: "indexing_config.parent_refs: template field 'parent' cannot be resolved",
-		},
-		{
-			name: "object embedded in strict field should error",
-			indexingConfig: map[string]any{
-				"object_id":              "proj-123",
-				"access_check_object":    "project:{{ meta }}",
-				"access_check_relation":  "viewer",
-				"history_check_object":   "project:proj-123",
-				"history_check_relation": "historian",
-			},
-			transactionData: map[string]any{
-				"meta": map[string]any{"a": 1},
-			},
-			wantErr:     true,
-			errContains: "indexing_config.access_check_object: template field 'meta' cannot be resolved",
-		},
-		{
-			name: "whole-value reference to hyphenated key should resolve",
-			indexingConfig: map[string]any{
-				"object_id":              "{{resource-id}}",
-				"access_check_object":    "project:abc-123",
-				"access_check_relation":  "viewer",
-				"history_check_object":   "project:abc-123",
-				"history_check_relation": "historian",
-				"sort_name":              "{{ display name }}",
-			},
-			transactionData: map[string]any{
-				"resource-id":  "abc-123",
-				"display name": "Acme",
-			},
-			wantErr: false,
-			validate: func(t *testing.T, config *types.IndexingConfig) {
-				assert.Equal(t, "abc-123", config.ObjectID)
-				assert.Equal(t, "Acme", config.SortName)
-			},
-		},
-		{
-			name: "whole-value reference resolving to a non-string object_id should error",
-			indexingConfig: map[string]any{
-				"object_id":              "{{ count }}",
-				"access_check_object":    "project:abc-123",
-				"access_check_relation":  "viewer",
-				"history_check_object":   "project:abc-123",
-				"history_check_relation": "historian",
-			},
-			transactionData: map[string]any{
-				"count": 42,
-			},
-			wantErr:     true,
-			errContains: "object_id is required and must be a non-empty string",
-		},
-		{
-			name: "missing hyphenated whole-value key in strict field should error",
-			indexingConfig: map[string]any{
-				"object_id":              "{{resource-id}}",
-				"access_check_object":    "project:abc-123",
-				"access_check_relation":  "viewer",
-				"history_check_object":   "project:abc-123",
-				"history_check_relation": "historian",
-			},
-			transactionData: map[string]any{},
-			wantErr:         true,
-			errContains:     "indexing_config.object_id: template field 'resource-id' cannot be resolved",
-		},
-		{
-			name: "embedded reference outside token grammar in strict field should error",
-			indexingConfig: map[string]any{
-				"object_id":              "abc-123",
-				"access_check_object":    "project:{{resource-id}}",
-				"access_check_relation":  "viewer",
-				"history_check_object":   "project:abc-123",
-				"history_check_relation": "historian",
-			},
-			transactionData: map[string]any{
-				"resource-id": "abc-123",
-			},
-			wantErr:     true,
-			errContains: "indexing_config.access_check_object: unsupported template reference",
-		},
-		{
-			name: "unsupported reference in parent_refs array element should error",
-			indexingConfig: map[string]any{
-				"object_id":              "abc-123",
-				"access_check_object":    "project:abc-123",
-				"access_check_relation":  "viewer",
-				"history_check_object":   "project:abc-123",
-				"history_check_relation": "historian",
-				"parent_refs":            []interface{}{"org:org-1", "org:{{a-b}}"},
-			},
-			transactionData: map[string]any{
-				"a-b": "org-2",
-			},
-			wantErr:     true,
-			errContains: "indexing_config.parent_refs: unsupported template reference",
-		},
-		{
-			name: "escaped braces in strict field are not an unsupported reference",
-			indexingConfig: map[string]any{
-				"object_id":              "abc-123",
-				"access_check_object":    `project:\{{x}}`,
-				"access_check_relation":  "viewer",
-				"history_check_object":   "project:abc-123",
-				"history_check_relation": "historian",
-			},
-			transactionData: map[string]any{},
-			wantErr:         false,
-			validate: func(t *testing.T, config *types.IndexingConfig) {
-				assert.Equal(t, "project:{{x}}", config.AccessCheckObject)
-			},
-		},
-		{
-			name: "missing template field in optional embedded string should succeed",
-			indexingConfig: map[string]any{
-				"object_id":              "{{ uid }}",
-				"access_check_object":    "project:{{ uid }}",
-				"access_check_relation":  "viewer",
-				"history_check_object":   "project:{{ uid }}",
-				"history_check_relation": "historian",
-				"fulltext":               "{{ name }} - {{ missing_field }}",
-			},
-			transactionData: map[string]any{
-				"uid":  "proj-123",
-				"name": "Test Project",
-			},
-			wantErr: false,
-			validate: func(t *testing.T, config *types.IndexingConfig) {
-				assert.Equal(t, "Test Project - ", config.Fulltext)
-			},
-		},
-		{
-			name: "nested path through non-object in parent_refs should error",
-			indexingConfig: map[string]any{
-				"object_id":              "{{ uid }}",
-				"access_check_object":    "project:{{ uid }}",
-				"access_check_relation":  "viewer",
-				"history_check_object":   "project:{{ uid }}",
-				"history_check_relation": "historian",
-				"parent_refs":            []interface{}{"org:{{ parent.invalid.path }}"},
-			},
-			transactionData: map[string]any{
-				"uid":    "proj-123",
-				"parent": "not-an-object",
-			},
-			wantErr:     true,
-			errContains: "indexing_config.parent_refs: template field 'parent.invalid.path' cannot be resolved",
-		},
-		{
-			// lfx-self-serve-ops#1367: user text copied into search fields must not
-			// fail the message when it happens to look like a template.
-			name: "nested path through non-object in search fields is skipped",
-			indexingConfig: map[string]any{
-				"object_id":              "committee-1",
-				"access_check_object":    "committee:committee-1",
-				"access_check_relation":  "viewer",
-				"history_check_object":   "committee:committee-1",
-				"history_check_relation": "auditor",
-				"sort_name":              "{{ uid.x }}",
-				"name_and_aliases":       []interface{}{"{{ uid.x }}"},
-				"fulltext":               "Board {{ uid.x }} minutes",
-				"tags":                   []interface{}{"display_name:{{ uid.x }}"},
-				"contacts": []interface{}{
-					map[string]interface{}{"name": "{{ uid.x }}"},
-				},
-			},
-			transactionData: map[string]any{
-				"uid": "committee-1",
-			},
-			wantErr: false,
-			validate: func(t *testing.T, config *types.IndexingConfig) {
-				assert.Equal(t, "committee-1", config.ObjectID)
-				assert.Equal(t, "", config.SortName)
-				assert.Equal(t, []string{""}, config.NameAndAliases)
-				assert.Equal(t, "Board  minutes", config.Fulltext)
-				assert.Equal(t, []string{"display_name:"}, config.Tags)
-				require.Len(t, config.Contacts, 1)
-				assert.Equal(t, "", config.Contacts[0].Name)
-			},
-		},
-		{
-			name: "substituted values are not expanded again",
-			indexingConfig: map[string]any{
-				"object_id":              "{{ uid }}",
-				"access_check_object":    "project:{{ uid }}",
-				"access_check_relation":  "viewer",
-				"history_check_object":   "project:{{ uid }}",
-				"history_check_relation": "historian",
-				"fulltext":               "{{ name }} {{ slug }}",
-			},
-			transactionData: map[string]any{
-				"uid":  "proj-123",
-				"name": "{{ slug }}",
-				"slug": "my-slug",
-			},
-			wantErr: false,
-			validate: func(t *testing.T, config *types.IndexingConfig) {
-				assert.Equal(t, "{{ slug }} my-slug", config.Fulltext)
-			},
-		},
-		{
-			name: "escape applies only to the braces it precedes",
-			indexingConfig: map[string]any{
-				"object_id":              "{{ uid }}",
-				"access_check_object":    "project:{{ uid }}",
-				"access_check_relation":  "viewer",
-				"history_check_object":   "project:{{ uid }}",
-				"history_check_relation": "historian",
-				"fulltext":               "\\{{ literal }} {{ name }}",
-			},
-			transactionData: map[string]any{
-				"uid":  "proj-123",
-				"name": "My Project",
-			},
-			wantErr: false,
-			validate: func(t *testing.T, config *types.IndexingConfig) {
-				assert.Equal(t, "{{ literal }} My Project", config.Fulltext)
-			},
-		},
-		{
-			name: "mixed templates and literals in array",
-			indexingConfig: map[string]any{
-				"object_id":              "{{ uid }}",
-				"access_check_object":    "project:{{ uid }}",
-				"access_check_relation":  "viewer",
-				"history_check_object":   "project:{{ uid }}",
-				"history_check_relation": "historian",
-				"tags":                   []interface{}{"static-tag", "{{ dynamic_tag }}", "another-static"},
-			},
-			transactionData: map[string]any{
-				"uid":         "proj-123",
-				"dynamic_tag": "generated",
-			},
-			wantErr: false,
-			validate: func(t *testing.T, config *types.IndexingConfig) {
-				assert.Equal(t, []string{"static-tag", "generated", "another-static"}, config.Tags)
-			},
-		},
-		{
-			name: "complex template with multiple fields",
-			indexingConfig: map[string]any{
-				"object_id":              "{{ uid }}",
-				"access_check_object":    "project:{{ uid }}",
-				"access_check_relation":  "viewer",
-				"history_check_object":   "project:{{ uid }}",
-				"history_check_relation": "historian",
-				"fulltext":               "{{ name }} - {{ description }} - {{ status }}",
-			},
-			transactionData: map[string]any{
-				"uid":         "proj-123",
-				"name":        "My Project",
-				"description": "A great project",
-				"status":      "active",
-			},
-			wantErr: false,
-			validate: func(t *testing.T, config *types.IndexingConfig) {
-				assert.Equal(t, "My Project - A great project - active", config.Fulltext)
-			},
-		},
-		{
-			name: "deeply nested field access",
-			indexingConfig: map[string]any{
-				"object_id":              "{{ uid }}",
-				"access_check_object":    "project:{{ uid }}",
-				"access_check_relation":  "viewer",
-				"history_check_object":   "project:{{ uid }}",
-				"history_check_relation": "historian",
-				"parent_refs":            []interface{}{"org:{{ metadata.organization.id }}"},
-			},
-			transactionData: map[string]any{
-				"uid": "proj-123",
-				"metadata": map[string]any{
-					"organization": map[string]any{
-						"id": "org-789",
-					},
-				},
-			},
-			wantErr: false,
-			validate: func(t *testing.T, config *types.IndexingConfig) {
-				assert.Equal(t, []string{"org:org-789"}, config.ParentRefs)
-			},
-		},
-		{
-			name: "template with whitespace",
-			indexingConfig: map[string]any{
-				"object_id":              "{{   uid   }}",
-				"access_check_object":    "project:{{uid}}",
-				"access_check_relation":  "viewer",
-				"history_check_object":   "project:{{ uid}}",
-				"history_check_relation": "historian",
-			},
-			transactionData: map[string]any{
-				"uid": "proj-123",
-			},
-			wantErr: false,
-			validate: func(t *testing.T, config *types.IndexingConfig) {
-				assert.Equal(t, "proj-123", config.ObjectID)
-				assert.Equal(t, "project:proj-123", config.AccessCheckObject)
-				assert.Equal(t, "project:proj-123", config.HistoryCheckObject)
-			},
-		},
-		{
-			name: "contacts field parsing",
-			indexingConfig: map[string]any{
-				"object_id":              "proj-123",
-				"access_check_object":    "project:proj-123",
-				"access_check_relation":  "viewer",
-				"history_check_object":   "project:proj-123",
-				"history_check_relation": "historian",
-				"contacts": []interface{}{
-					map[string]interface{}{
-						"lfx_principal": "user-123",
-						"name":          "John Doe",
-						"emails":        []interface{}{"john@example.com", "jdoe@example.com"},
-						"bot":           false,
-						"profile": map[string]interface{}{
-							"title": "Developer",
-						},
-					},
-					map[string]interface{}{
-						"name":   "Jane Smith",
-						"emails": []interface{}{"jane@example.com"},
-					},
-				},
-			},
-			transactionData: map[string]any{},
-			wantErr:         false,
-			validate: func(t *testing.T, config *types.IndexingConfig) {
-				assert.Len(t, config.Contacts, 2)
-
-				// Validate first contact
-				contact1 := config.Contacts[0]
-				assert.Equal(t, "user-123", contact1.LfxPrincipal)
-				assert.Equal(t, "John Doe", contact1.Name)
-				assert.Equal(t, []string{"john@example.com", "jdoe@example.com"}, contact1.Emails)
-				assert.NotNil(t, contact1.Bot)
-				assert.False(t, *contact1.Bot)
-				assert.NotNil(t, contact1.Profile)
-				assert.Equal(t, "Developer", contact1.Profile["title"])
-
-				// Validate second contact
-				contact2 := config.Contacts[1]
-				assert.Equal(t, "", contact2.LfxPrincipal)
-				assert.Equal(t, "Jane Smith", contact2.Name)
-				assert.Equal(t, []string{"jane@example.com"}, contact2.Emails)
-				assert.Nil(t, contact2.Bot)
-			},
-		},
-		{
-			name: "contacts field with template expansion",
-			indexingConfig: map[string]any{
-				"object_id":              "proj-123",
-				"access_check_object":    "project:proj-123",
-				"access_check_relation":  "viewer",
-				"history_check_object":   "project:proj-123",
-				"history_check_relation": "historian",
-				"contacts": []interface{}{
-					map[string]interface{}{
-						"lfx_principal": "{{ owner_id }}",
-						"name":          "{{ owner_name }}",
-						"emails":        []interface{}{"{{ owner_email }}"},
-					},
-				},
-			},
-			transactionData: map[string]any{
-				"owner_id":    "user-456",
-				"owner_name":  "Alice Johnson",
-				"owner_email": "alice@example.com",
-			},
-			wantErr: false,
-			validate: func(t *testing.T, config *types.IndexingConfig) {
-				assert.Len(t, config.Contacts, 1)
-
-				contact := config.Contacts[0]
-				assert.Equal(t, "user-456", contact.LfxPrincipal)
-				assert.Equal(t, "Alice Johnson", contact.Name)
-				assert.Equal(t, []string{"alice@example.com"}, contact.Emails)
-			},
-		},
+	base := func(overrides map[string]any) map[string]any {
+		config := map[string]any{
+			"object_id":              "proj-123",
+			"access_check_object":    "project:proj-123",
+			"access_check_relation":  "viewer",
+			"history_check_object":   "project:proj-123",
+			"history_check_relation": "historian",
+		}
+		for k, v := range overrides {
+			config[k] = v
+		}
+		return config
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			config, err := service.parseIndexingConfig(tt.indexingConfig, tt.transactionData, "test_object")
+	t.Run("template-shaped text in search fields is kept literally", func(t *testing.T) {
+		config, err := service.parseIndexingConfig(base(map[string]any{
+			"sort_name":        "{{ uid.x }}",
+			"name_and_aliases": []interface{}{"{{ name }}", `\{{ slug }}`},
+			"fulltext":         "Acme {{ missing }} {{resource-id}}",
+			"tags":             []interface{}{"uid:{{ uid }}"},
+			"contacts": []interface{}{
+				map[string]interface{}{
+					"lfx_principal": "{{ owner_id }}",
+					"name":          "{{ owner_name }}",
+					"emails":        []interface{}{"{{ owner_email }}"},
+				},
+			},
+		}), "test_object")
+		require.NoError(t, err)
+		assert.Equal(t, "{{ uid.x }}", config.SortName)
+		assert.Equal(t, []string{"{{ name }}", `\{{ slug }}`}, config.NameAndAliases)
+		assert.Equal(t, "Acme {{ missing }} {{resource-id}}", config.Fulltext)
+		assert.Equal(t, []string{"uid:{{ uid }}"}, config.Tags)
+		require.Len(t, config.Contacts, 1)
+		assert.Equal(t, "{{ owner_id }}", config.Contacts[0].LfxPrincipal)
+		assert.Equal(t, "{{ owner_name }}", config.Contacts[0].Name)
+		assert.Equal(t, []string{"{{ owner_email }}"}, config.Contacts[0].Emails)
+	})
 
-			if tt.wantErr {
-				assert.Error(t, err)
-				assert.Contains(t, err.Error(), tt.errContains)
-				assert.Nil(t, config)
-			} else {
-				assert.NoError(t, err)
-				assert.NotNil(t, config)
-				if tt.validate != nil {
-					tt.validate(t, config)
-				}
-			}
+	for _, field := range []string{"object_id", "access_check_object", "access_check_relation", "history_check_object", "history_check_relation"} {
+		t.Run("template reference in "+field+" is rejected", func(t *testing.T) {
+			config, err := service.parseIndexingConfig(base(map[string]any{field: "project:{{ uid }}"}), "test_object")
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "indexing_config."+field+": template references are not supported")
+			assert.Nil(t, config)
 		})
 	}
+
+	t.Run("template reference in a parent_refs element is rejected", func(t *testing.T) {
+		config, err := service.parseIndexingConfig(base(map[string]any{
+			"parent_refs": []interface{}{"org:org-1", "org:{{ parent_id }}"},
+		}), "test_object")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "indexing_config.parent_refs: template references are not supported")
+		assert.Nil(t, config)
+	})
+
+	t.Run("contacts are parsed", func(t *testing.T) {
+		config, err := service.parseIndexingConfig(base(map[string]any{
+			"contacts": []interface{}{
+				map[string]interface{}{
+					"lfx_principal": "user-123",
+					"name":          "John Doe",
+					"emails":        []interface{}{"john@example.com", "jdoe@example.com"},
+					"bot":           false,
+					"profile":       map[string]interface{}{"title": "Developer"},
+				},
+				map[string]interface{}{
+					"name":   "Jane Smith",
+					"emails": []interface{}{"jane@example.com"},
+				},
+			},
+		}), "test_object")
+		require.NoError(t, err)
+		require.Len(t, config.Contacts, 2)
+
+		contact1 := config.Contacts[0]
+		assert.Equal(t, "user-123", contact1.LfxPrincipal)
+		assert.Equal(t, "John Doe", contact1.Name)
+		assert.Equal(t, []string{"john@example.com", "jdoe@example.com"}, contact1.Emails)
+		require.NotNil(t, contact1.Bot)
+		assert.False(t, *contact1.Bot)
+		assert.Equal(t, "Developer", contact1.Profile["title"])
+
+		contact2 := config.Contacts[1]
+		assert.Equal(t, "", contact2.LfxPrincipal)
+		assert.Equal(t, "Jane Smith", contact2.Name)
+		assert.Equal(t, []string{"jane@example.com"}, contact2.Emails)
+		assert.Nil(t, contact2.Bot)
+	})
 }
 
 func TestIndexerService_buildTransactionBodyFromIndexingConfig(t *testing.T) {
@@ -1896,7 +1406,8 @@ func TestIndexerService_ProcessTransaction_InvalidObjectID_Delete(t *testing.T) 
 
 // TestIndexerService_ProcessTransaction_TemplateShapedUserText is the regression
 // for lfx-self-serve-ops#1367: a committee named with template-shaped text must
-// still be indexed, and a later visibility change must reach the index.
+// be indexed with that text unchanged, and a later visibility change must reach
+// the index.
 func TestIndexerService_ProcessTransaction_TemplateShapedUserText(t *testing.T) {
 	storage := mocks.NewMockStorageRepository()
 	messaging := mocks.NewMockMessagingRepository()
@@ -1945,4 +1456,6 @@ func TestIndexerService_ProcessTransaction_TemplateShapedUserText(t *testing.T) 
 	require.NoError(t, json.Unmarshal([]byte(storage.IndexCalls[1].Body), &body))
 	assert.Equal(t, "committee:committee-1", storage.IndexCalls[1].DocID)
 	assert.False(t, body.Public, "the later private update must be reflected in the index")
+	assert.Equal(t, name, body.SortName, "template-shaped user text must be stored literally")
+	assert.Equal(t, name+" description", body.Fulltext)
 }
