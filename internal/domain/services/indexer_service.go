@@ -9,10 +9,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -157,15 +155,7 @@ func (s *IndexerService) CreateTransactionFromMessage(messageData map[string]any
 		if !ok {
 			return nil, fmt.Errorf("indexing_config must be an object")
 		}
-		// Get transaction data for template expansion
-		var transactionData map[string]any
-		if dataMap, ok := messageData["data"].(map[string]any); ok {
-			transactionData = dataMap
-		} else {
-			transactionData = make(map[string]any)
-		}
-
-		indexingConfig, err := s.parseIndexingConfig(indexingConfigData, transactionData, objectType)
+		indexingConfig, err := s.parseIndexingConfig(indexingConfigData, objectType)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse indexing_config: %w", err)
 		}
@@ -1316,201 +1306,48 @@ func dedupeStrings(in []string) []string {
 	return out
 }
 
-// expandTemplates recursively expands template variables in the format {{ field_name }}
-// with values from the provided data map. Supports nested field access (e.g., {{ parent.id }})
-// and preserves original data types.
-func expandTemplates(data map[string]any, value any, objectType string, logger *slog.Logger) (any, error) {
-	switch v := value.(type) {
-	case string:
-		return expandTemplateString(data, v, objectType, logger)
-	case []interface{}:
-		// Handle arrays - expand templates in each element
-		result := make([]interface{}, len(v))
-		for i, item := range v {
-			expanded, err := expandTemplates(data, item, objectType, logger)
-			if err != nil {
-				return nil, err
-			}
-			result[i] = expanded
-		}
-		return result, nil
-	case map[string]interface{}:
-		// Handle nested objects - expand templates in each value
-		result := make(map[string]interface{}, len(v))
-		for key, val := range v {
-			expanded, err := expandTemplates(data, val, objectType, logger)
-			if err != nil {
-				return nil, err
-			}
-			result[key] = expanded
-		}
-		return result, nil
-	default:
-		// Return non-string types as-is
-		return value, nil
+// rejectTemplateReference fails an identity or authorization value that still
+// contains a `{{` template reference. indexing_config values are taken
+// literally, so a publisher still sending templates would otherwise index every
+// resource under the same literal reference (e.g. object_id "{{ uid }}") and
+// overwrite one document's access fields with another's.
+func rejectTemplateReference(field, value string) error {
+	if strings.Contains(value, "{{") {
+		return fmt.Errorf("indexing_config.%s: template references are not supported; send a concrete value", field)
 	}
+	return nil
 }
 
-// expandTemplateString expands template variables in a string.
-// If a referenced field is not present in data, the expansion is skipped (empty
-// string for whole-value templates, blank substitution for embedded ones) and a
-// warning is logged. Structural errors (e.g. traversing a non-object) are fatal.
-func expandTemplateString(data map[string]any, template string, objectType string, logger *slog.Logger) (any, error) {
-	// Check if this is an escaped template (e.g., \{{ field }})
-	if strings.Contains(template, "\\{{") {
-		// Remove escape characters
-		return strings.ReplaceAll(template, "\\{{", "{{"), nil
-	}
-
-	// Check if this is a simple template (entire string is a template)
-	// This allows us to preserve the original type
-	if strings.HasPrefix(template, "{{") && strings.HasSuffix(template, "}}") && strings.Count(template, "{{") == 1 {
-		fieldPath := strings.TrimSpace(template[2 : len(template)-2])
-		value, err := getNestedField(data, fieldPath)
-		if err != nil {
-			if isFieldNotFoundError(err) {
-				// Upstream publishers embed infrastructure-specific template vars
-				// that have no LFX data counterpart. Warn and skip expansion
-				// rather than dropping the document.
-				logger.Warn("Skipping unresolvable template field",
-					"field", fieldPath,
-					"object_type", objectType)
-				return "", nil
-			}
-			return nil, err
-		}
-		// Return the original type
-		return value, nil
-	}
-
-	// Handle templates embedded in strings (force string conversion)
-	result := template
-	templateRegex := regexp.MustCompile(`\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}`)
-	matches := templateRegex.FindAllStringSubmatch(template, -1)
-
-	for _, match := range matches {
-		fullMatch := match[0] // e.g., "{{ uid }}"
-		fieldPath := match[1] // e.g., "uid"
-
-		value, err := getNestedField(data, fieldPath)
-		if err != nil {
-			if isFieldNotFoundError(err) {
-				logger.Warn("Skipping unresolvable template field",
-					"field", fieldPath,
-					"object_type", objectType)
-				result = strings.ReplaceAll(result, fullMatch, "")
-				continue
-			}
-			return nil, err
-		}
-
-		// Convert value to string for embedding
-		var strValue string
-		switch v := value.(type) {
-		case string:
-			strValue = v
-		case int, int64, int32, int16, int8:
-			strValue = fmt.Sprintf("%d", v)
-		case float64, float32:
-			strValue = fmt.Sprintf("%v", v)
-		case bool:
-			strValue = fmt.Sprintf("%t", v)
-		default:
-			strValue = fmt.Sprintf("%v", v)
-		}
-
-		result = strings.ReplaceAll(result, fullMatch, strValue)
-	}
-
-	return result, nil
-}
-
-// errTemplateFieldNotFound is returned when a template references a key absent from
-// the data map. It is intentionally distinct from structural errors so callers can
-// choose to skip rather than fail.
-type errTemplateFieldNotFound struct{ field string }
-
-func (e *errTemplateFieldNotFound) Error() string {
-	return fmt.Sprintf("template field '%s' not found in data", e.field)
-}
-
-func isFieldNotFoundError(err error) bool {
-	var e *errTemplateFieldNotFound
-	return errors.As(err, &e)
-}
-
-// getNestedField retrieves a value from a nested map using dot notation
-// e.g., "parent.id" retrieves data["parent"]["id"]
-func getNestedField(data map[string]any, fieldPath string) (any, error) {
-	parts := strings.Split(fieldPath, ".")
-	var current any = data
-
-	for i, part := range parts {
-		currentMap, ok := current.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("template field path '%s' is invalid: '%s' is not an object", fieldPath, strings.Join(parts[:i], "."))
-		}
-
-		value, exists := currentMap[part]
-		if !exists {
-			return nil, &errTemplateFieldNotFound{field: fieldPath}
-		}
-
-		current = value
-	}
-
-	return current, nil
-}
-
-// parseIndexingConfig parses a map[string]any into a strongly-typed IndexingConfig struct
-// and expands any template variables using the provided transaction data.
-func (s *IndexerService) parseIndexingConfig(indexingConfigData map[string]any, transactionData map[string]any, objectType string) (*types.IndexingConfig, error) {
+// parseIndexingConfig parses a map[string]any into a strongly-typed
+// IndexingConfig struct. Values are taken literally; no template expansion is
+// performed.
+func (s *IndexerService) parseIndexingConfig(data map[string]any, objectType string) (*types.IndexingConfig, error) {
 	logger := s.logger
-	logger.Debug("Parsing indexing config", "indexing_config", indexingConfigData, "object_type", objectType)
+	logger.Debug("Parsing indexing config", "object_type", objectType, "field_count", len(data))
 
-	// First, expand all templates in the indexing_config data
-	expandedData, err := expandTemplates(transactionData, indexingConfigData, objectType, logger)
-	if err != nil {
-		return nil, fmt.Errorf("failed to expand templates in indexing_config: %w", err)
-	}
-
-	// The expanded data should still be a map
-	data, ok := expandedData.(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("indexing_config must be an object after template expansion")
-	}
 	config := &types.IndexingConfig{}
 
-	// Parse required string fields
-	objectID, ok := data["object_id"].(string)
-	if !ok || objectID == "" {
-		return nil, fmt.Errorf("indexing_config: object_id is required and must be a non-empty string")
+	// Parse required identity and authorization string fields
+	required := []struct {
+		key string
+		dst *string
+	}{
+		{"object_id", &config.ObjectID},
+		{"access_check_object", &config.AccessCheckObject},
+		{"access_check_relation", &config.AccessCheckRelation},
+		{"history_check_object", &config.HistoryCheckObject},
+		{"history_check_relation", &config.HistoryCheckRelation},
 	}
-	config.ObjectID = objectID
-
-	accessCheckObject, ok := data["access_check_object"].(string)
-	if !ok || accessCheckObject == "" {
-		return nil, fmt.Errorf("indexing_config: access_check_object is required and must be a non-empty string")
+	for _, f := range required {
+		value, ok := data[f.key].(string)
+		if !ok || value == "" {
+			return nil, fmt.Errorf("indexing_config: %s is required and must be a non-empty string", f.key)
+		}
+		if err := rejectTemplateReference(f.key, value); err != nil {
+			return nil, err
+		}
+		*f.dst = value
 	}
-	config.AccessCheckObject = accessCheckObject
-
-	accessCheckRelation, ok := data["access_check_relation"].(string)
-	if !ok || accessCheckRelation == "" {
-		return nil, fmt.Errorf("indexing_config: access_check_relation is required and must be a non-empty string")
-	}
-	config.AccessCheckRelation = accessCheckRelation
-
-	historyCheckObject, ok := data["history_check_object"].(string)
-	if !ok || historyCheckObject == "" {
-		return nil, fmt.Errorf("indexing_config: history_check_object is required and must be a non-empty string")
-	}
-	config.HistoryCheckObject = historyCheckObject
-
-	historyCheckRelation, ok := data["history_check_relation"].(string)
-	if !ok || historyCheckRelation == "" {
-		return nil, fmt.Errorf("indexing_config: history_check_relation is required and must be a non-empty string")
-	}
-	config.HistoryCheckRelation = historyCheckRelation
 
 	// Parse optional boolean field
 	if publicVal, ok := data["public"].(bool); ok {
@@ -1541,6 +1378,9 @@ func (s *IndexerService) parseIndexingConfig(indexingConfigData map[string]any, 
 		parentRefs := make([]string, 0, len(parentRefsData))
 		for _, item := range parentRefsData {
 			if str, ok := item.(string); ok {
+				if err := rejectTemplateReference("parent_refs", str); err != nil {
+					return nil, err
+				}
 				parentRefs = append(parentRefs, str)
 			}
 		}
@@ -1592,7 +1432,7 @@ func (s *IndexerService) parseIndexingConfig(indexingConfigData map[string]any, 
 		config.Contacts = contacts
 	}
 
-	logger.Debug("Parsed indexing config", "config", config)
+	logger.Debug("Parsed indexing config", "object_type", objectType, "contact_count", len(config.Contacts))
 
 	return config, nil
 }

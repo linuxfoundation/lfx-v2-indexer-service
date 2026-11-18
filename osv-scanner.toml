@@ -6,7 +6,7 @@
 # Scan the build toolchain, not go.mod's older minimum retained for MegaLinter's
 # bundled compiler. Keep this aligned with .go-version and the toolchain directive;
 # scripts/check-go-toolchain.sh verifies both configuration and the actual compiler.
-GoVersionOverride = "1.26.10"
+GoVersionOverride = "1.26.11"
 
 [[IgnoredVulns]]
 id = "GO-2026-5932"

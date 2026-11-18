@@ -31,7 +31,7 @@ The LFX V2 Indexer Service is responsible for:
 
 ### Prerequisites
 
-- **Go 1.26.10** for builds (pin in `.go-version`; Make targets select it
+- **Go 1.26.11** for builds (pin in `.go-version`; Make targets select it
   automatically even if your installed Go bootstrap is newer)
 - **NATS Server** (message streaming)
 - **OpenSearch/Elasticsearch** (document indexing)

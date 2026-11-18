@@ -108,7 +108,7 @@ from this config. It does **not** copy `Public`, ordinary access-check fields,
 search fields, contacts, or resource data onto the tombstone. This preserves the
 existing non-public, ordinary-access-denied tombstone behavior. Required-field
 validation is unchanged: all five required fields below must be supplied with
-concrete values (delete `Data` has no fields for template expansion).
+concrete values.
 Explicit `null` is treated as absent; present non-null config values that are
 not JSON objects are rejected before writes for all actions, including deletes.
 Malformed or incomplete configs still reject the delete and can leave the prior
@@ -165,6 +165,7 @@ type IndexingConfig struct {
 | Empty `ObjectID` | NAKed and retried (no primary key) |
 | Empty `AccessCheckObject` or `AccessCheckRelation` | NAKed and retried during `IndexingConfig` parsing |
 | Empty `HistoryCheckObject` or `HistoryCheckRelation` | NAKed and retried during `IndexingConfig` parsing |
+| `{{` in `ObjectID`, `AccessCheck*`, `HistoryCheck*`, or any `ParentRefs` entry (template references are not supported) | NAKed and retried during `IndexingConfig` parsing. Every other field is stored literally, including `{{ ... }}` text. See [literal values](client-guide.md#literal-values-in-indexing_config) |
 | Unknown `action` value | NAKed and retried (`unknown action`) |
 | Missing lower-case `authorization` header on V2 messages | NAKed and retried during header validation |
 | `data` not present on create/update | NAKed and retried |

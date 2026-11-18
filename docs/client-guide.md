@@ -21,7 +21,7 @@ inventory and staging checks in [publisher-compatibility.md](publisher-compatibi
 - [Message Format](#message-format)
 - [Audit Envelope Version 2](#audit-envelope-version-2)
 - [Using indexing_config](#using-indexing_config)
-- [Template Support](#template-support-in-indexing_config)
+- [Literal Values](#literal-values-in-indexing_config)
 - [Field Reference](#field-reference)
 - [Examples](#examples)
 - [Best Practices](#best-practices)
@@ -149,8 +149,8 @@ approved production snapshot schema or authorization policy.
 - Structural preflight does not authenticate a publisher, authorize delegation or
   origin suppression, or enable storage. Current runtime admission rejects even
   a valid preflight result; do not treat it as a rollout-ready capability.
-- Version 2 strings are literal and never template-expanded. Materialize intended
-  substitutions before committing the outbox event. Free text/profile strings
+- Version 2 strings are literal, like every `indexing_config` string. Materialize
+  intended values before committing the outbox event. Free text/profile strings
   containing `{{ ... }}` remain valid prose; ID/auth references must be concrete.
 - Projection-only origins (`reindex`, `backfill`, `sync_echo`) omit content and
   need explicit producer authorization. System-driven domain changes still use
@@ -211,136 +211,12 @@ The server will:
 - Set server-side fields: `latest`, timestamps, and principals
 - Index the document with your exact specifications
 
-### Template Support in `indexing_config`
+### Literal Values in `indexing_config`
 
-To reduce message payload size and eliminate redundancy, `indexing_config` supports template variables that reference fields from the `data` object using `{{ field_name }}` syntax.
+Every `indexing_config` value is stored exactly as sent. The indexer does not expand `{{ ... }}` template references (removed in lfx-self-serve-ops#1367), so send concrete values built from your resource:
 
-**Benefits:**
-
-- **Reduced Payload Size**: Avoid repeating the same values multiple times
-- **Single Source of Truth**: Data field values are the canonical source
-- **Less Error-Prone**: No risk of mismatched values between data and config
-- **Type Preservation**: Templates can preserve original data types
-
-**Template Syntax:**
-
-Templates use double curly braces: `{{ field_name }}`
-
-**Features:**
-
-1. **Simple Templates**: `"{{ uid }}"` - Entire field value (preserves type)
-2. **Embedded Templates**: `"project:{{ uid }}"` - Template within a string
-3. **Nested Fields**: `"{{ parent.id }}"` - Dot notation for nested objects
-4. **Arrays**: `["{{ uid }}", "{{ parent_id }}"]` - Templates in arrays
-5. **Multiple Templates**: `"{{ name }} - {{ description }}"` - Multiple in one string
-6. **Escaping**: `"\{{ not_a_template }}"` - Use backslash to escape
-
-**Example with Templates:**
-
-```json
-{
-  "action": "created",
-  "headers": {
-    "authorization": "Bearer eyJhbGc..."
-  },
-  "data": {
-    "uid": "proj-123",
-    "name": "My Project",
-    "slug": "my-project",
-    "parent_id": "org-456",
-    "metadata": {
-      "organization": {
-        "id": "org-789"
-      }
-    }
-  },
-  "indexing_config": {
-    "object_id": "{{ uid }}",
-    "public": true,
-    "access_check_object": "project:{{ uid }}",
-    "access_check_relation": "viewer",
-    "history_check_object": "project:{{ uid }}",
-    "history_check_relation": "historian",
-    "sort_name": "{{ name }}",
-    "name_and_aliases": ["{{ name }}", "{{ slug }}"],
-    "parent_refs": ["org:{{ parent_id }}", "org:{{ metadata.organization.id }}"],
-    "tags": ["uid:{{ uid }}", "slug:{{ slug }}"],
-    "fulltext": "{{ name }} - Project in organization {{ metadata.organization.id }}"
-  }
-}
-```
-
-**Equivalent without templates** (notice the redundancy):
-
-```json
-{
-  "action": "created",
-  "headers": {
-    "authorization": "Bearer eyJhbGc..."
-  },
-  "data": {
-    "uid": "proj-123",
-    "name": "My Project",
-    "slug": "my-project",
-    "parent_id": "org-456",
-    "metadata": {
-      "organization": {
-        "id": "org-789"
-      }
-    }
-  },
-  "indexing_config": {
-    "object_id": "proj-123",
-    "public": true,
-    "access_check_object": "project:proj-123",
-    "access_check_relation": "viewer",
-    "history_check_object": "project:proj-123",
-    "history_check_relation": "historian",
-    "sort_name": "My Project",
-    "name_and_aliases": ["My Project", "my-project"],
-    "parent_refs": ["org:org-456", "org:org-789"],
-    "tags": ["uid:proj-123", "slug:my-project"],
-    "fulltext": "My Project - Project in organization org-789"
-  }
-}
-```
-
-**Template Rules:**
-
-1. **Field Resolution**: Templates reference fields in the `data` object
-2. **Nested Access**: Use dot notation (e.g., `{{ parent.id }}`) for nested objects
-3. **Type Preservation**: Simple templates (`"{{ field }}"`) preserve the original type
-4. **String Conversion**: Embedded templates convert values to strings
-5. **Error Handling**: Missing fields in required whole-value templates become empty
-   and then fail required-field validation; missing fields in optional or embedded
-   templates are skipped with a warning and blank substitution. Traversing through
-   a non-object still fails processing.
-6. **Escaping**: Use `\{{ }}` to include literal curly braces in values
-7. **Whitespace**: Whitespace inside templates is trimmed (e.g., `{{  uid  }}` → `uid`)
-
-**Type Preservation Example:**
-
-```json
-{
-  "data": {
-    "uid": "proj-123",
-    "count": 42,
-    "active": true
-  },
-  "indexing_config": {
-    "object_id": "{{ uid }}",           // Becomes: "proj-123" (string)
-    "sort_name": "Count: {{ count }}",  // Becomes: "Count: 42" (string - embedded)
-    ...
-  }
-}
-```
-
-**Best Practices:**
-
-- Use templates for repeated values (e.g., UIDs in multiple FGA fields)
-- Use nested field access to avoid flattening your data structure
-- Escape templates when you need literal `{{ }}` in your data
-- Ensure referenced fields exist in `data` to avoid processing errors
+- Search fields (`sort_name`, `name_and_aliases`, `fulltext`, `tags`, `contacts`) may contain any text, including end-user text that looks like `{{ ... }}`; it is indexed unchanged. A backslash is not an escape: `\{{` is stored as `\{{`.
+- Identity and authorization fields (`object_id`, `access_check_object`, `access_check_relation`, `history_check_object`, `history_check_relation`, and each `parent_refs` entry) must not contain `{{`. A message with a template reference in any of them is rejected, so a publisher that still sends templates fails loudly instead of indexing every resource under the same literal ID.
 
 ## Field Reference
 
@@ -417,29 +293,6 @@ Each contact in the `contacts` array supports the following fields:
       "emails": ["user-2@example.com"]
     }
   ]
-}
-```
-
-**Note:** Contacts support template expansion, allowing you to reference fields from the `data` object:
-
-```json
-{
-  "data": {
-    "uid": "proj-123",
-    "owner_id": "user-456",
-    "owner_name": "Test User 1",
-    "owner_email": "user-1@example.com"
-  },
-  "indexing_config": {
-    "object_id": "{{ uid }}",
-    "contacts": [
-      {
-        "lfx_principal": "{{ owner_id }}",
-        "name": "{{ owner_name }}",
-        "emails": ["{{ owner_email }}"]
-      }
-    ]
-  }
 }
 ```
 
