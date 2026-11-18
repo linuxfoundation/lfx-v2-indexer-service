@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,6 +31,7 @@ import (
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/presentation/handlers"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/types"
 )
 
 // Container holds all dependencies
@@ -43,6 +45,9 @@ type Container struct {
 	// Infrastructure
 	NATSConnection   *natsgo.Conn
 	OpenSearchClient *opensearchgo.Client
+	// AuditOpenSearchClient deliberately emits no HTTP spans containing private
+	// publisher/event IDs or resource references in request URLs.
+	AuditOpenSearchClient *opensearchgo.Client
 
 	// Repositories
 	StorageRepository   contracts.StorageRepository
@@ -211,7 +216,13 @@ func (c *Container) initializeInfrastructure() error {
 	}
 	c.NATSConnection = natsConn
 	logger.Info("NATS connection established", "url", c.Config.NATS.URL)
+	return c.initializeOpenSearchClients()
+}
 
+// initializeOpenSearchClients keeps ordinary indexing instrumentation while
+// isolating audit and audit-enabled janitor requests from URL-bearing HTTP spans.
+func (c *Container) initializeOpenSearchClients() error {
+	logger := logging.WithComponent(c.Logger, constants.ComponentContainer)
 	// Initialize OpenSearch client
 	if err := validateOpenSearchURL(c.Config.OpenSearch.URL); err != nil {
 		logger.Error("Invalid OpenSearch URL", "url", c.Config.OpenSearch.URL, "error", err.Error())
@@ -221,6 +232,8 @@ func (c *Container) initializeInfrastructure() error {
 	opensearchConfig := opensearchgo.Config{
 		Addresses: []string{c.Config.OpenSearch.URL},
 		Transport: newOpenSearchTransport(c.Config.OpenSearch.Timeout),
+		Username:  c.Config.OpenSearch.Username,
+		Password:  c.Config.OpenSearch.Password,
 	}
 	opensearchClient, err := opensearchgo.NewClient(opensearchConfig)
 	if err != nil {
@@ -229,6 +242,16 @@ func (c *Container) initializeInfrastructure() error {
 	}
 	c.OpenSearchClient = opensearchClient
 	logger.Info("OpenSearch client created", "url", c.Config.OpenSearch.URL)
+	if c.Config.Audit.Enabled {
+		auditConfig := opensearchConfig
+		auditConfig.Transport = newOpenSearchHTTPTransport(c.Config.OpenSearch.Timeout)
+		c.AuditOpenSearchClient, err = opensearchgo.NewClient(auditConfig)
+		if err != nil {
+			// Do not surface transport/config errors that can include URL data.
+			return fmt.Errorf("failed to create private audit OpenSearch client")
+		}
+		logger.Info("Private audit OpenSearch client created without HTTP tracing")
+	}
 
 	return nil
 }
@@ -236,14 +259,23 @@ func (c *Container) initializeInfrastructure() error {
 // newOpenSearchTransport returns an instrumented HTTP transport with the given
 // ResponseHeaderTimeout applied on top of http.DefaultTransport settings.
 func newOpenSearchTransport(timeout time.Duration) http.RoundTripper {
+	return otelhttp.NewTransport(newOpenSearchHTTPTransport(timeout))
+}
+
+// newOpenSearchHTTPTransport preserves connection, TLS and timeout defaults
+// without attaching telemetry that could export sensitive document-ID paths.
+func newOpenSearchHTTPTransport(timeout time.Duration) *http.Transport {
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.ResponseHeaderTimeout = timeout
-	return otelhttp.NewTransport(t)
+	return t
 }
 
 // initializeRepositories initializes repository layer with consolidated interfaces
 func (c *Container) initializeRepositories() error {
 	logger := logging.WithComponent(c.Logger, constants.ComponentContainer)
+	if c.Config.Audit.Enabled && c.AuditOpenSearchClient == nil {
+		return fmt.Errorf("audit OpenSearch client is not initialized")
+	}
 
 	// Initialize auth repository first (needed by messaging repository)
 	authRepo, err := auth.NewAuthRepository(
@@ -276,8 +308,14 @@ func (c *Container) initializeRepositories() error {
 	)
 
 	// Initialize cleanup repository (background operations)
+	cleanupStorage := c.StorageRepository
+	if c.Config.Audit.Enabled {
+		// Audited cleanup updates include resource/document IDs in their URLs.
+		// Keep the shared janitor off HTTP tracing in audit-enabled deployments.
+		cleanupStorage = storage.NewStorageRepository(c.AuditOpenSearchClient, c.Logger)
+	}
 	c.CleanupRepository = cleanup.NewCleanupRepository(
-		c.StorageRepository,
+		cleanupStorage,
 		c.Logger,
 		c.Config.OpenSearch.Index,
 	)
@@ -323,7 +361,77 @@ func (c *Container) initializeApplication() error {
 		c.Config.NATS.IndexingSubject,
 		c.Config.NATS.V1IndexingSubject,
 	)
+	if c.Config.Audit.Enabled {
+		if err := storage.VerifyAuditMappings(context.Background(), c.AuditOpenSearchClient, c.Config.OpenSearch.Index, c.Config.OpenSearch.Timeout); err != nil {
+			return fmt.Errorf("audited index mappings not ready: %w", err)
+		}
+		info, err := os.Stat(c.Config.Audit.PolicyFile)
+		if err != nil || info.Size() > types.MaxAuditEnvelopeBytes {
+			return fmt.Errorf("audited publisher policy is unavailable or too large")
+		}
+		policy, err := os.ReadFile(c.Config.Audit.PolicyFile)
+		if err != nil {
+			// The path is operator-controlled but may still contain sensitive
+			// deployment details. Never log the path or file contents.
+			return fmt.Errorf("read audited publisher policy: failed")
+		}
+		policies, err := services.DecodeAuditPolicies(policy)
+		if err != nil {
+			return fmt.Errorf("invalid audited publisher policy: %w", err)
+		}
+		if err := validateAuditPolicyCoverage(policies, c.Config.Audit.RequiredTypes); err != nil {
+			return err
+		}
+		admission, err := services.NewAuditAdmission(c.AuthRepository, policies)
+		if err != nil {
+			return fmt.Errorf("invalid audited publisher policy: %w", err)
+		}
+		workflow, err := application.NewAuditWorkflow(
+			admission, storage.NewHistoryRepositoryWithTimeout(c.AuditOpenSearchClient, c.Config.OpenSearch.Timeout),
+			storage.NewAuditDeliveryReceiptRepository(c.AuditOpenSearchClient, c.Config.OpenSearch.Timeout),
+			storage.NewAuditProjectionRepositoryWithTimeout(c.AuditOpenSearchClient, c.Config.OpenSearch.Index, c.Config.OpenSearch.Timeout),
+			c.MessagingRepository, c.CleanupRepository,
+		)
+		if err != nil {
+			return fmt.Errorf("initialize audited processing: %w", err)
+		}
+		if err := c.MessageProcessor.SetAuditWorkflow(workflow, c.Config.Audit.RequiredTypes); err != nil {
+			return err
+		}
+	}
 
+	return nil
+}
+
+// validateAuditPolicyCoverage fences all revision-dependent origins and requires
+// an approved mutation schema for adopted types. Backfill-only preparation is
+// the sole unfenced exception; publisher coordination remains source-owned.
+func validateAuditPolicyCoverage(policies []services.AuditPublisherPolicy, requiredTypes []string) error {
+	required := make(map[string]bool, len(requiredTypes))
+	for _, resource := range requiredTypes {
+		required[resource] = true
+	}
+	for _, publisher := range policies {
+		for resource, resourcePolicy := range publisher.Resources {
+			for origin, enabled := range resourcePolicy.Origins {
+				if enabled && origin.RequiresLegacyFence() && !required[resource] {
+					return fmt.Errorf("mutation/reindex/sync audit policy resource must be audit-required")
+				}
+			}
+		}
+	}
+	for _, resource := range requiredTypes {
+		approved := false
+		for _, policy := range policies {
+			resourcePolicy, found := policy.Resources[resource]
+			if found && resourcePolicy.Origins[types.AuditOriginMutation] && len(resourcePolicy.Schemas) > 0 {
+				approved = true
+			}
+		}
+		if !approved {
+			return fmt.Errorf("audit-required resource type lacks an approved mutation schema")
+		}
+	}
 	return nil
 }
 

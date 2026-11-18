@@ -19,6 +19,7 @@ import (
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/services"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/types"
 )
 
 // MessageProcessor orchestrates the complete message processing workflow
@@ -35,6 +36,30 @@ type MessageProcessor struct {
 	queue             string
 	indexingSubject   string
 	v1IndexingSubject string
+	// Audited processing is optional and installed only after production
+	// publisher policies and index access have been provisioned.
+	auditWorkflow      *AuditWorkflow
+	auditRequiredTypes map[string]bool
+}
+
+// SetAuditWorkflow installs the guarded v2 path and the object types for
+// which legacy writes must be refused. Call only during startup, never while
+// messages are being consumed. An empty list does not claim audit completeness.
+func (mp *MessageProcessor) SetAuditWorkflow(workflow *AuditWorkflow, requiredTypes []string) error {
+	if workflow == nil {
+		return fmt.Errorf("audit workflow is required")
+	}
+	for _, objectType := range requiredTypes {
+		if !types.ValidAuditObjectType(objectType) {
+			return fmt.Errorf("invalid audit-required object type")
+		}
+	}
+	mp.auditWorkflow = workflow
+	mp.auditRequiredTypes = make(map[string]bool, len(requiredTypes))
+	for _, objectType := range requiredTypes {
+		mp.auditRequiredTypes[objectType] = true
+	}
+	return nil
 }
 
 // NewMessageProcessor creates a new message processor
@@ -86,6 +111,28 @@ func (mp *MessageProcessor) ProcessIndexingMessage(ctx context.Context, data []b
 		"subject", subject,
 		"message_type", "V2")
 
+	if mp.auditWorkflow != nil {
+		var discriminator map[string]json.RawMessage
+		if err := json.Unmarshal(data, &discriminator); err != nil {
+			return fmt.Errorf("invalid indexing message JSON")
+		}
+		if _, present := discriminator["schema_version"]; present {
+			if err := mp.validateAuditFencedType(discriminator["audit"], subject); err != nil {
+				return err
+			}
+			return mp.auditWorkflow.Process(ctx, data, subject)
+		}
+		if _, present := discriminator["audit"]; present {
+			if err := mp.validateAuditFencedType(discriminator["audit"], subject); err != nil {
+				return err
+			}
+			return mp.auditWorkflow.Process(ctx, data, subject)
+		}
+		if objectType, ok := strings.CutPrefix(subject, constants.IndexPrefix); ok && mp.auditRequiredTypes[objectType] {
+			return fmt.Errorf("audited resource type requires schema_version 2")
+		}
+	}
+
 	// Create transaction from message data
 	transaction, err := mp.createTransaction(data, subject)
 	if err != nil {
@@ -119,8 +166,31 @@ func (mp *MessageProcessor) ProcessIndexingMessage(ctx context.Context, data []b
 	return nil
 }
 
+// validateAuditFencedType protects mutation/reindex/sync revisions from legacy
+// overwrites, while allowing separately approved backfill-only bootstrap.
+func (mp *MessageProcessor) validateAuditFencedType(raw json.RawMessage, subject string) error {
+	var audit struct {
+		Origin types.AuditOrigin `json:"origin"`
+	}
+	if err := json.Unmarshal(raw, &audit); err != nil {
+		return fmt.Errorf("invalid audit metadata")
+	}
+	if audit.Origin.RequiresLegacyFence() {
+		objectType, ok := strings.CutPrefix(subject, constants.IndexPrefix)
+		if !ok || !mp.auditRequiredTypes[objectType] {
+			return fmt.Errorf("mutation/reindex/sync resource type is not audit-required")
+		}
+	}
+	return nil
+}
+
 // ProcessV1IndexingMessage handles the complete V1 indexing message workflow
 func (mp *MessageProcessor) ProcessV1IndexingMessage(ctx context.Context, data []byte, subject string) error {
+	if mp.auditWorkflow != nil {
+		if objectType, ok := strings.CutPrefix(subject, constants.FromV1Prefix); ok && mp.auditRequiredTypes[objectType] {
+			return fmt.Errorf("audited resource type rejects platform V1 writes")
+		}
+	}
 	logger := logging.FromContext(ctx, mp.logger)
 	messageID := mp.generateMessageID()
 

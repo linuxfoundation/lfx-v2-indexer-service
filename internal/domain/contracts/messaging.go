@@ -18,8 +18,16 @@ type MessageHandlerWithReply interface {
 	HandleWithReply(ctx context.Context, data []byte, subject string, reply func([]byte) error) error
 }
 
+// MessagePublisher publishes a post-index event without coupling callers to
+// subscription management or transport authentication.
+type MessagePublisher interface {
+	Publish(ctx context.Context, subject string, data []byte) error
+}
+
 // MessagingRepository defines the interface for NATS message operations and authentication
 type MessagingRepository interface {
+	MessagePublisher
+	TokenValidator
 	// NATS message operations
 
 	// Subscribe subscribes to NATS messages
@@ -30,9 +38,6 @@ type MessagingRepository interface {
 
 	// QueueSubscribeWithReply subscribes to NATS messages with queue group and reply support
 	QueueSubscribeWithReply(ctx context.Context, subject string, queue string, handler MessageHandlerWithReply) error
-
-	// Publish publishes a message to NATS
-	Publish(ctx context.Context, subject string, data []byte) error
 
 	// Close closes the NATS connection
 	Close() error
@@ -53,9 +58,6 @@ type MessagingRepository interface {
 	ConsumeWithJetStream(ctx context.Context, streamName string, filterSubjects []string, handler func(context.Context, []byte, string) error) error
 
 	// Authentication operations (from AuthRepository)
-
-	// ValidateToken validates a JWT token and returns principal information
-	ValidateToken(ctx context.Context, token string) (*Principal, error)
 
 	// ParsePrincipals parses principals from HTTP headers with delegation support
 	ParsePrincipals(ctx context.Context, headers map[string]string) ([]Principal, error)

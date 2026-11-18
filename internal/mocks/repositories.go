@@ -624,6 +624,23 @@ type MockAuthRepository struct {
 	ParsePrincipalsCalls []ParsePrincipalsCall
 }
 
+var _ contracts.AuthRepository = (*MockAuthRepository)(nil)
+
+// GetMetrics supplies empty authentication metrics for repository-wiring tests.
+func (m *MockAuthRepository) GetMetrics() map[string]interface{} {
+	return map[string]interface{}{}
+}
+
+// GetAuthStatus supplies empty authentication status for repository-wiring tests.
+func (m *MockAuthRepository) GetAuthStatus() map[string]interface{} {
+	return map[string]interface{}{}
+}
+
+// HealthCheck reports a healthy in-memory authentication fixture.
+func (m *MockAuthRepository) HealthCheck(context.Context) error {
+	return nil
+}
+
 // ValidateTokenCall represents a call to the ValidateToken method with its parameters
 type ValidateTokenCall struct {
 	Token string

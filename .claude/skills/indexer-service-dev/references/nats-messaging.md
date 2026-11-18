@@ -11,10 +11,11 @@ events.
 
 ## indexer-service subscriptions
 
-The indexer subscribes with a single wildcard per version, both bound to the same
-queue group so only one replica handles each message when scaled horizontally.
+The deployed consumer uses the shared `index-events` JetStream stream and
+`indexer-consumer` durable consumer, filtering both versioned subject patterns.
+Core-NATS queue/reply helpers remain for compatibility, not the deployed audit path.
 
-| Subject pattern | Version | Queue group | Auth |
+| Subject pattern | Version | Legacy helper queue group | Auth |
 | --- | --- | --- | --- |
 | `lfx.index.>` | V2 | `lfx.indexer.queue` | JWT (`authorization` header key) |
 | `lfx.v1.index.>` | V1 (legacy) | `lfx.indexer.queue` | `x-username` / `x-email` headers |
@@ -26,13 +27,15 @@ subjects and the queue group are overridable via `NATS_INDEXING_SUBJECT`,
 
 ## Reply and outbound events
 
-- Reply: `"OK"` on success, `"ERROR: <details>"` on failure, sent only when the
-  message includes a reply subject (request/reply). A plain `Publish` with no reply
-  inbox receives no reply, so use request/reply to detect handler failure.
-- After every successful OpenSearch write the service publishes a domain event
-  on `lfx.{object_type}.{action}` (e.g. `lfx.project.created`). Publish errors
-  are non-blocking. See `internal/domain/contracts/events.go` for the
-  `IndexingEvent` payload.
+- JetStream capture returns a broker persistence `PubAck`, not the indexer's
+  processing result. Do not use core request/reply to infer successful audited
+  processing. Legacy reply helpers use `"OK"`/`"ERROR: <details>"` only when
+  explicitly invoked with a reply callback.
+- Legacy current writes attempt `lfx.{object_type}.{action}` (for example,
+  `lfx.project.created`). Audit v2 attempts it only after actual current-body
+  replacement; receipt/history appends, guarded no-ops and metadata-only updates
+  intentionally do not publish. Failures are non-blocking. See
+  `internal/domain/contracts/events.go` and the owner contract for the payload.
 
 For the index envelope (`IndexerMessageEnvelope`) and `IndexingConfig` fields,
 see `lfx-v2-indexer-service/docs/indexer-contract.md`. Both

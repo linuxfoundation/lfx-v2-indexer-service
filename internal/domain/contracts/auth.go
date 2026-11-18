@@ -8,11 +8,15 @@ import (
 	"context"
 )
 
+// TokenValidator validates the fresh service credential carried by a message.
+type TokenValidator interface {
+	ValidateToken(ctx context.Context, token string) (*Principal, error)
+}
+
 // AuthRepository defines the contract for authentication operations
 // Handles JWT validation and principal parsing for authorization
 type AuthRepository interface {
-	// ValidateToken validates a JWT token and returns principal information
-	ValidateToken(ctx context.Context, token string) (*Principal, error)
+	TokenValidator
 
 	// ParsePrincipals parses principals from HTTP headers with delegation support
 	ParsePrincipals(ctx context.Context, headers map[string]string) ([]Principal, error)

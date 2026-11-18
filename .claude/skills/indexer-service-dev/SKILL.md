@@ -31,7 +31,7 @@ Repo-local Go conventions for the indexer service. This service consumes NATS in
 | Layer | Path | Holds |
 |---|---|---|
 | Domain | `internal/domain/` | Pure business logic; entities in `contracts/` (`LFXTransaction`, `TransactionBody`, `IndexingEvent`); core service in `services/indexer_service.go`. Note: `IndexerMessageEnvelope` and `IndexingConfig` live in `pkg/types/indexing_config.go` (public client surface) and are imported by `contracts/transaction.go`. |
-| Application | `internal/application/` | Use-case orchestration. `message_processor.go` coordinates V2 and V1 workflows. |
+| Application | `internal/application/` | Use-case orchestration. `message_processor.go` routes legacy V2/V1 and opt-in audit v2; `audit_workflow.go` coordinates admission, receipts/history and guarded projections. |
 | Infrastructure | `internal/infrastructure/` | Adapters: `messaging/` (NATS client + queue groups), `storage/` (OpenSearch), `auth/` (Heimdall JWT), `cleanup/` (background janitor), `config/`. |
 | Presentation | `internal/presentation/handlers/` | Protocol concerns: `indexing_message_handler.go`, `health_handler.go`. |
 
@@ -58,9 +58,9 @@ Rules:
 ## NATS subscriber patterns (this consumer)
 
 - Subscribe via the repo's `MessagingRepository` interface (`internal/infrastructure/messaging/`). Do not call the raw NATS client from handlers or services.
-- Both V2 (`lfx.index.>`) and V1 (`lfx.v1.index.>`) subjects bind to the same queue group `lfx.indexer.queue` so only one replica processes each message when scaled horizontally.
+- The deployed consumer uses the shared `index-events` JetStream stream and `indexer-consumer` durable consumer, filtering both V2 and V1 patterns. Core-NATS queue/reply helpers remain compatibility APIs, not the deployed audited path.
 - Subject prefix selects the version. Route on prefix in the handler, not on payload sniffing.
-- Reply only when the incoming message includes a reply subject (request/reply): `"OK"` on success, `"ERROR: <details>"` on failure. A plain `Publish` with no reply inbox receives no reply. The handler builds a reply func only when `msg.Reply` is non-empty (see `internal/infrastructure/messaging/messaging_repository.go`).
+- A broker `PubAck` confirms persistence, not indexer processing success. Do not infer audited success from core request/reply. Legacy reply helpers retain `"OK"`/`"ERROR: <details>"` when explicitly invoked with a reply callback.
 - Drain NATS connections during graceful shutdown through the existing shutdown path in `cmd/lfx-indexer/main.go`. Do not bypass it.
 - Subject strings live in `pkg/constants/` or runtime config. Never hardcode `lfx.index.>`, `lfx.v1.index.>`, or `lfx.{object_type}.{action}` at call sites.
 
@@ -69,13 +69,15 @@ For the consumer subjects, queue group, and outbound event semantics in one plac
 ## OpenSearch storage patterns
 
 - Storage logic lives in `internal/infrastructure/storage/`. Domain services depend on the storage repository interface, not on the OpenSearch client directly.
-- The write path calls `contracts.DocumentIndexer.Index` (defaulting to `StorageRepository`, optionally a `BatchIndexer` wrapper coalescing concurrent single-doc writes into OpenSearch bulk requests — see `IndexerService.SetDocIndexer`) with `object_ref` as the OpenSearch document ID and `latest: true`. The background janitor (`internal/infrastructure/cleanup/`) reconciles duplicate `latest: true` hits for the same `object_ref` by flipping older hits to `latest: false`. Queries filter `latest: true`.
+- The legacy write path calls `contracts.DocumentIndexer.Index` (defaulting to `StorageRepository`, optionally a `BatchIndexer` wrapper coalescing concurrent single-doc writes into OpenSearch bulk requests — see `IndexerService.SetDocIndexer`) with `object_ref` as the OpenSearch document ID and `latest: true`. The background janitor (`internal/infrastructure/cleanup/`) reconciles duplicate `latest: true` hits for the same `object_ref` by flipping older hits to `latest: false`. Queries filter `latest: true`.
+- The opt-in audit path uses `AuditWorkflow` with domain ports for token validation, event publishing, audited cleanup, receipts/history and `AuditProjection`. It reserves identity, appends mutation history, and performs an atomic revision-guarded current update. Rebuild/sync origins do not manufacture history. Audited cleanup waits for canonical search visibility within its retry budget; private indices never enter the janitor queue. Audit/cleanup HTTP traffic uses the separate uninstrumented client, not the legacy traced client.
 - Top-level document fields and their sources are fixed by the contract document. Do not add a new top-level field in this repo's storage code without updating `docs/indexer-contract.md` and coordinating with `lfx-v2-query-service`.
 - `data` is `flat_object`. New keys inside `data` are free. Search-shaped fields (`name_and_aliases`, `tags`, `fulltext`, `sort_name`, `parent_refs`) come from `IndexingConfig`.
 
 ## Domain events (outbound)
 
-- After every successful OpenSearch write, publish `lfx.{object_type}.{action}` with the `IndexingEvent` payload from `internal/domain/contracts/events.go`.
+- Legacy current writes attempt `lfx.{object_type}.{action}` with the `IndexingEvent` payload from `internal/domain/contracts/events.go`.
+- Audited processing attempts that event only after an actual current-body replacement. Receipt/history writes, guarded no-ops, metadata-only updates and replay that only restores history intentionally do not publish. Do not turn these cases into duplicate notifications or claim durable/exactly-once delivery.
 - Publish failures here are non-blocking: log the error, do not fail the OpenSearch write path.
 - The full envelope, payload, and subscription rules are documented in `docs/indexer-contract.md`.
 

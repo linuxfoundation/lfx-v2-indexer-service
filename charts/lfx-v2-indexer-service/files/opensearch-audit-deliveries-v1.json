@@ -1,0 +1,13 @@
+{
+  "mappings": {
+    "dynamic": "strict",
+    "properties": {
+      "publisher": { "type": "keyword" },
+      "event_id": { "type": "keyword" },
+      "origin": { "type": "keyword" },
+      "fingerprint": { "type": "keyword", "index": false },
+      "erased": { "type": "boolean" },
+      "erased_at": { "type": "date" }
+    }
+  }
+}

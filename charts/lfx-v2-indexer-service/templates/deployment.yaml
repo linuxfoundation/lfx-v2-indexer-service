@@ -12,26 +12,9 @@ in a single pass) rather than requiring a single-unit "<N>s" string, which
 would reject those other equally valid overrides.
 */}}
 {{- $drainTimeout := .Values.nats.drainTimeout }}
-{{- $durationPattern := "^([0-9]+h)?([0-9]+m)?([0-9]+s)?([0-9]+ms)?$" }}
-{{- $durationError := printf "nats.drainTimeout %q must be a duration composed of integer h/m/s/ms components (e.g. \"55s\", \"1m\", \"90000ms\", \"1m30s\") for the terminationGracePeriodSeconds check below" $drainTimeout }}
-{{- if or (eq $drainTimeout "") (not (regexMatch $durationPattern $drainTimeout)) }}
-{{- fail $durationError }}
-{{- end }}
-{{- $msPart := regexFind "[0-9]+ms" $drainTimeout }}
-{{- $remainder := regexReplaceAll "[0-9]+ms" $drainTimeout "" }}
-{{- $hPart := regexFind "[0-9]+h" $remainder }}
-{{- $mPart := regexFind "[0-9]+m" $remainder }}
-{{- $sPart := regexFind "[0-9]+s" $remainder }}
-{{- $matchedLen := add (add (add (len $hPart) (len $mPart)) (len $sPart)) (len $msPart) }}
-{{- if ne $matchedLen (len $drainTimeout) }}
-{{- fail $durationError }}
-{{- end }}
-{{- $drainSecondsFloat := 0.0 }}
-{{- if $hPart }}{{- $drainSecondsFloat = add $drainSecondsFloat (mulf ($hPart | trimSuffix "h" | float64) 3600.0) }}{{- end }}
-{{- if $mPart }}{{- $drainSecondsFloat = add $drainSecondsFloat (mulf ($mPart | trimSuffix "m" | float64) 60.0) }}{{- end }}
-{{- if $sPart }}{{- $drainSecondsFloat = add $drainSecondsFloat ($sPart | trimSuffix "s" | float64) }}{{- end }}
-{{- if $msPart }}{{- $drainSecondsFloat = add $drainSecondsFloat (divf ($msPart | trimSuffix "ms" | float64) 1000.0) }}{{- end }}
-{{- $drainSeconds := ceil $drainSecondsFloat | int }}
+{{- $drainMillis := include "lfx-v2-indexer-service.durationMillis" (dict "name" "nats.drainTimeout" "value" $drainTimeout) | int64 }}
+{{- if le $drainMillis 0 }}{{ fail "nats.drainTimeout must be positive" }}{{- end }}
+{{- $drainSeconds := ceil (divf $drainMillis 1000.0) | int }}
 {{- $minGracePeriod := add $drainSeconds 5 }}
 {{- if lt (int .Values.app.terminationGracePeriodSeconds) $minGracePeriod }}
 {{- fail (printf "app.terminationGracePeriodSeconds (%d) must be at least nats.drainTimeout (%s) + 5s margin for the health server's own shutdown delay (= %ds), or the pod is SIGKILLed mid-drain before DrainWithTimeout returns" (int .Values.app.terminationGracePeriodSeconds) $drainTimeout $minGracePeriod) }}
@@ -39,6 +22,25 @@ would reject those other equally valid overrides.
 ---
 apiVersion: apps/v1
 kind: Deployment
+{{- if .Values.audit.enabled }}
+{{- if not .Values.opensearch.auth.enabled }}{{ fail "audit.enabled requires opensearch.auth.enabled" }}{{- end }}
+{{- if empty .Values.opensearch.auth.provisioningSecret }}{{ fail "audit.enabled requires opensearch.auth.provisioningSecret for mapping Jobs" }}{{- end }}
+{{- if not .Values.opensearch.history.indexingJob.enabled }}{{ fail "audit.enabled requires the history index setup job" }}{{- end }}
+{{- if not .Values.opensearch.auditDelivery.indexingJob.enabled }}{{ fail "audit.enabled requires the audit deliveries index setup job" }}{{- end }}
+{{- if not .Values.opensearch.auditProjectionMappingJob.enabled }}{{ fail "audit.enabled requires the audited projection mapping job" }}{{- end }}
+{{- if empty .Values.audit.requiredTypes }}{{ fail "audit.enabled requires audit.requiredTypes" }}{{- end }}
+{{- $timeout := include "lfx-v2-indexer-service.durationMillis" (dict "name" "opensearch.timeout" "value" .Values.opensearch.timeout) | int64 }}
+{{- $batch := include "lfx-v2-indexer-service.durationMillis" (dict "name" "opensearch.batchMaxWait" "value" .Values.opensearch.batchMaxWait) | int64 }}
+{{- if or (le $timeout 0) (le $batch 0) }}{{ fail "opensearch.timeout and batchMaxWait must be positive" }}{{- end }}
+{{- $budget := max (mul 5 $timeout) (add $timeout $batch) }}
+{{- $minAck := add $budget 10000 }}
+{{- $minDrain := add $budget 5000 }}
+{{- $ackValue := default "0s" .Values.nats.ackWait }}
+{{- if eq (toString $ackValue) "0" }}{{- $ackValue = "0s" }}{{- end }}
+{{- $ack := include "lfx-v2-indexer-service.durationMillis" (dict "name" "nats.ackWait" "value" $ackValue) | int64 }}
+{{- if and (ne $ack 0) (lt $ack $minAck) }}{{ fail (printf "audit.enabled requires nats.ackWait >= %dms (max audited/legacy budget); use 0s for automatic derivation" $minAck) }}{{- end }}
+{{- if lt $drainMillis $minDrain }}{{ fail (printf "audit.enabled requires nats.drainTimeout >= %dms (max audited/legacy budget)" $minDrain) }}{{- end }}
+{{- end }}
 metadata:
   name: lfx-v2-indexer-service
   namespace: {{ .Release.Namespace }}
@@ -121,6 +123,27 @@ spec:
               value: {{ .Values.opensearch.batchMaxSize | quote }}
             - name: OPENSEARCH_BATCH_MAX_WAIT
               value: {{ .Values.opensearch.batchMaxWait }}
+            {{- if .Values.opensearch.auth.enabled }}
+            {{- $secretName := required "opensearch.auth.existingSecret is required when opensearch.auth.enabled is true" .Values.opensearch.auth.existingSecret }}
+            - name: OPENSEARCH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: username
+            - name: OPENSEARCH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: password
+            {{- end }}
+            {{- if .Values.audit.enabled }}
+            - name: AUDIT_ENABLED
+              value: "true"
+            - name: AUDIT_POLICY_FILE
+              value: /etc/indexer/audit-policy.json
+            - name: AUDIT_REQUIRED_TYPES
+              value: {{ .Values.audit.requiredTypes | join "," | quote }}
+            {{- end }}
             - name: JWKS_URL
               value: {{ .Values.heimdall.jwksUrl }}
             - name: JWT_ISSUER
@@ -212,6 +235,12 @@ spec:
               name: web
           resources:
             {{- toYaml .Values.app.resources | nindent 12 }}
+          {{- if .Values.audit.enabled }}
+          volumeMounts:
+            - name: audit-policy
+              mountPath: /etc/indexer
+              readOnly: true
+          {{- end }}
           livenessProbe:
             httpGet:
               path: /livez
@@ -230,6 +259,15 @@ spec:
               port: web
             failureThreshold: 30
             periodSeconds: 1
+      {{- if .Values.audit.enabled }}
+      volumes:
+        - name: audit-policy
+          configMap:
+            name: {{ required "audit.policyConfigMap is required when audit.enabled is true" .Values.audit.policyConfigMap }}
+            items:
+              - key: policy.json
+                path: audit-policy.json
+      {{- end }}
       {{- with .Values.topologySpreadConstraints }}
       topologySpreadConstraints:
         {{- toYaml . | nindent 8 }}

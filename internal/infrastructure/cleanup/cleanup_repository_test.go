@@ -5,6 +5,7 @@ package cleanup
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"testing"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
@@ -92,10 +94,11 @@ func TestCleanupRepository_CheckItem(t *testing.T) {
 		"size":                janitorMaxDuplicates + 1,
 		"seq_no_primary_term": true,
 		"sort": []map[string]any{
+			{"audit_source_revision": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "long"}},
 			{"deleted_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
 			{"updated_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
 		},
-		"_source": []string{"created_at", "updated_at", "deleted_at"},
+		"_source": []string{"created_at", "updated_at", "deleted_at", "audit_source_revision"},
 		"query": map[string]any{
 			"bool": map[string]any{
 				"must": []map[string]any{
@@ -144,19 +147,45 @@ func TestCleanupRepository_ProcessItemWithError(t *testing.T) {
 	mockRepo.AssertExpectations(t)
 }
 
-func TestCleanupRepository_ProcessItemWithInvalidObjectRef(t *testing.T) {
-	mockRepo := &MockTransactionRepository{}
-	logger, _ := logging.TestLogger(t)
-	service := NewCleanupRepository(mockRepo, logger, "test-index")
-
-	ctx := context.Background()
-	objectRef := `test"object"ref` // Contains quotes - should be invalid
-
-	// Process the item - should return early without calling repository
-	service.processItem(ctx, &objectRef)
-
-	// Verify no repository calls were made
-	mockRepo.AssertNotCalled(t, "SearchWithVersions")
+// TestCleanupRepository_QuotedObjectRef preserves literal IDs in the structured
+// query and retires the legacy live duplicate after an audited delete.
+func TestCleanupRepository_QuotedObjectRef(t *testing.T) {
+	for _, audited := range []bool{false, true} {
+		t.Run(fmt.Sprintf("audited=%t", audited), func(t *testing.T) {
+			mockRepo := &MockTransactionRepository{}
+			logger, _ := logging.TestLogger(t)
+			service := NewCleanupRepository(mockRepo, logger, "resources")
+			ctx := context.Background()
+			objectRef := `fixture_resource:resource"child\leaf`
+			seq, term := int64(1), int64(1)
+			docs := []contracts.VersionedDocument{
+				{ID: "legacy-live", SeqNo: &seq, PrimaryTerm: &term,
+					Source: map[string]any{"updated_at": "2026-11-05T11:00:00Z"}},
+				{ID: objectRef, SeqNo: &seq, PrimaryTerm: &term,
+					Source: map[string]any{"deleted_at": "2026-11-05T12:00:00Z", "audit_source_revision": 2}},
+			}
+			mockRepo.On("SearchWithVersions", ctx, "resources", mock.MatchedBy(func(query map[string]any) bool {
+				// Check the wire representation as well as the map: quotes and
+				// backslashes must remain one literal keyword term, not query syntax.
+				encoded, err := json.Marshal(query)
+				require.NoError(t, err)
+				var decoded map[string]any
+				require.NoError(t, json.Unmarshal(encoded, &decoded))
+				must := decoded["query"].(map[string]any)["bool"].(map[string]any)["must"].([]any)
+				return len(must) == 2 && must[0].(map[string]any)["term"].(map[string]any)["object_ref"] == objectRef &&
+					must[1].(map[string]any)["term"].(map[string]any)["latest"] == true
+			})).Return(docs, nil).Once()
+			mockRepo.On("UpdateWithOptimisticLock", ctx, "resources", "legacy-live", mock.Anything,
+				&contracts.OptimisticUpdateParams{SeqNo: &seq, PrimaryTerm: &term}).Run(func(args mock.Arguments) {
+				var update map[string]any
+				require.NoError(t, json.NewDecoder(args.Get(3).(io.Reader)).Decode(&update))
+				require.Equal(t, false, update["doc"].(map[string]any)["latest"])
+			}).Return(nil).Once()
+			require.Equal(t, "conflict_resolved", service.processItemWithPolicy(ctx, janitorRequest{objectRef: objectRef, requireAuditedCanonical: audited}))
+			mockRepo.AssertExpectations(t)
+			mockRepo.AssertNotCalled(t, "UpdateWithOptimisticLock", ctx, "resources", objectRef, mock.Anything, mock.Anything)
+		})
+	}
 }
 
 func TestCleanupRepository_ProcessMultipleHits(t *testing.T) {
@@ -171,10 +200,11 @@ func TestCleanupRepository_ProcessMultipleHits(t *testing.T) {
 		"size":                janitorMaxDuplicates + 1,
 		"seq_no_primary_term": true,
 		"sort": []map[string]any{
+			{"audit_source_revision": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "long"}},
 			{"deleted_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
 			{"updated_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
 		},
-		"_source": []string{"created_at", "updated_at", "deleted_at"},
+		"_source": []string{"created_at", "updated_at", "deleted_at", "audit_source_revision"},
 		"query": map[string]any{
 			"bool": map[string]any{
 				"must": []map[string]any{
@@ -224,6 +254,27 @@ func TestCleanupRepository_ProcessMultipleHits(t *testing.T) {
 	mockRepo.AssertExpectations(t)
 }
 
+func TestCleanupRepository_PrefersAuditedCanonicalOverLegacyTombstone(t *testing.T) {
+	mockRepo := &MockTransactionRepository{}
+	logger, _ := logging.TestLogger(t)
+	service := NewCleanupRepository(mockRepo, logger, "resources")
+	ctx := context.Background()
+	objectRef := "fixture_resource:fixture-resource"
+	legacySeq, auditedSeq, term := int64(1), int64(2), int64(1)
+	docs := []contracts.VersionedDocument{
+		{ID: "legacy-tombstone", SeqNo: &legacySeq, PrimaryTerm: &term,
+			Source: map[string]any{"deleted_at": "2026-11-05T12:00:00Z"}},
+		{ID: objectRef, SeqNo: &auditedSeq, PrimaryTerm: &term,
+			Source: map[string]any{"updated_at": "2026-11-05T11:00:00Z", "audit_source_revision": 7}},
+	}
+	mockRepo.On("SearchWithVersions", ctx, "resources", mock.Anything).Return(docs, nil)
+	mockRepo.On("UpdateWithOptimisticLock", ctx, "resources", "legacy-tombstone", mock.Anything,
+		&contracts.OptimisticUpdateParams{SeqNo: &legacySeq, PrimaryTerm: &term}).Return(nil)
+	assert.Equal(t, "conflict_resolved", service.processItem(ctx, &objectRef))
+	mockRepo.AssertExpectations(t)
+	mockRepo.AssertNotCalled(t, "UpdateWithOptimisticLock", ctx, "resources", objectRef, mock.Anything, mock.Anything)
+}
+
 func TestCleanupRepository_ProcessVersionConflict(t *testing.T) {
 	mockRepo := &MockTransactionRepository{}
 	logger, _ := logging.TestLogger(t)
@@ -260,10 +311,11 @@ func TestCleanupRepository_ProcessVersionConflict(t *testing.T) {
 		"size":                janitorMaxDuplicates + 1,
 		"seq_no_primary_term": true,
 		"sort": []map[string]any{
+			{"audit_source_revision": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "long"}},
 			{"deleted_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
 			{"updated_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
 		},
-		"_source": []string{"created_at", "updated_at", "deleted_at"},
+		"_source": []string{"created_at", "updated_at", "deleted_at", "audit_source_revision"},
 		"query": map[string]any{
 			"bool": map[string]any{
 				"must": []map[string]any{
@@ -320,10 +372,11 @@ func TestCleanupRepository_ProcessWithMarshalError(t *testing.T) {
 		"size":                janitorMaxDuplicates + 1,
 		"seq_no_primary_term": true,
 		"sort": []map[string]any{
+			{"audit_source_revision": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "long"}},
 			{"deleted_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
 			{"updated_at": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "date"}},
 		},
-		"_source": []string{"created_at", "updated_at", "deleted_at"},
+		"_source": []string{"created_at", "updated_at", "deleted_at", "audit_source_revision"},
 		"query": map[string]any{
 			"bool": map[string]any{
 				"must": []map[string]any{
@@ -378,10 +431,11 @@ func TestCleanupRepository_ProcessQueuedItem(t *testing.T) {
 		<-globalJanitorChan
 	}
 
-	ctx := context.Background()
-
-	// Test async retry
-	service.asyncRetry(ctx, "test-object", "test-doc")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() { cancel(); service.retryWG.Wait() }()
+	request := janitorRequest{objectRef: "test-object", requireAuditedCanonical: true, visibilityAttempts: 3}
+	mockRepo.On("SearchWithVersions", mock.Anything, "test-index", mock.Anything).Return([]contracts.VersionedDocument(nil), nil).Once()
+	assert.Equal(t, "retry_scheduled", service.processItemWithPolicy(ctx, request))
 
 	// Wait up to 12 seconds for the async retry (production uses 5-10 second delays)
 	retryFound := false
@@ -399,6 +453,93 @@ func TestCleanupRepository_ProcessQueuedItem(t *testing.T) {
 	if retryFound {
 		// Verify the queued item is correct
 		queuedItem := <-globalJanitorChan
-		assert.Equal(t, "test-object", *queuedItem)
+		assert.Equal(t, "test-object", queuedItem.objectRef)
+		assert.True(t, queuedItem.requireAuditedCanonical)
+		assert.Equal(t, 4, queuedItem.visibilityAttempts)
 	}
+}
+
+// TestCleanupRepository_AuditedVisibility defers all reconciliation until the
+// guarded canonical document appears, even when legacy hits already exist.
+func TestCleanupRepository_AuditedVisibility(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		docs []contracts.VersionedDocument
+	}{
+		{"no search-visible document", nil},
+		{"one legacy live document", []contracts.VersionedDocument{{ID: "legacy-live"}}},
+		{"multiple legacy copies", []contracts.VersionedDocument{{ID: "legacy-live"}, {ID: "legacy-tombstone"}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mockRepo := &MockTransactionRepository{}
+			logger, _ := logging.TestLogger(t)
+			service := NewCleanupRepository(mockRepo, logger, "test-index")
+			ctx, cancel := context.WithCancel(context.Background())
+			defer func() { cancel(); service.retryWG.Wait() }()
+			mockRepo.On("SearchWithVersions", mock.Anything, "test-index", mock.Anything).Return(tt.docs, nil).Once()
+			request := janitorRequest{objectRef: "fixture_resource:fixture-resource", requireAuditedCanonical: true}
+			require.Equal(t, "retry_scheduled", service.processItemWithPolicy(ctx, request))
+			mockRepo.AssertNotCalled(t, "UpdateWithOptimisticLock", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+			mockRepo.AssertExpectations(t)
+		})
+	}
+}
+
+// TestCleanupRepository_VisibilityRetryLimit checks bounded escalation and still
+// permits reconciliation when the canonical document appears on the final try.
+func TestCleanupRepository_VisibilityRetryLimit(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		attempts int
+		visible  bool
+		result   string
+	}{
+		{"budget remains", janitorMaxVisibilityRetries - 1, false, "retry_scheduled"},
+		{"exhausted", janitorMaxVisibilityRetries, false, "error"},
+		{"over budget", janitorMaxVisibilityRetries + 1, false, "error"},
+		{"canonical visible on final attempt", janitorMaxVisibilityRetries, true, "skipped"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mockRepo := &MockTransactionRepository{}
+			logger, logs := logging.TestLogger(t)
+			service := NewCleanupRepository(mockRepo, logger, "test-index")
+			ctx, cancel := context.WithCancel(context.Background())
+			request := janitorRequest{objectRef: "fixture_resource:fixture-resource", requireAuditedCanonical: true, visibilityAttempts: tt.attempts}
+			defer func() { cancel(); service.retryWG.Wait() }()
+			var docs []contracts.VersionedDocument
+			if tt.visible {
+				docs = []contracts.VersionedDocument{{ID: request.objectRef, Source: map[string]any{"audit_source_revision": 2}}}
+			}
+			mockRepo.On("SearchWithVersions", mock.Anything, "test-index", mock.Anything).Return(docs, nil).Once()
+			require.Equal(t, tt.result, service.processItemWithPolicy(ctx, request))
+			cancel()
+			service.retryWG.Wait()
+			if tt.result == "error" {
+				require.Contains(t, logs.String(), `"level":"WARN"`)
+				require.Contains(t, logs.String(), "visibility retries exhausted; reconciliation required")
+				require.Contains(t, logs.String(), request.objectRef)
+				require.NotContains(t, logs.String(), "Scheduling janitor retry")
+			} else {
+				require.NotContains(t, logs.String(), "visibility retries exhausted")
+			}
+			mockRepo.AssertExpectations(t)
+		})
+	}
+}
+
+// TestCleanupRepository_CheckAuditedItem keeps audited visibility requirements
+// on queued work without changing the legacy CheckItem policy.
+func TestCleanupRepository_CheckAuditedItem(t *testing.T) {
+	for len(globalJanitorChan) > 0 {
+		<-globalJanitorChan
+	}
+	logger, _ := logging.TestLogger(t)
+	service := NewCleanupRepository(&MockTransactionRepository{}, logger, "test-index")
+	service.CheckAuditedItem("fixture_resource:audited")
+	service.CheckItem("fixture_resource:legacy")
+	first, second := <-globalJanitorChan, <-globalJanitorChan
+	require.True(t, first.requireAuditedCanonical)
+	require.Equal(t, "fixture_resource:audited", first.objectRef)
+	require.False(t, second.requireAuditedCanonical)
+	require.Equal(t, "fixture_resource:legacy", second.objectRef)
 }

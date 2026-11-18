@@ -1,0 +1,79 @@
+# Copyright The Linux Foundation and each contributor to LFX.
+# SPDX-License-Identifier: MIT
+{{- if .Values.opensearch.auditDelivery.indexingJob.enabled }}
+{{- $job := .Values.opensearch.indexingJob }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "%s-audit-deliveries" .Release.Name | trunc 63 | trimSuffix "-" }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-weight": "1"
+spec:
+  ttlSecondsAfterFinished: {{ $job.ttlSecondsAfterFinished }}
+  backoffLimit: {{ $job.backoffLimit }}
+  {{- if $job.activeDeadlineSeconds }}
+  activeDeadlineSeconds: {{ $job.activeDeadlineSeconds }}
+  {{- end }}
+  template:
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: {{ $job.restartPolicy }}
+      containers:
+        - name: create-audit-deliveries-index
+          image: {{ $job.image.repository }}:{{ $job.image.tag }}
+          imagePullPolicy: {{ $job.image.pullPolicy }}
+          {{- with $job.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.opensearch.auth.enabled }}
+          {{- $secretName := required "opensearch.auth.provisioningSecret is required for audit deliveries index setup" .Values.opensearch.auth.provisioningSecret }}
+          env:
+            - name: OPENSEARCH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: username
+            - name: OPENSEARCH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: password
+          {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              echo '{{ include "lfx-v2-indexer-service.privateIndexBody" (dict "mapping" (.Files.Get "files/opensearch-audit-deliveries-v1.json") "job" $job) | b64enc }}' | base64 -d > /tmp/audit-deliveries.json
+              URL="{{ .Values.opensearch.url | trimSuffix "/" }}/resource-audit-deliveries-v1"
+              for i in $(seq 1 15); do
+                CODE=$(curl -s --connect-timeout 5 --max-time 5 -o /dev/null -w '%{http_code}' {{ if .Values.opensearch.auth.enabled }}-u "${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}" {{ end }}--head "${URL}") || CODE=000
+                if [ "${CODE}" = '200' ]; then
+                  echo 'Audit delivery receipts index exists; mapping is verified at application startup'
+                  exit 0
+                fi
+                if [ "${CODE}" = '404' ]; then
+                  break
+                fi
+                sleep 5
+              done
+              if [ "${CODE}" != '404' ]; then
+                echo "Audit deliveries index availability check failed (HTTP ${CODE})"
+                exit 1
+              fi
+              if curl -sf --connect-timeout 5 --max-time 30 {{ if .Values.opensearch.auth.enabled }}-u "${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}" {{ end }}-X PUT "${URL}" -H 'Content-Type: application/json' --data-binary @/tmp/audit-deliveries.json > /dev/null; then
+                echo 'Created resource-audit-deliveries-v1 (no time-based expiry)'
+              else
+                CODE=$(curl -s --connect-timeout 5 --max-time 30 -o /dev/null -w '%{http_code}' {{ if .Values.opensearch.auth.enabled }}-u "${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}" {{ end }}--head "${URL}") || CODE=000
+                if [ "${CODE}" != '200' ]; then
+                  echo "Audit deliveries index creation failed (HTTP ${CODE})"
+                  exit 1
+                fi
+              fi
+{{- end }}

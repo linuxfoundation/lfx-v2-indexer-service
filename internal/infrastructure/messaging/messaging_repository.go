@@ -1060,6 +1060,17 @@ func (r *MessagingRepository) ConsumeWithJetStream(
 					"error", err,
 					"subject", subject,
 					"consumer", cfg.Name)
+				// MaxDeliver stops delivery after this attempt. Surface a separate
+				// actionable signal while the source stream still has the message;
+				// never include raw payload, headers or actor references in it.
+				if meta, metaErr := msg.Metadata(); metaErr == nil && meta != nil &&
+					meta.NumDelivered >= uint64(cfg.MaxDeliver) {
+					r.logger.ErrorContext(spanCtx, "JetStream message exhausted delivery attempts — durable reconciliation required",
+						"subject", subject,
+						"stream", streamName,
+						"consumer", cfg.Name,
+						"stream_sequence", meta.Sequence.Stream)
+				}
 				if nakErr := msg.NakWithDelay(nakDelay(msg)); nakErr != nil {
 					r.logger.ErrorContext(spanCtx, "Failed to NAK JetStream message",
 						"error", nakErr,

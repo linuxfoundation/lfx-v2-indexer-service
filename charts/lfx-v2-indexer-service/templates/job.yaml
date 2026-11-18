@@ -34,7 +34,7 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           {{- if .Values.opensearch.auth.enabled }}
-          {{- $secretName := required "opensearch.auth.existingSecret is required when opensearch.auth.enabled is true" .Values.opensearch.auth.existingSecret }}
+          {{- $secretName := required "opensearch.auth.existingSecret or provisioningSecret is required when opensearch.auth.enabled is true" (default .Values.opensearch.auth.existingSecret .Values.opensearch.auth.provisioningSecret) }}
           env:
             - name: OPENSEARCH_USERNAME
               valueFrom:

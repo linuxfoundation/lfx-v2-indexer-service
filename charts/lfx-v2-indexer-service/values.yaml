@@ -85,6 +85,22 @@ opensearch:
   url: http://opensearch-cluster-master.lfx.svc.cluster.local:9200/
   # index is the index name for storing resources
   index: resources
+  # history is isolated from current-resource search and janitor processing.
+  # Indefinite retention: there is no age-based delete/ISM policy. This job
+  # provisions only the index and stays disabled until private access controls
+  # and the audited-processing rollout are ready.
+  history:
+    indexingJob:
+      enabled: false
+  # Private, create-only operational receipts for publisher/event identity
+  # across mutation and projection origins. Separate from audit history.
+  auditDelivery:
+    indexingJob:
+      enabled: false
+  # Apply the internal ordering fields to an existing current-resource index
+  # before audited ingestion. Disabled until the audited rollout is approved.
+  auditProjectionMappingJob:
+    enabled: false
   # timeout is the ResponseHeaderTimeout for direct (non-batched) OpenSearch
   # requests — covers time waiting for the first response byte; body reads
   # are not bounded there. BatchIndexer flushes apply it as an end-to-end
@@ -96,13 +112,20 @@ opensearch:
   batchMaxWait: "200ms"
   # auth configures authentication for OpenSearch
   auth:
-    # enabled controls whether authentication is used
+    # enabled authenticates all runtime OpenSearch traffic and setup Jobs,
+    # independently of audit.enabled.
     enabled: false
     # existingSecret is the name of an existing secret containing credentials.
     # Required when enabled is true; the secret must have 'username' and
     # 'password' keys. Plaintext credentials are not accepted here to avoid
     # committing secrets to VCS in GitOps workflows.
     existingSecret: ""
+    # Separate existing Secret with index-admin privileges for the history,
+    # audit-deliveries, and audited projection-mapping setup Jobs. The
+    # current-resource index Job also prefers it over existingSecret when set.
+    # The app's existingSecret should have indexer writer/read-back privileges,
+    # not index-admin privileges.
+    provisioningSecret: ""
   # indexingJob is the configuration for the OpenSearch index creation job
   indexingJob:
     # enabled is a boolean to determine if the indexing job should be created.
@@ -161,6 +184,19 @@ heimdall:
   enabled: true
   url: http://lfx-platform-heimdall.lfx.svc.cluster.local:4456
   jwksUrl: http://lfx-platform-heimdall.lfx.svc.cluster.local:4457/.well-known/jwks
+
+# Audited processing is off until all indexer replicas, the publisher's
+# approved immutable schema and the private OpenSearch index are ready.
+audit:
+  # With the default 30s OpenSearch timeout, enabling audit requires at least
+  # nats.ackWait=160s (or 0s for automatic derivation), drainTimeout=155s,
+  # and app.terminationGracePeriodSeconds=160. Larger legacy batch budgets
+  # raise those bounds; Helm and Go both enforce max(audited, legacy).
+  enabled: false
+  requiredTypes: []
+  # Existing ConfigMap with a review-approved policy.json key. No implicit
+  # publisher/schema registrations are installed by this chart.
+  policyConfigMap: ""
 
 # jwt is the configuration for JWT authentication
 jwt:
