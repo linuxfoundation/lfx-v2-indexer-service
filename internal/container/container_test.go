@@ -1069,7 +1069,7 @@ func TestContainer_FGACacheNeverBlocksStartup(t *testing.T) {
 
 			c, err := NewContainer(logging.NewLogger(false), nil)
 			require.NoError(t, err)
-			defer c.FGACache.Close()
+			defer func() { _ = c.Shutdown(context.Background()) }()
 
 			assert.Equal(t, tt.wantBackend, c.FGACache.Backend)
 			_, err = c.FGACache.CurrentMarker(context.Background())

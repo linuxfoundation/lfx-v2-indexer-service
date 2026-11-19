@@ -214,12 +214,7 @@ func LoadConfig() (*AppConfig, error) {
 				return strings.Split(value, ",")
 			}(),
 		},
-		Cache: CacheConfig{
-			Backend:       getEnvStringWithLogging("CACHE_BACKEND", CacheBackendNone, envVarsUsed, defaultsUsed, logger),
-			Timeout:       getEnvDurationWithLogging("CACHE_TIMEOUT", 5*time.Second, envVarsUsed, defaultsUsed, logger),
-			RetryInterval: getEnvDurationWithLogging("CACHE_RETRY_INTERVAL", 30*time.Second, envVarsUsed, defaultsUsed, logger),
-			Bucket:        getEnvStringWithLogging("CACHE_BUCKET", "fga-sync-cache", envVarsUsed, defaultsUsed, logger),
-		},
+		Cache: loadCacheConfig(),
 	}
 
 	// AckWait must exceed the worst-case time a message can spend in flight:

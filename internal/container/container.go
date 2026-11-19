@@ -224,7 +224,11 @@ func (c *Container) initializeInfrastructure() error {
 	c.FGACache = fgacache.New(c.Config.Cache, natsConn, logging.WithComponent(c.Logger, "fga_cache"))
 	logger.Info("FGA cache backend selected", "backend", c.FGACache.Backend)
 
-	return c.initializeOpenSearchClients()
+	if err := c.initializeOpenSearchClients(); err != nil {
+		c.FGACache.Close()
+		return err
+	}
+	return nil
 }
 
 // initializeOpenSearchClients keeps ordinary indexing instrumentation while

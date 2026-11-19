@@ -188,11 +188,15 @@ func TestFailSafe_RecoversAfterRuntimeFailure(t *testing.T) {
 	defer c.Close()
 	waitReady(t, c)
 
+	// connect fails too, so the background retry cannot recover before the
+	// down-state assertion.
+	store.setConnectErr(errors.New("store down"))
 	store.setGetErr(errors.New("store down"))
 	_, err := c.Get(context.Background(), []string{"k"}, contracts.InvalidationMarker{})
 	require.ErrorIs(t, err, contracts.ErrCacheBypassed)
 	assert.False(t, c.isReady())
 
+	store.setConnectErr(nil)
 	store.setGetErr(nil)
 	waitReady(t, c)
 	_, err = c.Get(context.Background(), []string{"k"}, contracts.InvalidationMarker{})

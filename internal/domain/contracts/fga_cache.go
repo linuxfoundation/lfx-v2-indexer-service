@@ -43,8 +43,8 @@ func (m InvalidationMarker) Counter() int64 {
 
 // FGACache caches OpenFGA check results keyed by relation key
 // ("<object>#<relation>@<user>"). Get never returns an entry written before
-// the marker it is given, and Set discards results whose check overlapped a
-// later invalidation.
+// the marker it is given, and Set does not keep results whose check
+// overlapped a later invalidation.
 //
 // Every method returns ErrCacheBypassed when the cache is off, down, or
 // slower than its per-call timeout; the caller then asks OpenFGA.
@@ -59,13 +59,16 @@ type FGACache interface {
 	Get(ctx context.Context, relationKeys []string, m InvalidationMarker) (map[string]bool, error)
 
 	// Set writes check results under the marker read before the check. If an
-	// invalidation landed since m, the results are not kept. Callers must not
-	// pass results that carried an error.
+	// invalidation landed since m, the results are not kept; on NATS KV a
+	// concurrent Get can still see them until they are removed when the
+	// invalidation lands while they are being written, and a failed removal
+	// is returned as an error. Callers must not pass results that carried an
+	// error.
 	Set(ctx context.Context, results map[string]bool, m InvalidationMarker) error
 
-	// Invalidate records an invalidation and returns the new marker. It is
-	// attempted even while the cache is marked down; an error means the
-	// invalidation was not recorded.
+	// Invalidate records an invalidation and returns the marker of that
+	// write, for Seed. It is attempted even while the cache is marked down;
+	// an error means the invalidation may not have been recorded.
 	Invalidate(ctx context.Context) (InvalidationMarker, error)
 
 	// Seed writes true for relation keys just written to OpenFGA, under the

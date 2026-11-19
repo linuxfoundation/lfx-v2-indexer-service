@@ -10,7 +10,15 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func clearCacheEnv(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{"CACHE_BACKEND", "CACHE_TIMEOUT", "CACHE_RETRY_INTERVAL", "CACHE_BUCKET"} {
+		t.Setenv(key, "")
+	}
+}
+
 func TestLoadConfig_CacheDefaults(t *testing.T) {
+	clearCacheEnv(t)
 	cfg, err := LoadConfig()
 	assert.NoError(t, err)
 	assert.Equal(t, CacheConfig{
@@ -35,6 +43,25 @@ func TestLoadConfig_CacheFromEnv(t *testing.T) {
 		RetryInterval: 10 * time.Second,
 		Bucket:        "other-bucket",
 	}, cfg.Cache)
+}
+
+func TestLoadConfig_MalformedCacheDurationTurnsCacheOff(t *testing.T) {
+	for _, tc := range []struct{ key, value string }{
+		{"CACHE_TIMEOUT", "bogus"},
+		{"CACHE_RETRY_INTERVAL", "30sec"},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			clearCacheEnv(t)
+			t.Setenv("CACHE_BACKEND", "natskv")
+			t.Setenv(tc.key, tc.value)
+
+			cfg, err := LoadConfig()
+			assert.NoError(t, err)
+			got, reason := cfg.Cache.Normalize()
+			assert.Equal(t, CacheBackendNone, got.Backend)
+			assert.Contains(t, reason, tc.key)
+		})
+	}
 }
 
 func TestCacheConfig_Normalize(t *testing.T) {

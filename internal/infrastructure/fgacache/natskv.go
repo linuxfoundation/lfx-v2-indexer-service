@@ -25,6 +25,11 @@ import (
 // cut-off, and an entry created before it is stale. This needs only the
 // latest revision of each key, so it works with a bucket that keeps one.
 
+// removeTimeout bounds removing stale results after the caller's own deadline
+// has passed. Removing a possibly revoked grant is worth this extra time on a
+// path where the store is already failing.
+const removeTimeout = time.Second
+
 // natsKVStore is the NATS JetStream KV backend. It binds the bucket lazily,
 // so a missing bucket is reported as an error instead of failing startup.
 type natsKVStore struct {
@@ -33,6 +38,10 @@ type natsKVStore struct {
 
 	mu sync.RWMutex
 	kv jetstream.KeyValue
+
+	// afterWrites, when set by tests, runs between Set's writes and its
+	// second marker read.
+	afterWrites func()
 }
 
 func newNATSKVStore(js jetstream.JetStream, bucket string) *natsKVStore {
@@ -115,44 +124,97 @@ func (s *natsKVStore) Get(ctx context.Context, relationKeys []string, m contract
 	return found, nil
 }
 
-// Set writes results, then removes them again if an invalidation landed after
-// m: those results were computed before it and may predate a revocation, yet
-// their creation time alone would make them look fresh.
+// Set does not keep results computed before an invalidation that landed after
+// m: their creation time alone would make them look fresh. It skips writing
+// when the marker has already moved, and removes what it wrote when the marker
+// moved during the writes. An invalidation landing between the first marker
+// read and the writes leaves the result readable until that removal; this is
+// stricter than lfx-v2-fga-sync, which keeps such a result until the TTL.
 func (s *natsKVStore) Set(ctx context.Context, results map[string]bool, m contracts.InvalidationMarker) error {
 	kv, err := s.bound(ctx)
 	if err != nil {
 		return err
 	}
-	for relationKey, allowed := range results {
-		if _, err := kv.Put(ctx, CacheKey(relationKey), []byte(strconv.FormatBool(allowed))); err != nil {
-			return err
-		}
-	}
-
 	current, err := s.CurrentMarker(ctx)
 	if err != nil {
 		return err
 	}
-	if !current.Time().After(m.Time()) {
+	if current.Time().After(m.Time()) {
 		return nil
 	}
-	for relationKey := range results {
-		if err := kv.Delete(ctx, CacheKey(relationKey)); err != nil {
-			return err
+
+	written := make([]string, 0, len(results))
+	for relationKey, allowed := range results {
+		cacheKey := CacheKey(relationKey)
+		if _, err := kv.Put(ctx, cacheKey, []byte(strconv.FormatBool(allowed))); err != nil {
+			return errors.Join(err, s.remove(ctx, kv, written))
 		}
+		written = append(written, cacheKey)
 	}
-	return nil
+	if s.afterWrites != nil {
+		s.afterWrites()
+	}
+
+	current, err = s.CurrentMarker(ctx)
+	if err == nil && !current.Time().After(m.Time()) {
+		return nil
+	}
+	return errors.Join(err, s.remove(ctx, kv, written))
 }
 
+// remove deletes cacheKeys. An error is returned so the caller marks the
+// store down: a result that could not be removed may be a revoked grant.
+func (s *natsKVStore) remove(ctx context.Context, kv jetstream.KeyValue, cacheKeys []string) error {
+	if ctx.Err() != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), removeTimeout)
+		defer cancel()
+	}
+	var errs []error
+	for _, cacheKey := range cacheKeys {
+		if err := kv.Delete(ctx, cacheKey); err != nil {
+			errs = append(errs, fmt.Errorf("remove stale result: %w", err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// Invalidate returns the marker of its own write. Reading the latest marker
+// instead could return a later writer's invalidation, and a seed under that
+// marker would survive it.
 func (s *natsKVStore) Invalidate(ctx context.Context) (contracts.InvalidationMarker, error) {
 	kv, err := s.bound(ctx)
 	if err != nil {
 		return contracts.InvalidationMarker{}, err
 	}
-	if _, err := kv.Put(ctx, InvalidationKey, []byte("1")); err != nil {
+	revision, err := kv.Put(ctx, InvalidationKey, []byte("1"))
+	if err != nil {
 		return contracts.InvalidationMarker{}, err
 	}
-	return s.CurrentMarker(ctx)
+	return s.markerAt(ctx, kv, revision)
+}
+
+// markerAt returns the marker written at revision. When a later invalidation
+// has already replaced it (a bucket that keeps one revision), it returns a
+// marker just before the current one: never earlier than the replaced write,
+// so Get stays strict, and older than the current marker, so Set discards a
+// seed made under it.
+func (s *natsKVStore) markerAt(ctx context.Context, kv jetstream.KeyValue, revision uint64) (contracts.InvalidationMarker, error) {
+	entry, err := kv.GetRevision(ctx, InvalidationKey, revision)
+	if err == nil {
+		return contracts.NewTimeMarker(entry.Created()), nil
+	}
+	if !errors.Is(err, jetstream.ErrKeyNotFound) {
+		return contracts.InvalidationMarker{}, fmt.Errorf("read own invalidation marker: %w", err)
+	}
+	current, err := s.CurrentMarker(ctx)
+	if err != nil {
+		return contracts.InvalidationMarker{}, err
+	}
+	if current.Time().IsZero() {
+		return contracts.InvalidationMarker{}, errors.New("invalidation marker disappeared after it was written")
+	}
+	return contracts.NewTimeMarker(current.Time().Add(-time.Nanosecond)), nil
 }
 
 func (s *natsKVStore) Seed(ctx context.Context, relationKeys []string, m contracts.InvalidationMarker) error {

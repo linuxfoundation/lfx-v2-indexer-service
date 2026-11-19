@@ -5,6 +5,7 @@ package config
 
 import (
 	"fmt"
+	"os"
 	"time"
 )
 
@@ -24,6 +25,42 @@ type CacheConfig struct {
 	Timeout       time.Duration `json:"timeout"`
 	RetryInterval time.Duration `json:"retry_interval"`
 	Bucket        string        `json:"bucket"`
+
+	// malformed names a duration setting that did not parse. The shared env
+	// helper would silently use the default; for the cache that must turn it off.
+	malformed string
+}
+
+// loadCacheConfig reads the CACHE_* settings.
+func loadCacheConfig() CacheConfig {
+	c := CacheConfig{
+		Backend: os.Getenv("CACHE_BACKEND"),
+		Bucket:  os.Getenv("CACHE_BUCKET"),
+	}
+	if c.Backend == "" {
+		c.Backend = CacheBackendNone
+	}
+	if c.Bucket == "" {
+		c.Bucket = "fga-sync-cache"
+	}
+	c.Timeout = c.duration("CACHE_TIMEOUT", 5*time.Second)
+	c.RetryInterval = c.duration("CACHE_RETRY_INTERVAL", 30*time.Second)
+	return c
+}
+
+func (c *CacheConfig) duration(key string, defaultValue time.Duration) time.Duration {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultValue
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil {
+		if c.malformed == "" {
+			c.malformed = fmt.Sprintf("%s is not a valid duration: %q", key, value)
+		}
+		return defaultValue
+	}
+	return d
 }
 
 // Normalize returns the settings to run with. When a setting is invalid it
@@ -38,6 +75,8 @@ func (c CacheConfig) Normalize() (CacheConfig, string) {
 	switch {
 	case c.Backend != CacheBackendNATSKV && c.Backend != CacheBackendValkey:
 		reason = fmt.Sprintf("unknown CACHE_BACKEND %q (want natskv, valkey or none)", c.Backend)
+	case c.malformed != "":
+		reason = c.malformed
 	case c.Timeout <= 0:
 		reason = fmt.Sprintf("CACHE_TIMEOUT must be positive, got %v", c.Timeout)
 	case c.RetryInterval <= 0:
