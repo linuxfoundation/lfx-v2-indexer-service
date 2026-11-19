@@ -192,7 +192,7 @@ func (s *natsKVStore) Set(ctx context.Context, results map[string]bool, m contra
 	if err == nil && !current.Time().After(m.Time()) {
 		return nil
 	}
-	return s.hide(ctx, kv, attempted)
+	return errors.Join(err, s.hide(ctx, kv, attempted))
 }
 
 // hide makes cacheKeys unreadable. It removes them, or else rewrites the

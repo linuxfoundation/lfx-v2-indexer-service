@@ -236,6 +236,14 @@ type faultKV struct {
 	putErr        func(key string) error
 	failDelete    bool
 	failMarkerPut atomic.Bool
+	failMarkerGet atomic.Bool
+}
+
+func (f *faultKV) Get(ctx context.Context, key string) (jetstream.KeyValueEntry, error) {
+	if key == InvalidationKey && f.failMarkerGet.Load() {
+		return nil, errors.New("marker read failed")
+	}
+	return f.KeyValue.Get(ctx, key)
 }
 
 func (f *faultKV) Put(ctx context.Context, key string, value []byte) (uint64, error) {
@@ -315,6 +323,20 @@ func TestNATSKV_SetRemovesAFailedWriteEvenIfTheMarkerHasNotMoved(t *testing.T) {
 
 	_, err = kv.Get(ctx, cacheKey)
 	assert.ErrorIs(t, err, jetstream.ErrKeyNotFound, "a write that may land later is removed")
+}
+
+func TestNATSKV_SetReportsAFailedMarkerReadAfterHidingTheWrites(t *testing.T) {
+	ctx := testContext(t)
+	c, kv, fault := newFaultStore(t)
+	c.afterWrites = func() { fault.failMarkerGet.Store(true) }
+
+	beforeCheck, err := c.CurrentMarker(ctx)
+	require.NoError(t, err)
+	err = c.Set(ctx, map[string]bool{"obj:15#writer@user:a": true}, beforeCheck)
+	require.Error(t, err, "the store is failing, so the cache must be marked down")
+
+	_, err = kv.Get(ctx, CacheKey("obj:15#writer@user:a"))
+	assert.ErrorIs(t, err, jetstream.ErrKeyNotFound, "the unconfirmed result was still removed")
 }
 
 func markerRevision(t *testing.T, kv jetstream.KeyValue) uint64 {
