@@ -134,8 +134,8 @@ func (c CacheConfig) Normalize() (CacheConfig, string) {
 		reason = "CACHE_BUCKET is required for the natskv backend"
 	case c.Backend == CacheBackendValkey && c.ValkeyAddr == "":
 		reason = "VALKEY_ADDR is required for the valkey backend"
-	case c.Backend == CacheBackendValkey && c.TTL <= 0:
-		reason = fmt.Sprintf("CACHE_TTL must be positive, got %v", c.TTL)
+	case c.Backend == CacheBackendValkey && c.TTL < time.Millisecond:
+		reason = fmt.Sprintf("CACHE_TTL must be at least 1ms, got %v", c.TTL)
 	case c.Backend == CacheBackendValkey:
 		addr, err := valkeyHostPort(c.ValkeyAddr, c.ValkeyTLS)
 		if err != nil {

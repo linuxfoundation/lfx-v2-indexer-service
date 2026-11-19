@@ -4,11 +4,13 @@
 package fgacache
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net"
 	"os"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -119,7 +121,7 @@ func TestValkey_InvalidationBetweenMarkerReadAndSetLeavesResultStale(t *testing.
 
 	beforeCheck, err := s.CurrentMarker(ctx)
 	require.NoError(t, err)
-	require.NoError(t, raw.Do(ctx, raw.B().Incr().Key(InvalidationKey).Build()).Error())
+	require.NoError(t, raw.Do(ctx, raw.B().Hincrby().Key(InvalidationKey).Field("n").Increment(1).Build()).Error())
 
 	require.NoError(t, s.Set(ctx, map[string]bool{"obj:2#writer@user:a": true}, beforeCheck))
 
@@ -141,8 +143,12 @@ func TestValkey_OnlyExactTrueOrFalseIsAResult(t *testing.T) {
 
 	m, err := s.CurrentMarker(ctx)
 	require.NoError(t, err)
-	prefix := strconv.FormatInt(m.Counter(), 10)
-	values := []string{"true", prefix, prefix + ":1", prefix + ":TRUE", prefix + ":true:x", "0" + prefix + ":true"}
+	counter := strconv.FormatInt(m.Counter(), 10)
+	prefix := m.Generation() + ":" + counter
+	values := []string{
+		"true", counter + ":true", prefix, prefix + ":1", prefix + ":TRUE", prefix + ":true:x",
+		m.Generation() + ":0" + counter + ":true", "other:" + counter + ":true",
+	}
 	relationKeys := make([]string, len(values))
 	for i, value := range values {
 		relationKeys[i] = "obj:3#writer@user:" + strconv.Itoa(i)
@@ -150,6 +156,28 @@ func TestValkey_OnlyExactTrueOrFalseIsAResult(t *testing.T) {
 	}
 
 	got, err := s.Get(ctx, relationKeys, m)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+// An entry that outlived its inv, which noeviction should prevent, is still
+// stale under a new generation with the same counter.
+func TestValkey_EntryFromAnotherGenerationIsStale(t *testing.T) {
+	const relation = "obj:3#viewer@user:a"
+	addr := valkeyAddr(t)
+	ctx := testContext(t)
+	s := freshValkeyStore(t, addr)
+	raw := rawValkey(t, addr)
+
+	old, err := s.CurrentMarker(ctx)
+	require.NoError(t, err)
+	require.NoError(t, s.Set(ctx, map[string]bool{relation: true}, old))
+	require.NoError(t, raw.Do(ctx, raw.B().Hset().Key(InvalidationKey).FieldValue().FieldValue("gen", "new").Build()).Error())
+
+	current, err := s.CurrentMarker(ctx)
+	require.NoError(t, err)
+	require.Equal(t, old.Counter(), current.Counter())
+	got, err := s.Get(ctx, []string{relation}, current)
 	require.NoError(t, err)
 	assert.Empty(t, got)
 }
@@ -208,24 +236,29 @@ func relay(conn net.Conn, target string) {
 	<-done
 }
 
-func TestValkey_MissingMarkerStartsAtServerTime(t *testing.T) {
+func TestValkey_MissingMarkerStartsANewGeneration(t *testing.T) {
 	addr := valkeyAddr(t)
 	ctx := testContext(t)
 	s := freshValkeyStore(t, addr)
+	raw := rawValkey(t, addr)
 
-	before := time.Now().Add(-time.Minute).UnixMicro()
 	m, err := s.CurrentMarker(ctx)
 	require.NoError(t, err)
-	after := time.Now().Add(time.Minute).UnixMicro()
-	assert.Greater(t, m.Counter(), before)
-	assert.Less(t, m.Counter(), after)
+	assert.NotEmpty(t, m.Generation())
+	assert.Zero(t, m.Counter())
 
 	again, err := s.CurrentMarker(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, m.Counter(), again.Counter(), "reading does not move the marker")
+	assert.Equal(t, m, again, "reading does not move the marker")
 	raised, err := s.Invalidate(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, m.Counter()+1, raised.Counter())
+	assert.Equal(t, contracts.NewCounterMarker(m.Generation(), 1), raised)
+
+	require.NoError(t, raw.Do(ctx, raw.B().Flushdb().Build()).Error())
+	raisedAfterLoss, err := s.Invalidate(ctx)
+	require.NoError(t, err)
+	assert.NotEqual(t, m.Generation(), raisedAfterLoss.Generation())
+	assert.Equal(t, int64(1), raisedAfterLoss.Counter())
 }
 
 // A check reads the marker, computes "allowed", and is delayed. Access is
@@ -234,18 +267,22 @@ func TestValkey_ResultFromBeforeLostContentsNeverBecomesFresh(t *testing.T) {
 	const relation = "obj:3#writer@user:a"
 	for _, tt := range []struct {
 		name string
-		// lose runs between the revocation and the delayed write.
-		lose func(t *testing.T, s *valkeyStore, raw valkey.Client)
+		// lose runs between the revocation and the delayed write, after the
+		// old lifetime recorded many invalidations.
+		lose func(t *testing.T, s *valkeyStore, raw valkey.Client, beforeCheck contracts.InvalidationMarker)
 	}{
-		{"marker missing at the delayed write", func(t *testing.T, _ *valkeyStore, raw valkey.Client) {
+		{"marker missing at the delayed write", func(t *testing.T, _ *valkeyStore, raw valkey.Client, _ contracts.InvalidationMarker) {
 			require.NoError(t, raw.Do(testContext(t), raw.B().Flushdb().Build()).Error())
 		}},
-		{"marker raised past the old value before the delayed write", func(t *testing.T, s *valkeyStore, raw valkey.Client) {
-			require.NoError(t, raw.Do(testContext(t), raw.B().Flushdb().Build()).Error())
-			for range 3 {
-				_, err := s.Invalidate(testContext(t))
-				require.NoError(t, err)
-			}
+		{"new counter back at the old value before the delayed write", func(t *testing.T, s *valkeyStore, raw valkey.Client, beforeCheck contracts.InvalidationMarker) {
+			ctx := testContext(t)
+			require.NoError(t, raw.Do(ctx, raw.B().Flushdb().Build()).Error())
+			_, err := s.CurrentMarker(ctx)
+			require.NoError(t, err)
+			require.NoError(t, raw.Do(ctx, raw.B().Hincrby().Key(InvalidationKey).Field("n").Increment(beforeCheck.Counter()).Build()).Error())
+			current, err := s.CurrentMarker(ctx)
+			require.NoError(t, err)
+			require.Equal(t, beforeCheck.Counter(), current.Counter())
 		}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -253,16 +290,13 @@ func TestValkey_ResultFromBeforeLostContentsNeverBecomesFresh(t *testing.T) {
 			ctx := testContext(t)
 			s := freshValkeyStore(t, addr)
 			raw := rawValkey(t, addr)
+			require.NoError(t, raw.Do(ctx, raw.B().Hset().Key(InvalidationKey).FieldValue().FieldValue("gen", "old").FieldValue("n", "1000").Build()).Error())
 
 			beforeCheck, err := s.CurrentMarker(ctx)
 			require.NoError(t, err)
-			revoked, err := s.Invalidate(ctx)
+			_, err = s.Invalidate(ctx)
 			require.NoError(t, err)
-			// Many invalidations before the loss must still stay below the
-			// next lifetime's start.
-			require.NoError(t, raw.Do(ctx, raw.B().Incrby().Key(InvalidationKey).Increment(1000).Build()).Error())
-			time.Sleep(5 * time.Millisecond)
-			tt.lose(t, s, raw)
+			tt.lose(t, s, raw, beforeCheck)
 
 			require.NoError(t, s.Set(ctx, map[string]bool{relation: true}, beforeCheck))
 			err = raw.Do(ctx, raw.B().Get().Key(CacheKey(relation)).Build()).Error()
@@ -270,12 +304,109 @@ func TestValkey_ResultFromBeforeLostContentsNeverBecomesFresh(t *testing.T) {
 
 			current, err := s.CurrentMarker(ctx)
 			require.NoError(t, err)
-			assert.Greater(t, current.Counter(), revoked.Counter()+1000, "the new lifetime never repeats an old counter")
+			assert.NotEqual(t, beforeCheck.Generation(), current.Generation())
 			got, err := s.Get(ctx, []string{relation}, current)
 			require.NoError(t, err)
 			assert.Empty(t, got)
 		})
 	}
+}
+
+// stalledAddr returns a local address that accepts connections and never
+// answers, as an endpoint stuck in the protocol handshake.
+func stalledAddr(t *testing.T) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	var conns []net.Conn
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			conn, err := l.Accept()
+			if err != nil {
+				return
+			}
+			conns = append(conns, conn)
+		}
+	}()
+	t.Cleanup(func() {
+		_ = l.Close()
+		<-done
+		for _, conn := range conns {
+			_ = conn.Close()
+		}
+	})
+	return l.Addr().String()
+}
+
+func TestValkey_StalledHandshakeHonorsCallerDeadline(t *testing.T) {
+	cfg := valkeyConfig(stalledAddr(t))
+	cfg.Timeout = 400 * time.Millisecond
+	s := newValkeyStore(cfg)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := s.Invalidate(ctx)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, time.Since(start), 200*time.Millisecond)
+
+	start = time.Now()
+	s.close()
+	assert.Less(t, time.Since(start), 50*time.Millisecond, "close does not wait for the creation")
+	waitForDialEnd(t, s)
+}
+
+// A client created after close is closed instead of kept.
+func TestValkey_ClientCreatedAfterCloseIsReleased(t *testing.T) {
+	target := valkeyAddr(t)
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = l.Close() })
+	release := make(chan struct{})
+	var accepted, finished atomic.Int32
+	go func() {
+		for {
+			conn, err := l.Accept()
+			if err != nil {
+				return
+			}
+			accepted.Add(1)
+			go func() { <-release; relay(conn, target); finished.Add(1) }()
+		}
+	}()
+	s := newValkeyStore(valkeyConfig(l.Addr().String()))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, err = s.connected(ctx)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	s.mu.RLock()
+	dial := s.dial
+	s.mu.RUnlock()
+	require.NotNil(t, dial)
+	s.close()
+	close(release)
+	<-dial.done
+
+	require.ErrorIs(t, dial.err, errValkeyClosed, "the creation succeeded after close and released its client")
+	assert.Nil(t, dial.client)
+	assert.Nil(t, s.current())
+	require.Eventually(t, func() bool {
+		return accepted.Load() > 0 && finished.Load() == accepted.Load()
+	}, 2*time.Second, 5*time.Millisecond, "every connection of the released client is closed")
+	_, err = s.connected(testContext(t))
+	assert.ErrorIs(t, err, errValkeyClosed)
+}
+
+func waitForDialEnd(t *testing.T, s *valkeyStore) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		return s.dial == nil
+	}, 5*time.Second, 5*time.Millisecond)
 }
 
 func TestValkeyStore_ConnectsWithURLAddress(t *testing.T) {

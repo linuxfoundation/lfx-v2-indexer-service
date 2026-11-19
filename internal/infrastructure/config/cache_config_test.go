@@ -172,6 +172,14 @@ func TestCacheConfig_Normalize(t *testing.T) {
 			c.Backend = CacheBackendValkey
 			c.TTL = 0
 		}, CacheBackendNone, true},
+		{"valkey with a ttl under 1ms turns the cache off", func(c *CacheConfig) {
+			c.Backend = CacheBackendValkey
+			c.TTL = 500 * time.Microsecond
+		}, CacheBackendNone, true},
+		{"valkey with a 1ms ttl is kept", func(c *CacheConfig) {
+			c.Backend = CacheBackendValkey
+			c.TTL = time.Millisecond
+		}, CacheBackendValkey, false},
 		{"natskv ignores an unset valkey address", func(c *CacheConfig) { c.ValkeyAddr = "" }, CacheBackendNATSKV, false},
 		{"bad values are ignored when the cache is off", func(c *CacheConfig) {
 			c.Backend = CacheBackendNone

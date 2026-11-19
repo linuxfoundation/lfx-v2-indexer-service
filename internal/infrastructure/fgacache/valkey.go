@@ -5,11 +5,12 @@ package fgacache
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -19,18 +20,17 @@ import (
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/infrastructure/config"
 )
 
-// On Valkey the marker key "inv" is a counter raised with INCR and never
-// given a TTL. Each entry stores the counter it was computed under
-// ("<counter>:true" or "<counter>:false") and is fresh only while that equals
-// the current counter. Results are written only while the counter still
-// equals the one they were computed under.
+// On Valkey the marker key "inv" is a hash, never given a TTL, of a random
+// generation ("gen") and a counter ("n") raised with HINCRBY. Each entry stores
+// the generation and counter it was computed under ("<gen>:<n>:true" or
+// "<gen>:<n>:false") and is fresh only while both equal the current ones.
+// Results are written only while both still equal the ones they were computed
+// under.
 //
-// A missing counter (a new server, or one that lost its contents) starts at
-// the server time in microseconds, never at 0. A server that lost its contents
-// therefore never hands out a counter an earlier lifetime used, so a result
-// computed before the loss can neither be written nor read as fresh after it.
-// This holds while a replacement's clock, in microseconds, is ahead of the
-// lost server's start by more than the invalidations that server recorded.
+// A missing inv (a new server, or one that lost its contents) starts a new
+// random generation at counter 0. A result computed before the loss carries
+// the old generation, so it can neither be written nor read as fresh after it,
+// however far the new counter climbs.
 
 // valkeyStore is the Valkey backend. The client dials when it is created and
 // fails when nothing is listening, so it is created on first use instead of
@@ -39,13 +39,21 @@ type valkeyStore struct {
 	option valkey.ClientOption
 	ttl    time.Duration
 
-	// dialing admits one client creation at a time without ignoring the
-	// caller's deadline the way a mutex wait would.
-	dialing chan struct{}
-
 	mu     sync.RWMutex
 	client valkey.Client
+	dial   *valkeyDial
+	closed bool
 }
+
+// valkeyDial is one client creation in progress. client and err are set
+// before done is closed.
+type valkeyDial struct {
+	done   chan struct{}
+	client valkey.Client
+	err    error
+}
+
+var errValkeyClosed = errors.New("valkey cache closed")
 
 func newValkeyStore(cfg config.CacheConfig) *valkeyStore {
 	option := valkey.ClientOption{
@@ -62,7 +70,7 @@ func newValkeyStore(cfg config.CacheConfig) *valkeyStore {
 	if cfg.ValkeyTLS {
 		option.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 	}
-	return &valkeyStore{option: option, ttl: cfg.TTL, dialing: make(chan struct{}, 1)}
+	return &valkeyStore{option: option, ttl: cfg.TTL}
 }
 
 func (s *valkeyStore) connect(ctx context.Context) error {
@@ -72,10 +80,12 @@ func (s *valkeyStore) connect(ctx context.Context) error {
 	return s.HealthCheck(ctx)
 }
 
-// close releases the client, if one was created.
+// close releases the client, if one was created. A creation still in
+// progress closes its client when it finishes.
 func (s *valkeyStore) close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.closed = true
 	if s.client != nil {
 		s.client.Close()
 		s.client = nil
@@ -88,33 +98,59 @@ func (s *valkeyStore) current() valkey.Client {
 	return s.client
 }
 
+// connected returns the client, starting its creation if none is in
+// progress. valkey.NewClient takes no context, so creation runs on its own
+// and the caller stops waiting when its context ends.
 func (s *valkeyStore) connected(ctx context.Context) (valkey.Client, error) {
 	if client := s.current(); client != nil {
 		return client, nil
 	}
-	select {
-	case s.dialing <- struct{}{}:
-		defer func() { <-s.dialing }()
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-	if client := s.current(); client != nil {
-		return client, nil
-	}
-
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	// The client keeps its options for every reconnect, so the dial timeout
-	// stays the configured one rather than this caller's remaining budget.
-	client, err := valkey.NewClient(s.option)
-	if err != nil {
-		return nil, fmt.Errorf("connect to valkey: %w", err)
-	}
 	s.mu.Lock()
-	s.client = client
+	switch {
+	case s.client != nil:
+		client := s.client
+		s.mu.Unlock()
+		return client, nil
+	case s.closed:
+		s.mu.Unlock()
+		return nil, errValkeyClosed
+	case s.dial == nil:
+		s.dial = &valkeyDial{done: make(chan struct{})}
+		go s.create(s.dial)
+	}
+	dial := s.dial
 	s.mu.Unlock()
-	return client, nil
+
+	select {
+	case <-dial.done:
+		return dial.client, dial.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// create builds the client for dial. The client keeps its options for every
+// reconnect, so the dial timeout stays the configured one rather than a
+// caller's remaining budget.
+func (s *valkeyStore) create(dial *valkeyDial) {
+	client, err := valkey.NewClient(s.option)
+	s.mu.Lock()
+	s.dial = nil
+	switch {
+	case err != nil:
+		dial.err = fmt.Errorf("connect to valkey: %w", err)
+	case s.closed:
+		client.Close()
+		dial.err = errValkeyClosed
+	default:
+		s.client = client
+		dial.client = client
+	}
+	s.mu.Unlock()
+	close(dial.done)
 }
 
 func (s *valkeyStore) HealthCheck(ctx context.Context) error {
@@ -133,28 +169,44 @@ func (s *valkeyStore) CurrentMarker(ctx context.Context) (contracts.Invalidation
 	if err != nil {
 		return contracts.InvalidationMarker{}, err
 	}
-	counter, err := readMarker.Exec(ctx, client, []string{InvalidationKey}, nil).AsInt64()
+	m, err := runMarker(ctx, client, readMarker)
 	if err != nil {
 		return contracts.InvalidationMarker{}, fmt.Errorf("read invalidation marker: %w", err)
 	}
-	return contracts.NewCounterMarker(counter), nil
+	return m, nil
 }
 
-// startMarker sets a missing KEYS[1] to the server time in microseconds and
-// leaves it in v.
+// startMarker reads KEYS[1] (inv) into m as {gen, n}, first starting a missing
+// inv at generation ARGV[1] and counter 0.
 const startMarker = `
-local v = redis.call('GET', KEYS[1])
-if not v then
-  local t = redis.call('TIME')
-  v = t[1] .. string.format('%06d', tonumber(t[2]))
-  redis.call('SET', KEYS[1], v)
+local m = redis.call('HMGET', KEYS[1], 'gen', 'n')
+if not m[1] or not m[2] then
+  redis.call('HSET', KEYS[1], 'gen', ARGV[1], 'n', 0)
+  m = {ARGV[1], '0'}
 end
 `
 
 var (
-	readMarker  = valkey.NewLuaScript(startMarker + "return v")
-	raiseMarker = valkey.NewLuaScript(startMarker + "return redis.call('INCR', KEYS[1])")
+	readMarker  = valkey.NewLuaScript(startMarker + "return m")
+	raiseMarker = valkey.NewLuaScript(startMarker + "return {m[1], tostring(redis.call('HINCRBY', KEYS[1], 'n', 1))}")
 )
+
+// runMarker runs a marker script, offering a fresh generation in case inv is
+// missing.
+func runMarker(ctx context.Context, client valkey.Client, script *valkey.Lua) (contracts.InvalidationMarker, error) {
+	reply, err := script.Exec(ctx, client, []string{InvalidationKey}, []string{rand.Text()}).AsStrSlice()
+	if err != nil {
+		return contracts.InvalidationMarker{}, err
+	}
+	if len(reply) != 2 || reply[0] == "" {
+		return contracts.InvalidationMarker{}, fmt.Errorf("unexpected invalidation marker %q", reply)
+	}
+	counter, err := strconv.ParseInt(reply[1], 10, 64)
+	if err != nil {
+		return contracts.InvalidationMarker{}, fmt.Errorf("parse invalidation counter: %w", err)
+	}
+	return contracts.NewCounterMarker(reply[0], counter), nil
+}
 
 func (s *valkeyStore) Get(ctx context.Context, relationKeys []string, m contracts.InvalidationMarker) (map[string]bool, error) {
 	found := make(map[string]bool, len(relationKeys))
@@ -187,30 +239,28 @@ func (s *valkeyStore) Get(ctx context.Context, relationKeys []string, m contract
 // freshResult parses a stored value. A missing key arrives as "", which
 // never matches.
 func freshResult(value string, m contracts.InvalidationMarker) (allowed, ok bool) {
-	counter, result, _ := strings.Cut(value, ":")
-	if counter != strconv.FormatInt(m.Counter(), 10) {
-		return false, false
-	}
-	switch result {
-	case "true":
+	switch value {
+	case storedValue(m, true):
 		return true, true
-	case "false":
+	case storedValue(m, false):
 		return false, true
 	}
 	return false, false
 }
 
 func storedValue(m contracts.InvalidationMarker, allowed bool) string {
-	return strconv.FormatInt(m.Counter(), 10) + ":" + strconv.FormatBool(allowed)
+	return m.Generation() + ":" + strconv.FormatInt(m.Counter(), 10) + ":" + strconv.FormatBool(allowed)
 }
 
-// setIfCurrent writes KEYS[2..] = ARGV[2..] with PX ARGV[#KEYS+1], only while
-// KEYS[1] (inv) exists and still equals ARGV[1]. A missing inv means the
-// server lost its contents after m was read, so nothing is written.
+// setIfCurrent writes KEYS[i] = ARGV[i+1] for i >= 2 with PX ARGV[#KEYS+2],
+// only while KEYS[1] (inv) exists with generation ARGV[1] and counter ARGV[2].
+// A missing inv means the server lost its contents after m was read, so
+// nothing is written.
 var setIfCurrent = valkey.NewLuaScript(`
-if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
+local m = redis.call('HMGET', KEYS[1], 'gen', 'n')
+if m[1] ~= ARGV[1] or m[2] ~= ARGV[2] then return 0 end
 for i = 2, #KEYS do
-  redis.call('SET', KEYS[i], ARGV[i], 'PX', ARGV[#KEYS + 1])
+  redis.call('SET', KEYS[i], ARGV[i + 1], 'PX', ARGV[#KEYS + 2])
 end
 return 1`)
 
@@ -223,9 +273,9 @@ func (s *valkeyStore) Set(ctx context.Context, results map[string]bool, m contra
 		return err
 	}
 	keys := make([]string, 0, len(results)+1)
-	args := make([]string, 0, len(results)+2)
+	args := make([]string, 0, len(results)+3)
 	keys = append(keys, InvalidationKey)
-	args = append(args, strconv.FormatInt(m.Counter(), 10))
+	args = append(args, m.Generation(), strconv.FormatInt(m.Counter(), 10))
 	for relationKey, allowed := range results {
 		keys = append(keys, CacheKey(relationKey))
 		args = append(args, storedValue(m, allowed))
@@ -237,18 +287,18 @@ func (s *valkeyStore) Set(ctx context.Context, results map[string]bool, m contra
 	return nil
 }
 
-// Invalidate returns the counter its own INCR produced, never a later
+// Invalidate returns the counter its own HINCRBY produced, never a later
 // writer's.
 func (s *valkeyStore) Invalidate(ctx context.Context) (contracts.InvalidationMarker, error) {
 	client, err := s.connected(ctx)
 	if err != nil {
 		return contracts.InvalidationMarker{}, err
 	}
-	counter, err := raiseMarker.Exec(ctx, client, []string{InvalidationKey}, nil).AsInt64()
+	m, err := runMarker(ctx, client, raiseMarker)
 	if err != nil {
 		return contracts.InvalidationMarker{}, fmt.Errorf("raise invalidation marker: %w", err)
 	}
-	return contracts.NewCounterMarker(counter), nil
+	return m, nil
 }
 
 func (s *valkeyStore) Seed(ctx context.Context, relationKeys []string, m contracts.InvalidationMarker) error {
