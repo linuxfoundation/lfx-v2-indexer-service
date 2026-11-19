@@ -44,6 +44,7 @@ type AppConfig struct {
 	Janitor    JanitorConfig    `json:"janitor"`
 	Health     HealthConfig     `json:"health"`
 	Audit      AuditConfig      `json:"audit"`
+	Cache      CacheConfig      `json:"cache"`
 }
 
 // AuditConfig controls opt-in v2 ingestion. Empty policies never grant access.
@@ -212,6 +213,12 @@ func LoadConfig() (*AppConfig, error) {
 				}
 				return strings.Split(value, ",")
 			}(),
+		},
+		Cache: CacheConfig{
+			Backend:       getEnvStringWithLogging("CACHE_BACKEND", CacheBackendNone, envVarsUsed, defaultsUsed, logger),
+			Timeout:       getEnvDurationWithLogging("CACHE_TIMEOUT", 5*time.Second, envVarsUsed, defaultsUsed, logger),
+			RetryInterval: getEnvDurationWithLogging("CACHE_RETRY_INTERVAL", 30*time.Second, envVarsUsed, defaultsUsed, logger),
+			Bucket:        getEnvStringWithLogging("CACHE_BUCKET", "fga-sync-cache", envVarsUsed, defaultsUsed, logger),
 		},
 	}
 

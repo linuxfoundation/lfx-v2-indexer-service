@@ -379,7 +379,17 @@ LOG_FORMAT=text                              # Log format (text,json)
 
 # Cleanup Service (Background Cleanup)
 JANITOR_ENABLED=true                         # Enable cleanup service (default: true)
+
+# FGA check cache (off by default; run.sh sets natskv, so set it yourself with make run)
+CACHE_BACKEND=none                           # natskv or none
+CACHE_BUCKET=fga-sync-cache                  # NATS KV bucket, shared with lfx-v2-fga-sync
+CACHE_TIMEOUT=5s                             # Limit for each cache call
+CACHE_RETRY_INTERVAL=30s                     # How often a failed cache is retried
 ```
+
+The cache is never required. If the store is missing or unreachable, or a cache
+setting is invalid, the indexer logs a warning (at most one per retry interval),
+answers without the cache, and keeps running.
 
 With audit enabled and the default 30s OpenSearch timeout, configure at least
 160s ACK wait, 155s drain and 160s pod termination grace; larger legacy batching
@@ -430,7 +440,9 @@ for the formulas and first-type bootstrap sequence.
 │   │   │   └── auth_repository_test.go # Auth tests
 │   │   ├── config/               # Configuration management
 │   │   │   ├── app_config.go     # Application configuration
+│   │   │   ├── cache_config.go   # FGA cache configuration
 │   │   │   └── cli_config.go     # CLI configuration
+│   │   ├── fgacache/             # FGA check cache backends (NATS KV, none)
 │   │   ├── cleanup/               # Background cleanup operations
 │   │   │   ├── cleanup_repository.go # Background cleanup repository
 │   │   │   └── cleanup_repository_test.go # Cleanup tests
