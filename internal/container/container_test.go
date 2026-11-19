@@ -1044,3 +1044,36 @@ func BenchmarkContainer_Shutdown(b *testing.B) {
 		_ = container.Shutdown(context.Background())
 	}
 }
+
+// TestContainer_FGACacheNeverBlocksStartup checks that no cache setting can
+// stop the container from building, and that the cache is off by default.
+func TestContainer_FGACacheNeverBlocksStartup(t *testing.T) {
+	tests := []struct {
+		name        string
+		backend     string
+		wantBackend string
+	}{
+		{"default is off", "", config.CacheBackendNone},
+		{"unknown backend turns the cache off", "bogus", config.CacheBackendNone},
+		{"natskv with no NATS server still starts", config.CacheBackendNATSKV, config.CacheBackendNATSKV},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("NATS_URL", "nats://127.0.0.1:1")
+			t.Setenv("OPENSEARCH_URL", "http://localhost:9200")
+			t.Setenv("JWT_ISSUER", "test-issuer")
+			t.Setenv("JWT_AUDIENCES", "test-audience")
+			t.Setenv("CACHE_BACKEND", tt.backend)
+			t.Setenv("CACHE_RETRY_INTERVAL", "50ms")
+
+			c, err := NewContainer(logging.NewLogger(false), nil)
+			require.NoError(t, err)
+			defer func() { _ = c.Shutdown(context.Background()) }()
+
+			assert.Equal(t, tt.wantBackend, c.FGACache.Backend)
+			_, err = c.FGACache.CurrentMarker(context.Background())
+			assert.Error(t, err, "with no cache store reachable, every call bypasses")
+		})
+	}
+}

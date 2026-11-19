@@ -26,6 +26,7 @@ import (
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/infrastructure/auth"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/infrastructure/cleanup"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/infrastructure/config"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/infrastructure/fgacache"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/infrastructure/messaging"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/infrastructure/storage"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/presentation/handlers"
@@ -48,6 +49,9 @@ type Container struct {
 	// AuditOpenSearchClient deliberately emits no HTTP spans containing private
 	// publisher/event IDs or resource references in request URLs.
 	AuditOpenSearchClient *opensearchgo.Client
+	// FGACache is never part of health or readiness: the indexer must run
+	// without it.
+	FGACache *fgacache.Cache
 
 	// Repositories
 	StorageRepository   contracts.StorageRepository
@@ -216,7 +220,15 @@ func (c *Container) initializeInfrastructure() error {
 	}
 	c.NATSConnection = natsConn
 	logger.Info("NATS connection established", "url", c.Config.NATS.URL)
-	return c.initializeOpenSearchClients()
+
+	c.FGACache = fgacache.New(c.Config.Cache, natsConn, logging.WithComponent(c.Logger, "fga_cache"))
+	logger.Info("FGA cache backend selected", "backend", c.FGACache.Backend)
+
+	if err := c.initializeOpenSearchClients(); err != nil {
+		c.FGACache.Close()
+		return err
+	}
+	return nil
 }
 
 // initializeOpenSearchClients keeps ordinary indexing instrumentation while
@@ -621,6 +633,10 @@ func (c *Container) Shutdown(ctx context.Context) error {
 	if c.CleanupRepository != nil {
 		logger.DebugContext(ctx, "Shutting down cleanup repository")
 		c.CleanupRepository.Shutdown()
+	}
+
+	if c.FGACache != nil {
+		c.FGACache.Close()
 	}
 
 	// Drain and close NATS connections
