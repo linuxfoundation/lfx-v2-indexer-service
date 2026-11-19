@@ -19,7 +19,6 @@ const (
 
 	// Transaction processing errors
 	ErrCreateTransaction   = "failed to create transaction"
-	ErrCreateV1Transaction = "failed to create V1 transaction"
 	ErrCreateV2Transaction = "failed to create V2 transaction"
 	ErrProcessTransaction  = "failed to process transaction"
 
@@ -38,13 +37,12 @@ const (
 	ErrOptimisticUpdate   = "failed to perform optimistic update"
 
 	// Log messages
-	LogFailedIndexDocument       = "Failed to index document"
-	LogFailedUpdateDocument      = "Failed to update document"
-	LogFailedDeleteDocument      = "Failed to delete document"
-	LogFailedBulkOperation       = "Failed to perform bulk operation"
-	LogFailedOptimisticUpdate    = "Failed to perform optimistic update"
-	LogFailedCreateTransaction   = "Failed to create transaction from message"
-	LogFailedCreateV1Transaction = "Failed to create V1 transaction from message"
+	LogFailedIndexDocument     = "Failed to index document"
+	LogFailedUpdateDocument    = "Failed to update document"
+	LogFailedDeleteDocument    = "Failed to delete document"
+	LogFailedBulkOperation     = "Failed to perform bulk operation"
+	LogFailedOptimisticUpdate  = "Failed to perform optimistic update"
+	LogFailedCreateTransaction = "Failed to create transaction from message"
 )
 
 // Error contexts (for structured error logging)

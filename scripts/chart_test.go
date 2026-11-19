@@ -6,6 +6,7 @@ package scripts
 import (
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"os"
 	"os/exec"
 	"regexp"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.yaml.in/yaml/v3"
 
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/infrastructure/config"
 )
@@ -247,5 +249,38 @@ func TestAuditRunbookAttributionMapping(t *testing.T) {
 	require.NoError(t, json.Unmarshal(fixture, &provisioned))
 	for _, field := range []string{"actor_ref", "effective_actor_ref", "actor_verified", "effective_actor_verified"} {
 		require.JSONEq(t, string(provisioned.Mappings.Properties[field]), string(update["properties"][field]), field)
+	}
+}
+
+func TestChart_IndexingSubjectOnly(t *testing.T) {
+	for _, subject := range []string{"lfx.index.>", "lfx.index.v1_meeting"} {
+		t.Run(subject, func(t *testing.T) {
+			output, err := renderIndexerChart(t, false, "nats.indexingSubject="+subject)
+			require.NoError(t, err, "%s", output)
+			require.NotContains(t, output, "NATS_V1_INDEXING_SUBJECT")
+			require.NotContains(t, output, "v1_data")
+			require.NotContains(t, output, "lfx.v1.index.")
+			decoder := yaml.NewDecoder(strings.NewReader(output))
+			found := false
+			for {
+				var document struct {
+					Kind string `yaml:"kind"`
+					Spec struct {
+						Name     string   `yaml:"name"`
+						Subjects []string `yaml:"subjects"`
+					} `yaml:"spec"`
+				}
+				err := decoder.Decode(&document)
+				if err == io.EOF {
+					break
+				}
+				require.NoError(t, err)
+				if document.Kind == "Stream" && document.Spec.Name == "index-events" {
+					found = true
+					require.Equal(t, []string{subject}, document.Spec.Subjects)
+				}
+			}
+			require.True(t, found, "the chart must provision the supported stream subject")
+		})
 	}
 }

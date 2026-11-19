@@ -9,9 +9,8 @@ import "time"
 // NATS subject prefixes (preserved from existing)
 // These constants define the protocol format for NATS message subjects
 const (
-	IndexPrefix        = "lfx.index."    // V2 message prefix
-	FromV1Prefix       = "lfx.v1.index." // V1 message prefix
-	EventSubjectPrefix = "lfx."          // Post-indexing domain event prefix: lfx.{object_type}.{action}
+	IndexPrefix        = "lfx.index." // V2 message prefix
+	EventSubjectPrefix = "lfx."       // Post-indexing domain event prefix: lfx.{object_type}.{action}
 )
 
 // BuildEventSubject constructs the NATS subject for a post-indexing domain event.
@@ -22,37 +21,22 @@ func BuildEventSubject(objectType string, action MessageAction) string {
 
 // NATS subjects (professional expansion)
 const (
-	ProjectSubject    = IndexPrefix + "project"  // V2 project messages
-	V1ProjectSubject  = FromV1Prefix + "project" // V1 project messages
-	MeetingSubject    = IndexPrefix + "meeting"  // V2 meeting messages
-	SubjectIndexing   = IndexPrefix + "index"    // V2 indexing messages
-	SubjectV1Indexing = FromV1Prefix + "index"   // V1 indexing messages
-	AllSubjects       = IndexPrefix + ">"        // All V2 subjects
-	AllV1Subjects     = FromV1Prefix + ">"       // All V1 subjects
+	ProjectSubject  = IndexPrefix + "project" // V2 project messages
+	MeetingSubject  = IndexPrefix + "meeting" // V2 meeting messages
+	SubjectIndexing = IndexPrefix + "index"   // V2 indexing messages
+	AllSubjects     = IndexPrefix + ">"       // All V2 subjects
 )
 
 // MessageAction represents the type of indexing operation to perform.
 type MessageAction string
 
 const (
-	// ActionCreate indicates a resource will be created
-	ActionCreate MessageAction = "create"
 	// ActionCreated indicates a resource was created
 	ActionCreated MessageAction = "created"
-	// ActionUpdate indicates a resource will be updated
-	ActionUpdate MessageAction = "update"
 	// ActionUpdated indicates a resource was updated
 	ActionUpdated MessageAction = "updated"
-	// ActionDelete indicates a resource will be deleted
-	ActionDelete MessageAction = "delete"
 	// ActionDeleted indicates a resource was deleted
 	ActionDeleted MessageAction = "deleted"
-)
-
-// Header constants (centralized)
-const (
-	HeaderXUsername = "x-username" // V1 username header
-	HeaderXEmail    = "x-email"    // V1 email header
 )
 
 // Message processing constants
@@ -83,8 +67,8 @@ const (
 // NATS pending buffer and concurrency defaults.
 //
 // These pending limits are per subscription, not process-wide. In deployments
-// with multiple subscriptions in the same process (for example, V1 and V2
-// consumers together), the allowed in-memory backlog grows proportionally
+// with multiple subscriptions in the same process, the allowed in-memory
+// backlog grows proportionally
 // across each subscription during downstream slowness.
 //
 // Treat these values as upper bounds that should be tuned to the memory

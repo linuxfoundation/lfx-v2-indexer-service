@@ -15,7 +15,7 @@ allowed-tools: Read, Glob, Grep, Edit, Write, Bash
 
 # Development Conventions (lfx-v2-indexer-service)
 
-Repo-local Go conventions for the indexer service. This service consumes NATS index messages on `lfx.index.>` (V2) and `lfx.v1.index.>` (V1), writes documents into OpenSearch, and emits domain events on `lfx.{object_type}.{action}`. Conventions below apply to this repo's own Go code.
+Repo-local Go conventions for the indexer service. This service consumes platform V2 NATS index messages on `lfx.index.>`, writes documents into OpenSearch, and emits domain events on `lfx.{object_type}.{action}`. Conventions below apply to this repo's own Go code.
 
 ## What this skill owns vs. routes elsewhere
 
@@ -31,7 +31,7 @@ Repo-local Go conventions for the indexer service. This service consumes NATS in
 | Layer | Path | Holds |
 |---|---|---|
 | Domain | `internal/domain/` | Pure business logic; entities in `contracts/` (`LFXTransaction`, `TransactionBody`, `IndexingEvent`); core service in `services/indexer_service.go`. Note: `IndexerMessageEnvelope` and `IndexingConfig` live in `pkg/types/indexing_config.go` (public client surface) and are imported by `contracts/transaction.go`. |
-| Application | `internal/application/` | Use-case orchestration. `message_processor.go` routes legacy V2/V1 and opt-in audit v2; `audit_workflow.go` coordinates admission, receipts/history and guarded projections. |
+| Application | `internal/application/` | Use-case orchestration. `message_processor.go` routes unversioned current writes and opt-in audit v2; `audit_workflow.go` coordinates admission, receipts/history and guarded projections. |
 | Infrastructure | `internal/infrastructure/` | Adapters: `messaging/` (NATS client + queue groups), `storage/` (OpenSearch), `auth/` (Heimdall JWT), `cleanup/` (background janitor), `config/`. |
 | Presentation | `internal/presentation/handlers/` | Protocol concerns: `indexing_message_handler.go`, `health_handler.go`. |
 
@@ -58,11 +58,11 @@ Rules:
 ## NATS subscriber patterns (this consumer)
 
 - Subscribe via the repo's `MessagingRepository` interface (`internal/infrastructure/messaging/`). Do not call the raw NATS client from handlers or services.
-- The deployed consumer uses the shared `index-events` JetStream stream and `indexer-consumer` durable consumer, filtering both V2 and V1 patterns. Core-NATS queue/reply helpers remain compatibility APIs, not the deployed audited path.
-- Subject prefix selects the version. Route on prefix in the handler, not on payload sniffing.
+- The deployed consumer uses the shared `index-events` JetStream stream and `indexer-consumer` durable consumer, filtering only the configured platform V2 subject. Core-NATS queue/reply helpers remain compatibility APIs, not the deployed audited path.
+- Validate the supported subject prefix. Audit-envelope admission is independent of resource names and belongs to the message processor.
 - A broker `PubAck` confirms persistence, not indexer processing success. Do not infer audited success from core request/reply. Legacy reply helpers retain `"OK"`/`"ERROR: <details>"` when explicitly invoked with a reply callback.
 - Drain NATS connections during graceful shutdown through the existing shutdown path in `cmd/lfx-indexer/main.go`. Do not bypass it.
-- Subject strings live in `pkg/constants/` or runtime config. Never hardcode `lfx.index.>`, `lfx.v1.index.>`, or `lfx.{object_type}.{action}` at call sites.
+- Subject strings live in `pkg/constants/` or runtime config. Never hardcode `lfx.index.>` or `lfx.{object_type}.{action}` at call sites.
 
 For the consumer subjects, queue group, and outbound event semantics in one place, see `references/nats-messaging.md`.
 
@@ -84,7 +84,6 @@ For the consumer subjects, queue group, and outbound event semantics in one plac
 ## Authentication
 
 - V2 messages carry a JWT in the lower-case `authorization` header key validated against Heimdall (`internal/infrastructure/auth/`).
-- V1 messages carry `x-username` and `x-email` headers.
 - `x-on-behalf-of` is supported for delegation. Forward it through context.
 - Middleware (the handler layer) owns auth extraction. Service-layer code should not read headers directly; it reads from request context via typed keys.
 
@@ -99,7 +98,7 @@ For the consumer subjects, queue group, and outbound event semantics in one plac
 - Co-locate `*_test.go` files with the code under test.
 - Depend on interfaces for external systems: messaging, storage, auth, ID mappers. Mocks live in `internal/mocks/`. Add new mocks there.
 - Use table-driven tests for branching behavior; prefer one test function per exported method with cases in the table.
-- Test both V2 and V1 message formats wherever the code path differs.
+- Test supported unversioned and audited V2 envelopes, including rejection of unsupported subjects/actions and continued support for legacy-backed resource names.
 - Run the appropriate layer-specific target during development; run `make test` (race detection + coverage) before handoff.
 
 | Target | Scope |

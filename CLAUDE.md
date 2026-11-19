@@ -54,7 +54,7 @@ LOG_LEVEL=debug make run
 
 ## Architecture Overview
 
-This is a **Clean Architecture** implementation processing NATS messages into OpenSearch documents. The service handles both modern V2 messages (`lfx.index.>`) and legacy V1 messages (`lfx.v1.index.>`) with queue group load balancing.
+This is a **Clean Architecture** implementation processing platform V2 NATS messages (`lfx.index.>`) into OpenSearch documents with queue group load balancing. Unversioned current writes and opt-in audit envelopes share the supported subject namespace.
 
 ## Agent Guidance
 
@@ -100,7 +100,7 @@ or the task needs additional peer repos.
    - `services/indexer_service.go`: Central business logic (1100+ lines)
 
 2. **Application Layer** (`internal/application/`): Use case orchestration
-   - `message_processor.go`: Coordinates V2/V1 message processing workflows
+   - `message_processor.go`: Coordinates current-resource and audited V2 workflows
    - `audit_workflow.go`: Opt-in publisher admission, delivery reservation,
      history-first persistence and guarded current projection through domain ports
 
@@ -138,12 +138,11 @@ central `/lfx-skills:lfx-platform-architecture` skill.
 
 ### Critical Patterns
 
-**Message Routing**: Subject prefix determines version (`lfx.index.` = V2, `lfx.v1.index.` = V1)
+**Message Routing**: Only the platform V2 subject prefix (`lfx.index.`) is supported. Resource names such as `v1_meeting` are unaffected; audit-envelope versioning is independent.
 
 **Authentication**:
 
 - V2: JWT tokens via the lower-case `authorization` header key in the NATS JSON envelope (validated against Heimdall)
-- V1: Simple `x-username`/`x-email` headers
 - Delegation: `x-on-behalf-of` support
 
 **Configuration**: CLI flags > Environment variables > Defaults
@@ -162,7 +161,6 @@ NATS_MAX_RECONNECTS=-1          # -1 = infinite reconnects (recommended for prod
 OPENSEARCH_INDEX=resources
 OPENSEARCH_TIMEOUT=30s          # ResponseHeaderTimeout for direct (non-batched) calls: bounds first-byte wait, body reads are not bounded there. BatchIndexer flushes apply it as an end-to-end deadline covering the whole bulk request, body reads included
 NATS_INDEXING_SUBJECT=lfx.index.>
-NATS_V1_INDEXING_SUBJECT=lfx.v1.index.>
 
 # Optional configuration
 PORT=8080

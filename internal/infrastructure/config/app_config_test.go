@@ -25,7 +25,6 @@ func baseValidConfig() *AppConfig {
 			ReconnectWait:     2 * time.Second,
 			ConnectionTimeout: 10 * time.Second,
 			IndexingSubject:   "lfx.index.>",
-			V1IndexingSubject: "lfx.v1.index.>",
 			Queue:             "lfx.indexer.queue",
 			DrainTimeout:      55 * time.Second,
 			PendingMsgLimit:   1024,

@@ -69,7 +69,6 @@ type NATSConfig struct {
 	ReconnectWait     time.Duration `json:"reconnect_wait"`
 	ConnectionTimeout time.Duration `json:"connection_timeout"`
 	IndexingSubject   string        `json:"indexing_subject"`
-	V1IndexingSubject string        `json:"v1_indexing_subject"`
 	Queue             string        `json:"queue"`
 	DrainTimeout      time.Duration `json:"drain_timeout"`
 	PendingMsgLimit   int           `json:"pending_msg_limit"`
@@ -149,7 +148,6 @@ func LoadConfig() (*AppConfig, error) {
 			ReconnectWait:     getEnvDurationWithLogging("NATS_RECONNECT_WAIT", 2*time.Second, envVarsUsed, defaultsUsed, logger),
 			ConnectionTimeout: getEnvDurationWithLogging("NATS_CONNECTION_TIMEOUT", 10*time.Second, envVarsUsed, defaultsUsed, logger),
 			IndexingSubject:   getEnvStringWithLogging("NATS_INDEXING_SUBJECT", "lfx.index.>", envVarsUsed, defaultsUsed, logger),
-			V1IndexingSubject: getEnvStringWithLogging("NATS_V1_INDEXING_SUBJECT", "lfx.v1.index.>", envVarsUsed, defaultsUsed, logger),
 			Queue:             getEnvStringWithLogging("NATS_QUEUE", "lfx.indexer.queue", envVarsUsed, defaultsUsed, logger),
 			DrainTimeout:      getEnvDurationWithLogging("NATS_DRAIN_TIMEOUT", 55*time.Second, envVarsUsed, defaultsUsed, logger),
 			PendingMsgLimit:   getEnvIntWithLogging("NATS_PENDING_MSG_LIMIT", constants.DefaultPendingMsgLimit, envVarsUsed, defaultsUsed, logger),
@@ -341,10 +339,6 @@ func (c *AppConfig) validateNATS() error {
 
 	if c.NATS.IndexingSubject == "" {
 		return fmt.Errorf("NATS indexing subject is required")
-	}
-
-	if c.NATS.V1IndexingSubject == "" {
-		return fmt.Errorf("NATS V1 indexing subject is required")
 	}
 
 	// Negative values signal infinite reconnects to the nats.go library; -1 is the idiomatic sentinel.

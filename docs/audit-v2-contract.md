@@ -8,8 +8,10 @@
 > [ops #1527](https://github.com/linuxfoundation/lfx-self-serve-ops/issues/1527).
 > Public input types, ingestion verification, credential stripping, first-append
 > identity resolution, replay checks and searchable history actor fields are
-> implemented in the indexer. Query-service live enrichment and the coordinated
-> legacy/current-document cleanup remain outstanding. Audited production
+> implemented in the indexer. Query-service live enrichment is implemented in
+> [query-service PR #91](https://github.com/linuxfoundation/lfx-v2-query-service/pull/91).
+> The retired platform protocol is removed; current-document
+> attribution and companion fixture cleanup remain outstanding. Audited production
 > publishing remains disabled; do not adopt this revision with old readers.
 > This revision replaces publisher-supplied profile snapshots; update publishers,
 > indexer and history-query readers together before adoption.
@@ -34,11 +36,9 @@ they are not held indefinitely until a future consumer can process them.
   Existing messages on those subjects are unversioned, current-resource messages.
 - **Envelope version 2** explicitly sets `schema_version: 2` and supplies `audit`.
   Its guarantees are additional to the existing platform protocol.
-- The current implementation also accepts platform V1 traffic with present-tense
-  actions. The coordinated #1527 implementation removes that subscription and
-  processing path; platform V2 subject naming and envelope versioning remain
-  independent. The compatibility table below describes the current code, not
-  the post-removal target.
+- The retired platform protocol is no longer subscribed to or processed.
+  Platform V2 subject naming and audit-envelope versioning remain independent;
+  neither legacy-backed resource names nor unversioned V2 publishers are removed.
 
 The legacy/current contract is [indexer-contract.md](indexer-contract.md).
 The opt-in storage/recovery implementation and remaining rollout gates are
@@ -51,13 +51,13 @@ prove the absence of collisions in uninspected deployed clients or retained data
 
 | Wire input | Current consumer behavior |
 | --- | --- |
-| Neither `schema_version` nor `audit` present | Existing platform V1/V2 behavior |
+| Neither `schema_version` nor `audit` present | Existing platform V2 current-resource behavior |
 | `audit` present without a version, including `audit: null` | Reject; never downgrade to legacy |
 | Version 2 with audit present | Reject by default; when enabled, require approved publisher/subject/origin/schema, then append/verify history before a revision-guarded current write |
 | Version 2 with audit absent/null | Reject: audit is required |
 | Explicit version 0, 1, or any other unsupported version | Reject |
 | Null, string, array, object, or non-integer version | Reject |
-| Version/audit fields on a platform V1 subject | Reject |
+| Any message on an unsupported subject | Reject; the consumer filters only platform V2 subjects |
 | Case variants of the reserved discriminator names | Reject |
 
 The fields are additive. Legacy Go publishers leave `SchemaVersion` at zero and
@@ -437,9 +437,10 @@ deleted current resource; its explicit policy is a rollout prerequisite.
 
 The cache backend from
 [ops #1526](https://github.com/linuxfoundation/lfx-self-serve-ops/issues/1526)
-has merged. Indexer-side attribution is implemented; the query-service
-changes, coordinated cleanup and end-to-end rollout validation below are still
-needed before #1527 can be completed.
+has merged. Indexer-side attribution and query-service live enrichment are
+implemented, and the retired platform protocol has been removed. Current-document
+attribution/fixture cleanup and end-to-end rollout validation remain before #1527
+can be completed.
 
 Before enabling the revised contract:
 
@@ -454,12 +455,12 @@ Before enabling the revised contract:
 - Update query-service's Goa design, generated code and
   `docs/audit-history-query.md` for retained identity, live display fields,
   availability and verification flags. Test lookup deduplication and failures.
-- Remove the platform V1 subscription, configuration, header handling and
-  transaction path, plus the raw legacy-record payload field. Update the generic
-  contract, publisher compatibility inventory, README and Helm chart accordingly.
-  Remove the V1 stream subject/consumer filter in ArgoCD and the obsolete fields
-  from mockdata's duplicated reset mapping. This is not removal of unrelated
-  resource-service synchronization with legacy systems.
+- The retired subscription, configuration, header handling, transaction path and
+  raw legacy-record payload field have been removed from the indexer. Its own
+  Helm chart now provisions only the supported stream subject, and the application
+  narrows the durable consumer filter. Check externally managed stream settings
+  during rollout and finish mockdata's duplicated reset-mapping cleanup separately.
+  This does not remove resource-service synchronization with legacy systems.
 - Remove current-document attribution fields as described above; do not replace
   them with history identities or verification fields in the current index.
 - Run `make lint` and `make test` in each touched Go repository and validate

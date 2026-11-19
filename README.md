@@ -12,7 +12,7 @@ A high-performance, indexer service for the LFX V2 platform that processes resou
 > disabled by default; versioned messages are rejected until the strict
 > publisher policy, private index, and guarded projection are explicitly
 > enabled. See the [audit rollout guide](docs/audit-rollout.md). Existing
-> unversioned platform V1/V2 messages retain current behavior by default.
+> unversioned platform V2 messages retain current behavior by default.
 > The indexer verifies optional actor JWT evidence and retains only username/email
 > in private history. JWTs are stripped before persistence; name/avatar belong to
 > live query-service enrichment. Coordinated read-side rollout remains required.
@@ -25,7 +25,7 @@ The LFX V2 Indexer Service is responsible for:
 - **Transaction Enrichment**: JWT authentication, data validation, and principal parsing with delegation support
 - **Search Indexing**: OpenSearch document writes under the `object_ref` document ID
 - **Data Consistency**: Event-driven janitor service for conflict resolution
-- **Dual Format Support**: Both LFX v2 (past-tense actions) and legacy v1 (present-tense actions) message formats
+- **Envelope Support**: Existing unversioned V2 messages and opt-in audit envelopes, both using past-tense actions
 - **Health Monitoring**: Kubernetes-ready health check endpoints
 
 ## 🚀 Quick Start
@@ -125,7 +125,7 @@ curl http://localhost:8080/health   # General health
 │  └─ cmd/lfx-indexer/main.go - Pure dependency injection       │
 ├─────────────────────────────────────────────────────────────────┤
 │  Presentation Layer (NATS Protocol + Health Checks)            │
-│  ├─ IndexingMessageHandler - Unified V2/V1 message processing │
+│  ├─ IndexingMessageHandler - Platform V2 message processing   │
 │  └─ HealthHandler - Kubernetes health probes                  │
 ├─────────────────────────────────────────────────────────────────┤
 │  Application Layer (Orchestration)                             │
@@ -158,12 +158,10 @@ curl http://localhost:8080/health   # General health
 graph TB
     %% External message sources
     V2_APPS["V2 Applications<br/>(Projects API, Orgs API, etc.)"]
-    V1_APPS["V1 Legacy Applications<br/>(Platform DB Events)"]
 
     %% NATS Infrastructure
     NATS_SERVER["NATS Server<br/>nats://nats:4222"]
     V2_SUBJECT["V2 Subject: lfx.index.><br/>(lfx.index.project, lfx.index.organization)"]
-    V1_SUBJECT["V1 Subject: lfx.v1.index.><br/>(lfx.v1.index.project)"]
     QUEUE_GROUP["Queue Group: lfx.indexer.queue<br/>(Load Balancing)"]
 
     %% Service Instances
@@ -177,7 +175,7 @@ graph TB
     MSG_REPO["MessagingRepository<br/>(NATS Wrapper)"]
 
     %% Presentation Layer
-    UNIFIED_HANDLER["IndexingMessageHandler<br/>(Unified V2 + V1 Messages)"]
+    UNIFIED_HANDLER["IndexingMessageHandler<br/>(Platform V2 Messages)"]
     HEALTH_HANDLER["HealthHandler<br/>(Kubernetes Probes)"]
 
     %% Application Layer
@@ -201,10 +199,8 @@ graph TB
 
     %% Message Flow
     V2_APPS -->|"Publish V2 Messages"| V2_SUBJECT
-    V1_APPS -->|"Publish V1 Messages"| V1_SUBJECT
 
     V2_SUBJECT --> NATS_SERVER
-    V1_SUBJECT --> NATS_SERVER
 
     NATS_SERVER -->|"Queue Group Distribution"| QUEUE_GROUP
     QUEUE_GROUP --> INSTANCE1
@@ -217,7 +213,7 @@ graph TB
     CONTAINER --> MSG_REPO
     CONTAINER --> HEALTH_HANDLER
 
-    MSG_REPO -->|"Both V2 + V1"| UNIFIED_HANDLER
+    MSG_REPO -->|"Platform V2"| UNIFIED_HANDLER
 
     %% Processing Flow
     UNIFIED_HANDLER --> MESSAGE_PROCESSOR
@@ -243,7 +239,7 @@ graph TB
     class MESSAGE_PROCESSOR,UNIFIED_HANDLER application
     class INDEXER_SVC,CONTRACTS_PKG,TRANSACTION_ENTITY domain
     class CONTAINER,MSG_REPO,STORAGE_REPO,AUTH_REPO,CLEANUP_REPO infrastructure
-    class V2_APPS,V1_APPS,JWT_SERVICE,OPENSEARCH,NATS_SERVER external
+    class V2_APPS,JWT_SERVICE,OPENSEARCH,NATS_SERVER external
 ```
 
 ## 🔄 Message Processing Sequence
@@ -265,10 +261,10 @@ sequenceDiagram
     Note over NATS,CR: Message Processing Flow
 
     %% Message Arrival & Presentation Layer
-    NATS->>MR: NATS Message arrives<br/>Subject: lfx.index.project OR lfx.v1.index.project<br/>Queue: lfx.indexer.queue
+    NATS->>MR: NATS Message arrives<br/>Subject: lfx.index.project<br/>Queue: lfx.indexer.queue
 
     MR->>UH: HandleWithReply(ctx, data, subject, reply)
-    Note over UH: Route based on subject prefix<br/>(V2 vs V1 format)
+    Note over UH: Platform V2 only<br/>Audit admission remains in MessageProcessor
 
     %% Application Layer Coordination
     UH->>MP: ProcessIndexingMessage(ctx, data, subject)
@@ -339,7 +335,6 @@ JWKS_URL=http://localhost:4457/.well-known/jwks  # JWT validation endpoint
 
 # Message Processing
 NATS_INDEXING_SUBJECT=lfx.index.>           # V2 subject pattern
-NATS_V1_INDEXING_SUBJECT=lfx.v1.index.>    # V1 subject pattern
 NATS_QUEUE=lfx.indexer.queue                # Queue group name
 OPENSEARCH_INDEX=resources                   # OpenSearch index name
 
@@ -457,7 +452,6 @@ for the formulas and first-type bootstrap sequence.
 | Subject Pattern | Purpose | Example | Load Balancing |
 |----------------|---------|---------|----------------|
 | `lfx.index.>` | V2 resource indexing | `lfx.index.project`, `lfx.index.organization` | Queue group distribution |
-| `lfx.v1.index.>` | V1 legacy support | `lfx.v1.index.project` | Queue group distribution |
 
 **Queue Group**: `lfx.indexer.queue`
 
@@ -647,27 +641,6 @@ nats pub lfx.index.project '{
     "sort_name": "test project",
     "name_and_aliases": ["Test Project"],
     "tags": ["slug:test-project"]
-  }
-}' --server nats://your-nats-server:4222
-
-# Test V1 message format
-nats pub lfx.v1.index.project '{
-  "action": "create",
-  "data": {
-    "id": "test-project-456",
-    "name": "Legacy Project"
-  },
-  "indexing_config": {
-    "object_id": "test-project-456",
-    "access_check_object": "project:test-project-456",
-    "access_check_relation": "viewer",
-    "history_check_object": "project:test-project-456",
-    "history_check_relation": "historian",
-    "sort_name": "legacy project",
-    "name_and_aliases": ["Legacy Project"]
-  },
-  "v1_data": {
-    "legacy_field": "legacy_value"
   }
 }' --server nats://your-nats-server:4222
 

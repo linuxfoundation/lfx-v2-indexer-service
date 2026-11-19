@@ -37,33 +37,27 @@ func TestCreateTransactionFromMessage_EnvelopeAdmission(t *testing.T) {
 		{name: "wrong_audit_case", fields: map[string]any{"Audit": nil}},
 		{name: "wrong_version_case", fields: map[string]any{"Schema_Version": 2}},
 	}
-	for _, isV1 := range []bool{false, true} {
-		version := "platform_v2"
-		action := constants.ActionDeleted
-		if isV1 {
-			version, action = "platform_v1", constants.ActionDelete
-		}
-		for _, tt := range tests {
-			t.Run(version+"/"+tt.name, func(t *testing.T) {
-				storage, messaging := mocks.NewMockStorageRepository(), mocks.NewMockMessagingRepository()
-				logger, _ := logging.TestLogger(t)
-				service := NewIndexerService(storage, messaging, logger)
-				message := map[string]any{"action": string(action), "data": "fixture-resource"}
-				for k, v := range tt.fields {
-					message[k] = v
-				}
-				txn, err := service.CreateTransactionFromMessage(message, "fixture_resource", isV1)
-				if tt.valid {
-					require.NoError(t, err)
-					require.NotNil(t, txn)
-				} else {
-					require.Error(t, err)
-					require.Nil(t, txn)
-				}
-				require.Empty(t, storage.IndexCalls)
-				require.Empty(t, messaging.PublishCalls)
-				require.Empty(t, messaging.AuthRepo.ParsePrincipalsCalls)
-			})
-		}
+	action := constants.ActionDeleted
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			storage, messaging := mocks.NewMockStorageRepository(), mocks.NewMockMessagingRepository()
+			logger, _ := logging.TestLogger(t)
+			service := NewIndexerService(storage, messaging, logger)
+			message := map[string]any{"action": string(action), "data": "fixture-resource"}
+			for k, v := range tt.fields {
+				message[k] = v
+			}
+			txn, err := service.CreateTransactionFromMessage(message, "fixture_resource")
+			if tt.valid {
+				require.NoError(t, err)
+				require.NotNil(t, txn)
+			} else {
+				require.Error(t, err)
+				require.Nil(t, txn)
+			}
+			require.Empty(t, storage.IndexCalls)
+			require.Empty(t, messaging.PublishCalls)
+			require.Empty(t, messaging.AuthRepo.ParsePrincipalsCalls)
+		})
 	}
 }

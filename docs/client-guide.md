@@ -376,7 +376,7 @@ These fields are **always set by the server** and should **not** be included in 
 
 For legacy deletes, `indexing_config` is optional. Providing a complete config
 preserves matching scope/history context, but still does not create append-only
-history. Top-level legacy tags and V1 data handling remains unchanged; do not
+history. Top-level legacy tags remain unchanged; do not
 reuse those payloads as approved version 2 snapshots.
 
 ## Best Practices
@@ -603,8 +603,8 @@ consumer processing.
 **Solution**: Confirm successful processing in the consumer's operational evidence
 and the indexed result; a publish acknowledgment is not processing confirmation.
 Create/update documents get `created_at` or `updated_at`; delete documents get
-`deleted_at`. Principal fields require a valid lower-case `authorization` header
-on V2 messages or `x-username` / `x-email` on V1 messages.
+`deleted_at`. Principal fields require a valid lower-case `authorization` header.
+Only the platform V2 protocol and past-tense actions are supported.
 
 ### Issue: "indexing_config is required" error
 

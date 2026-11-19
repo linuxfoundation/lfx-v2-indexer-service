@@ -372,7 +372,6 @@ func (c *Container) initializeApplication() error {
 		c.Config.OpenSearch.Index,
 		c.Config.NATS.Queue,
 		c.Config.NATS.IndexingSubject,
-		c.Config.NATS.V1IndexingSubject,
 	)
 	if c.Config.Audit.Enabled {
 		if err := storage.VerifyAuditMappings(context.Background(), c.AuditOpenSearchClient, c.Config.OpenSearch.Index, c.Config.OpenSearch.Timeout); err != nil {
@@ -479,9 +478,8 @@ func (c *Container) initializeHandlers() error {
 	simpleResponse := !c.Config.Health.EnableDetailedResponse
 	c.HealthHandler = handlers.NewHealthHandler(c.IndexerService, simpleResponse)
 
-	// Initialize the indexing message handler. Subject routing (V2 vs V1)
-	// lives in the presentation layer; the container wires it as the callback
-	// for the JetStream consumer rather than duplicating the routing inline.
+	// Wire the presentation handler as the JetStream callback. The processor
+	// validates supported subjects and performs current/audited admission.
 	c.IndexingMessageHandler = handlers.NewIndexingMessageHandler(c.MessageProcessor)
 
 	return nil
@@ -581,7 +579,7 @@ func (c *Container) SetupNATSSubscriptions(ctx context.Context) error {
 	if err := c.MessagingRepository.ConsumeWithJetStream(
 		ctx,
 		constants.StreamNameIndexEvents,
-		[]string{c.Config.NATS.IndexingSubject, c.Config.NATS.V1IndexingSubject},
+		[]string{c.Config.NATS.IndexingSubject},
 		c.IndexingMessageHandler.Handle,
 	); err != nil {
 		return fmt.Errorf("failed to start JetStream index consumer: %w", err)

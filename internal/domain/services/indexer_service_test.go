@@ -1160,42 +1160,44 @@ func TestIndexerService_ProcessTransaction_NoEventPublishedOnIndexFailure(t *tes
 	assert.Len(t, mockMessagingRepo.PublishCalls, 0)
 }
 
-func TestIndexerService_ProcessTransaction_V1ActionCanonicalizedInEvent(t *testing.T) {
-	mockStorageRepo := mocks.NewMockStorageRepository()
-	mockMessagingRepo := mocks.NewMockMessagingRepository()
-	logger, _ := logging.TestLogger(t)
-	service := NewIndexerService(mockStorageRepo, mockMessagingRepo, logger)
+func TestIndexerService_ProcessTransaction_RejectsPresentTenseActions(t *testing.T) {
+	for _, action := range []string{"create", "update", "delete"} {
+		t.Run(action, func(t *testing.T) {
+			mockStorageRepo := mocks.NewMockStorageRepository()
+			mockMessagingRepo := mocks.NewMockMessagingRepository()
+			logger, _ := logging.TestLogger(t)
+			service := NewIndexerService(mockStorageRepo, mockMessagingRepo, logger)
 
-	// V1 uses present-tense "create" instead of past-tense "created"
-	transaction := &contracts.LFXTransaction{
-		Action:     constants.ActionCreate,
-		ObjectType: "project",
-		IsV1:       true,
-		Headers:    map[string]string{"x-username": "admin", "x-email": "admin@example.com"},
-		Data: map[string]any{
-			"id":   "v1-project",
-			"name": "V1 Project",
-		},
-		IndexingConfig: &types.IndexingConfig{
-			ObjectID:             "v1-project",
-			AccessCheckObject:    "project:v1-project",
-			AccessCheckRelation:  "viewer",
-			HistoryCheckObject:   "project:v1-project",
-			HistoryCheckRelation: "viewer",
-		},
-		Timestamp: time.Now(),
-		ParsedPrincipals: []contracts.Principal{
-			{Principal: "admin", Email: "admin@example.com"},
-		},
+			transaction := &contracts.LFXTransaction{
+				Action:     constants.MessageAction(action),
+				ObjectType: "project",
+				Headers:    map[string]string{constants.AuthorizationHeader: "Bearer fixture-token"},
+				Data: map[string]any{
+					"id":   "v1-project",
+					"name": "V1 Project",
+				},
+				IndexingConfig: &types.IndexingConfig{
+					ObjectID:             "v1-project",
+					AccessCheckObject:    "project:v1-project",
+					AccessCheckRelation:  "viewer",
+					HistoryCheckObject:   "project:v1-project",
+					HistoryCheckRelation: "viewer",
+				},
+				Timestamp: time.Now(),
+				ParsedPrincipals: []contracts.Principal{
+					{Principal: "admin", Email: "admin@example.com"},
+				},
+			}
+
+			result, err := service.ProcessTransaction(context.Background(), transaction, "test-index")
+
+			assert.Error(t, err)
+			assert.False(t, result.Success)
+			assert.Empty(t, mockMessagingRepo.AuthRepo.ParsePrincipalsCalls)
+			assert.Empty(t, mockStorageRepo.IndexCalls)
+			assert.Empty(t, mockMessagingRepo.PublishCalls)
+		})
 	}
-
-	result, err := service.ProcessTransaction(context.Background(), transaction, "test-index")
-
-	assert.NoError(t, err)
-	assert.True(t, result.Success)
-	assert.Len(t, mockMessagingRepo.PublishCalls, 1)
-	// Subject must use canonical past-tense "created", not raw "create"
-	assert.Equal(t, "lfx.project.created", mockMessagingRepo.PublishCalls[0].Subject)
 }
 
 func TestDecodeTransactionData(t *testing.T) {
@@ -1237,16 +1239,6 @@ func TestDecodeTransactionData(t *testing.T) {
 			transaction: &contracts.LFXTransaction{
 				Action: constants.ActionDeleted,
 				Data:   "abcd", // 4 chars, valid base64 alphabet — triggered the bug
-			},
-			assertData: func(t *testing.T, got any) {
-				assert.Equal(t, "abcd", got)
-			},
-		},
-		{
-			name: "delete/v1 present-tense action preserved",
-			transaction: &contracts.LFXTransaction{
-				Action: constants.ActionDelete,
-				Data:   "abcd", // valid base64, length 4
 			},
 			assertData: func(t *testing.T, got any) {
 				assert.Equal(t, "abcd", got)
@@ -1386,14 +1378,12 @@ func TestIndexerService_ProcessTransaction_InvalidObjectID_Delete(t *testing.T) 
 		logger,
 	)
 
-	// Use IsV1=true (no auth headers required).
 	// For delete actions, Data must be a string — it is parsed into ParsedObjectID by
 	// parseTransactionData, ensuring the full enrichment pipeline is exercised.
 	transaction := &contracts.LFXTransaction{
 		ObjectType: "project",
-		Action:     constants.ActionDelete, // V1 uses present-tense; canonicalized to ActionDeleted internally
-		IsV1:       true,
-		Headers:    map[string]string{},
+		Action:     constants.ActionDeleted,
+		Headers:    map[string]string{constants.AuthorizationHeader: "Bearer fixture-token"},
 		Data:       "\u05cfz\ufffd\ufffd|", // corrupted binary member ID from LFXV2-1464
 		Timestamp:  time.Now(),
 	}
@@ -1444,7 +1434,7 @@ func TestIndexerService_ProcessTransaction_TemplateShapedUserText(t *testing.T) 
 		var message map[string]any
 		require.NoError(t, json.Unmarshal(payload, &message))
 
-		transaction, err := service.CreateTransactionFromMessage(message, "committee", false)
+		transaction, err := service.CreateTransactionFromMessage(message, "committee")
 		require.NoError(t, err, step.action)
 		result, err := service.ProcessTransaction(context.Background(), transaction, "resources")
 		require.NoError(t, err, step.action)

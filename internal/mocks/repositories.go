@@ -394,6 +394,7 @@ type MockMessagingRepository struct {
 
 	// JetStream state: handlers registered via ConsumeWithJetStream, keyed by stream name
 	JetStreamHandlers map[string]func(context.Context, []byte, string) error
+	JetStreamFilters  map[string][]string
 
 	// Auth delegation (embedded AuthRepository)
 	AuthRepo *MockAuthRepository
@@ -555,7 +556,7 @@ func (m *MockMessagingRepository) ParsePrincipals(ctx context.Context, headers m
 // ConsumeWithJetStream mocks starting a JetStream durable consumer.
 // It stores the handler keyed by streamName so tests can deliver messages via
 // SimulateJetStreamMessage. Set JetStreamConsumeError to simulate startup failure.
-func (m *MockMessagingRepository) ConsumeWithJetStream(_ context.Context, streamName string, _ []string, handler func(context.Context, []byte, string) error) error {
+func (m *MockMessagingRepository) ConsumeWithJetStream(_ context.Context, streamName string, filters []string, handler func(context.Context, []byte, string) error) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.JetStreamConsumeError != nil {
@@ -565,6 +566,10 @@ func (m *MockMessagingRepository) ConsumeWithJetStream(_ context.Context, stream
 		m.JetStreamHandlers = make(map[string]func(context.Context, []byte, string) error)
 	}
 	m.JetStreamHandlers[streamName] = handler
+	if m.JetStreamFilters == nil {
+		m.JetStreamFilters = make(map[string][]string)
+	}
+	m.JetStreamFilters[streamName] = append([]string(nil), filters...)
 	return nil
 }
 

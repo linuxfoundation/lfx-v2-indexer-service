@@ -23,7 +23,7 @@ import (
 )
 
 // MessageProcessor orchestrates the complete message processing workflow
-// Handles both V2 and V1 message processing use cases
+// Handles current-resource and opt-in audited messages on the platform V2 subject.
 type MessageProcessor struct {
 	// Dependencies
 	indexerService    *services.IndexerService      // Domain service for business logic
@@ -32,10 +32,9 @@ type MessageProcessor struct {
 	logger            *slog.Logger
 
 	// Configuration
-	index             string
-	queue             string
-	indexingSubject   string
-	v1IndexingSubject string
+	index           string
+	queue           string
+	indexingSubject string
 	// Audited processing is optional and installed only after production
 	// publisher policies and index access have been provisioned.
 	auditWorkflow      *AuditWorkflow
@@ -77,12 +76,11 @@ func NewMessageProcessor(
 		index:             constants.DefaultIndex,
 		queue:             constants.DefaultQueue,
 		indexingSubject:   constants.AllSubjects,
-		v1IndexingSubject: constants.AllV1Subjects,
 	}
 }
 
 // Configure applies runtime workflow settings loaded by the container.
-func (mp *MessageProcessor) Configure(index, queue, indexingSubject, v1IndexingSubject string) {
+func (mp *MessageProcessor) Configure(index, queue, indexingSubject string) {
 	if index != "" {
 		mp.index = index
 	}
@@ -91,9 +89,6 @@ func (mp *MessageProcessor) Configure(index, queue, indexingSubject, v1IndexingS
 	}
 	if indexingSubject != "" {
 		mp.indexingSubject = indexingSubject
-	}
-	if v1IndexingSubject != "" {
-		mp.v1IndexingSubject = v1IndexingSubject
 	}
 }
 
@@ -184,55 +179,6 @@ func (mp *MessageProcessor) validateAuditFencedType(raw json.RawMessage, subject
 	return nil
 }
 
-// ProcessV1IndexingMessage handles the complete V1 indexing message workflow
-func (mp *MessageProcessor) ProcessV1IndexingMessage(ctx context.Context, data []byte, subject string) error {
-	if mp.auditWorkflow != nil {
-		if objectType, ok := strings.CutPrefix(subject, constants.FromV1Prefix); ok && mp.auditRequiredTypes[objectType] {
-			return fmt.Errorf("audited resource type rejects platform V1 writes")
-		}
-	}
-	logger := logging.FromContext(ctx, mp.logger)
-	messageID := mp.generateMessageID()
-
-	logger.Debug("Processing V1 indexing message",
-		"message_id", messageID,
-		"subject", subject,
-		"message_type", "V1")
-
-	// Create V1 transaction from message data
-	transaction, err := mp.createV1Transaction(data, subject)
-	if err != nil {
-		return fmt.Errorf("%s: %w", constants.ErrCreateV1Transaction, err)
-	}
-
-	// Process the transaction (same processing path)
-	result, err := mp.indexerService.ProcessTransaction(ctx, transaction, mp.index)
-	if err != nil {
-		return fmt.Errorf("failed to process V1 transaction: %w", err)
-	}
-
-	// Trigger cleanup check for the processed object
-	if result.Success && result.DocumentID != "" {
-		mp.cleanupRepository.CheckItem(result.DocumentID)
-	} else {
-		logger.Warn("Cleanup check skipped - processing failed or no document ID",
-			"message_id", messageID,
-			"result_success", result.Success,
-			"document_id", result.DocumentID)
-	}
-
-	logger.Info("V1 indexing message processed successfully",
-		"message_id", messageID,
-		"action", transaction.Action,
-		"object_type", transaction.ObjectType,
-		"document_id", result.DocumentID,
-		"subject", subject,
-		"index_success", result.IndexSuccess,
-		"has_v1_data", transaction.V1Data != nil)
-
-	return nil
-}
-
 // =================
 // TRANSACTION CREATION METHODS (simplified using service)
 // =================
@@ -252,32 +198,9 @@ func (mp *MessageProcessor) createTransaction(data []byte, subject string) (*con
 	}
 
 	// Use service method for transaction creation
-	transaction, err := mp.indexerService.CreateTransactionFromMessage(messageData, objectType, false)
+	transaction, err := mp.indexerService.CreateTransactionFromMessage(messageData, objectType)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", constants.ErrCreateV2Transaction, err)
-	}
-
-	return transaction, nil
-}
-
-// createV1Transaction creates an LFXTransaction from V1 message data
-func (mp *MessageProcessor) createV1Transaction(data []byte, subject string) (*contracts.LFXTransaction, error) {
-	// Parse message data
-	var messageData map[string]any
-	if err := json.Unmarshal(data, &messageData); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal V1 message data: %w", err)
-	}
-
-	// Extract object type from subject (V1: lfx.v1.index.{object_type})
-	objectType, found := strings.CutPrefix(subject, constants.FromV1Prefix)
-	if !found {
-		return nil, fmt.Errorf("invalid V1 subject format: %s", subject)
-	}
-
-	// Use service method for transaction creation
-	transaction, err := mp.indexerService.CreateTransactionFromMessage(messageData, objectType, true)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", constants.ErrCreateV1Transaction, err)
 	}
 
 	return transaction, nil
@@ -308,22 +231,8 @@ func (mp *MessageProcessor) StartSubscriptions(ctx context.Context) error {
 		"subjects", mp.indexingSubject,
 		"queue", mp.queue)
 
-	// Subscribe to V1 indexing messages
-	if err := mp.subscribeTo(ctx, mp.v1IndexingSubject, "V1 indexing messages"); err != nil {
-		logger.Error("Failed to subscribe to V1 messages",
-			"subjects", mp.v1IndexingSubject,
-			"queue", mp.queue,
-			"error", err.Error())
-		return fmt.Errorf("failed to subscribe to V1 messages: %w", err)
-	}
-
-	logger.Info("V1 subscription successful",
-		"subjects", mp.v1IndexingSubject,
-		"queue", mp.queue)
-
 	logger.Info("All NATS subscriptions started successfully",
 		"v2_subjects", mp.indexingSubject,
-		"v1_subjects", mp.v1IndexingSubject,
 		"queue", mp.queue)
 
 	return nil
@@ -375,17 +284,7 @@ func (h *indexingHandler) HandleWithReply(ctx context.Context, data []byte, subj
 		ctx = logging.WithRefreshWaitFor(ctx)
 	}
 
-	// Route to appropriate processing method based on subject
-	var err error
-	var messageType string
-
-	if strings.HasPrefix(subject, constants.FromV1Prefix) {
-		messageType = "V1"
-		err = h.useCase.ProcessV1IndexingMessage(ctx, data, subject)
-	} else {
-		messageType = "V2"
-		err = h.useCase.ProcessIndexingMessage(ctx, data, subject)
-	}
+	err := h.useCase.ProcessIndexingMessage(ctx, data, subject)
 
 	// Errors are logged at the top-level NATS handler
 
@@ -401,7 +300,6 @@ func (h *indexingHandler) HandleWithReply(ctx context.Context, data []byte, subj
 				logger.Error("Failed to send error reply",
 					"message_id", messageID,
 					"subject", subject,
-					"message_type", messageType,
 					"original_error", err.Error(),
 					"reply_error", replyErr.Error())
 			}
@@ -413,7 +311,6 @@ func (h *indexingHandler) HandleWithReply(ctx context.Context, data []byte, subj
 				logger.Error("Failed to send success reply",
 					"message_id", messageID,
 					"subject", subject,
-					"message_type", messageType,
 					"reply_error", replyErr.Error())
 			}
 		}
@@ -422,7 +319,6 @@ func (h *indexingHandler) HandleWithReply(ctx context.Context, data []byte, subj
 	logger.Debug("Message handler completed",
 		"message_id", messageID,
 		"subject", subject,
-		"message_type", messageType,
 		"success", err == nil)
 
 	return err
