@@ -20,10 +20,17 @@ import (
 )
 
 // On Valkey the marker key "inv" is a counter raised with INCR and never
-// given a TTL; a missing counter reads as 0. Each entry stores the counter it
-// was computed under ("<counter>:true" or "<counter>:false") and is fresh only
-// while that equals the current counter. Results are written only while the
-// counter still equals the one they were computed under.
+// given a TTL. Each entry stores the counter it was computed under
+// ("<counter>:true" or "<counter>:false") and is fresh only while that equals
+// the current counter. Results are written only while the counter still
+// equals the one they were computed under.
+//
+// A missing counter (a new server, or one that lost its contents) starts at
+// the server time in microseconds, never at 0. A server that lost its contents
+// therefore never hands out a counter an earlier lifetime used, so a result
+// computed before the loss can neither be written nor read as fresh after it.
+// This holds while a replacement's clock, in microseconds, is ahead of the
+// lost server's start by more than the invalidations that server recorded.
 
 // valkeyStore is the Valkey backend. The client dials when it is created and
 // fails when nothing is listening, so it is created on first use instead of
@@ -126,15 +133,28 @@ func (s *valkeyStore) CurrentMarker(ctx context.Context) (contracts.Invalidation
 	if err != nil {
 		return contracts.InvalidationMarker{}, err
 	}
-	counter, err := client.Do(ctx, client.B().Get().Key(InvalidationKey).Build()).AsInt64()
-	switch {
-	case valkey.IsValkeyNil(err):
-		return contracts.NewCounterMarker(0), nil
-	case err != nil:
+	counter, err := readMarker.Exec(ctx, client, []string{InvalidationKey}, nil).AsInt64()
+	if err != nil {
 		return contracts.InvalidationMarker{}, fmt.Errorf("read invalidation marker: %w", err)
 	}
 	return contracts.NewCounterMarker(counter), nil
 }
+
+// startMarker sets a missing KEYS[1] to the server time in microseconds and
+// leaves it in v.
+const startMarker = `
+local v = redis.call('GET', KEYS[1])
+if not v then
+  local t = redis.call('TIME')
+  v = t[1] .. string.format('%06d', tonumber(t[2]))
+  redis.call('SET', KEYS[1], v)
+end
+`
+
+var (
+	readMarker  = valkey.NewLuaScript(startMarker + "return v")
+	raiseMarker = valkey.NewLuaScript(startMarker + "return redis.call('INCR', KEYS[1])")
+)
 
 func (s *valkeyStore) Get(ctx context.Context, relationKeys []string, m contracts.InvalidationMarker) (map[string]bool, error) {
 	found := make(map[string]bool, len(relationKeys))
@@ -185,11 +205,10 @@ func storedValue(m contracts.InvalidationMarker, allowed bool) string {
 }
 
 // setIfCurrent writes KEYS[2..] = ARGV[2..] with PX ARGV[#KEYS+1], only while
-// KEYS[1] (inv, missing = 0) still equals ARGV[1]. Storing under m alone is
-// not enough: a restart resets inv, and a write carrying a pre-restart counter
-// would match again once the counter climbs back to it.
+// KEYS[1] (inv) exists and still equals ARGV[1]. A missing inv means the
+// server lost its contents after m was read, so nothing is written.
 var setIfCurrent = valkey.NewLuaScript(`
-if (redis.call('GET', KEYS[1]) or '0') ~= ARGV[1] then return 0 end
+if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
 for i = 2, #KEYS do
   redis.call('SET', KEYS[i], ARGV[i], 'PX', ARGV[#KEYS + 1])
 end
@@ -225,7 +244,7 @@ func (s *valkeyStore) Invalidate(ctx context.Context) (contracts.InvalidationMar
 	if err != nil {
 		return contracts.InvalidationMarker{}, err
 	}
-	counter, err := client.Do(ctx, client.B().Incr().Key(InvalidationKey).Build()).AsInt64()
+	counter, err := raiseMarker.Exec(ctx, client, []string{InvalidationKey}, nil).AsInt64()
 	if err != nil {
 		return contracts.InvalidationMarker{}, fmt.Errorf("raise invalidation marker: %w", err)
 	}

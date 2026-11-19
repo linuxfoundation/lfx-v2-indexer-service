@@ -208,31 +208,74 @@ func relay(conn net.Conn, target string) {
 	<-done
 }
 
-func TestValkey_WriteFromBeforeARestartNeverBecomesFresh(t *testing.T) {
+func TestValkey_MissingMarkerStartsAtServerTime(t *testing.T) {
 	addr := valkeyAddr(t)
 	ctx := testContext(t)
 	s := freshValkeyStore(t, addr)
-	raw := rawValkey(t, addr)
-	incr := func() {
-		require.NoError(t, raw.Do(ctx, raw.B().Incr().Key(InvalidationKey).Build()).Error())
+
+	before := time.Now().Add(-time.Minute).UnixMicro()
+	m, err := s.CurrentMarker(ctx)
+	require.NoError(t, err)
+	after := time.Now().Add(time.Minute).UnixMicro()
+	assert.Greater(t, m.Counter(), before)
+	assert.Less(t, m.Counter(), after)
+
+	again, err := s.CurrentMarker(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, m.Counter(), again.Counter(), "reading does not move the marker")
+	raised, err := s.Invalidate(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, m.Counter()+1, raised.Counter())
+}
+
+// A check reads the marker, computes "allowed", and is delayed. Access is
+// revoked, Valkey loses its contents, and the delayed result arrives.
+func TestValkey_ResultFromBeforeLostContentsNeverBecomesFresh(t *testing.T) {
+	const relation = "obj:3#writer@user:a"
+	for _, tt := range []struct {
+		name string
+		// lose runs between the revocation and the delayed write.
+		lose func(t *testing.T, s *valkeyStore, raw valkey.Client)
+	}{
+		{"marker missing at the delayed write", func(t *testing.T, _ *valkeyStore, raw valkey.Client) {
+			require.NoError(t, raw.Do(testContext(t), raw.B().Flushdb().Build()).Error())
+		}},
+		{"marker raised past the old value before the delayed write", func(t *testing.T, s *valkeyStore, raw valkey.Client) {
+			require.NoError(t, raw.Do(testContext(t), raw.B().Flushdb().Build()).Error())
+			for range 3 {
+				_, err := s.Invalidate(testContext(t))
+				require.NoError(t, err)
+			}
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			addr := valkeyAddr(t)
+			ctx := testContext(t)
+			s := freshValkeyStore(t, addr)
+			raw := rawValkey(t, addr)
+
+			beforeCheck, err := s.CurrentMarker(ctx)
+			require.NoError(t, err)
+			revoked, err := s.Invalidate(ctx)
+			require.NoError(t, err)
+			// Many invalidations before the loss must still stay below the
+			// next lifetime's start.
+			require.NoError(t, raw.Do(ctx, raw.B().Incrby().Key(InvalidationKey).Increment(1000).Build()).Error())
+			time.Sleep(5 * time.Millisecond)
+			tt.lose(t, s, raw)
+
+			require.NoError(t, s.Set(ctx, map[string]bool{relation: true}, beforeCheck))
+			err = raw.Do(ctx, raw.B().Get().Key(CacheKey(relation)).Build()).Error()
+			assert.True(t, valkey.IsValkeyNil(err), "the delayed result is not written: %v", err)
+
+			current, err := s.CurrentMarker(ctx)
+			require.NoError(t, err)
+			assert.Greater(t, current.Counter(), revoked.Counter()+1000, "the new lifetime never repeats an old counter")
+			got, err := s.Get(ctx, []string{relation}, current)
+			require.NoError(t, err)
+			assert.Empty(t, got)
+		})
 	}
-
-	incr()
-	incr()
-	beforeRestart, err := s.CurrentMarker(ctx)
-	require.NoError(t, err)
-	require.NoError(t, raw.Do(ctx, raw.B().Flushdb().Build()).Error())
-
-	require.NoError(t, s.Set(ctx, map[string]bool{"obj:3#writer@user:a": true}, beforeRestart))
-	incr()
-	incr()
-
-	current, err := s.CurrentMarker(ctx)
-	require.NoError(t, err)
-	require.Equal(t, beforeRestart.Counter(), current.Counter(), "the counter is back at the pre-restart value")
-	got, err := s.Get(ctx, []string{"obj:3#writer@user:a"}, current)
-	require.NoError(t, err)
-	assert.Empty(t, got)
 }
 
 func TestValkeyStore_ConnectsWithURLAddress(t *testing.T) {

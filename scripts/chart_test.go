@@ -145,7 +145,7 @@ func TestCacheChartSettings(t *testing.T) {
 			[]string{"name: VALKEY_ADDR\n              value: \"valkey.example.test:6379\"", "name: VALKEY_TLS\n              value: \"true\"", "name: CACHE_TTL\n              value: \"3h\""},
 			[]string{"CACHE_BUCKET", "VALKEY_USERNAME_FILE", "VALKEY_PASSWORD_FILE", "valkey-auth"}},
 		{"valkey with auth", false, withSecret,
-			[]string{"value: \"/etc/valkey-auth/username\"", "value: \"/etc/valkey-auth/password\"", "mountPath: /etc/valkey-auth", "secretName: example-valkey"},
+			[]string{"value: \"/etc/valkey-auth/username\"", "value: \"/etc/valkey-auth/password\"", "mountPath: /etc/valkey-auth", "secretName: example-valkey\n            optional: true"},
 			nil},
 		{"valkey password only", false, append(append([]string{}, withSecret...), "cache.valkey.usernameKey="),
 			[]string{"value: \"/etc/valkey-auth/password\""},

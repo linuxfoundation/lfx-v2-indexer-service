@@ -354,7 +354,9 @@ cache:
     tls: true
     # existingSecret names a secret mounted as files for Valkey AUTH. Leave it
     # empty to connect without AUTH. Plaintext credentials are not accepted
-    # here to avoid committing secrets to VCS in GitOps workflows.
+    # here to avoid committing secrets to VCS in GitOps workflows. If the
+    # secret is missing at startup the cache stays off with a warning; restart
+    # the pods after creating it.
     existingSecret: ""
     # passwordKey is the key in existingSecret holding the password
     passwordKey: password

@@ -407,7 +407,12 @@ On Valkey, results are stored with `CACHE_TTL` and the invalidation counter
 (`inv`) never expires. Run Valkey as a single node with `noeviction` and no
 snapshots or append-only file. A result is fresh only while its stored counter
 equals `inv`, so an evicted `inv`, or a restore that rolls `inv` back, would
-make results cached before a later revocation look fresh again.
+make results cached before a later revocation look fresh again. Losing the
+contents entirely is safe: a missing `inv` starts again from the server time in
+microseconds, so it never repeats a counter used before the loss, and results
+are written only while `inv` exists. A Valkey user restricted by ACL needs
+the `@connection` commands plus `GET`, `SET`, `MGET`, `INCR`, `TIME`, `EVAL`
+and `EVALSHA`.
 
 The cache exports these OpenTelemetry counters:
 
