@@ -205,7 +205,13 @@ func (c *failSafe) Get(ctx context.Context, relationKeys []string, m contracts.I
 	if err != nil {
 		return nil, err
 	}
-	c.metrics.lookup(ctx, len(relationKeys), len(found))
+	hits := 0
+	for _, relationKey := range relationKeys {
+		if _, ok := found[relationKey]; ok {
+			hits++
+		}
+	}
+	c.metrics.lookup(ctx, len(relationKeys), hits)
 	return found, nil
 }
 

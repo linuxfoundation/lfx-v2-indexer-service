@@ -71,6 +71,17 @@ func TestMetrics_HitsAndMissesCountRelationKeys(t *testing.T) {
 	assert.Zero(t, counterValue(t, reader, "fga_cache.bypasses"))
 }
 
+func TestMetrics_RepeatedKeysCountEachLookup(t *testing.T) {
+	inner := foundStore{fakeStore: newFakeStore(), found: map[string]bool{"obj:1#viewer@user:a": true, "obj:1#viewer@user:b": false}}
+	c, reader := newMeteredFailSafe(t, inner)
+
+	_, err := c.Get(context.Background(), []string{"obj:1#viewer@user:a", "obj:1#viewer@user:a", "obj:1#viewer@user:b", "obj:1#viewer@user:c"}, contracts.InvalidationMarker{})
+	require.NoError(t, err)
+
+	assert.Equal(t, int64(3), counterValue(t, reader, "fga_cache.hits"))
+	assert.Equal(t, int64(1), counterValue(t, reader, "fga_cache.misses"))
+}
+
 func TestMetrics_StoreErrorThenBypass(t *testing.T) {
 	inner := newFakeStore()
 	c, reader := newMeteredFailSafe(t, inner)
