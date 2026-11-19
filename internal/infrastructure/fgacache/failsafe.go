@@ -160,6 +160,11 @@ func (c *failSafe) call(ctx context.Context, fn func(context.Context) error) err
 		// Saturation is not an outage; in-flight calls decide that.
 		return contracts.ErrCacheBypassed
 	}
+	// A call that held a slot may have marked the store down while this one
+	// waited.
+	if !c.ready.Load() {
+		return contracts.ErrCacheBypassed
+	}
 
 	return c.result(ctx, fn(callCtx))
 }

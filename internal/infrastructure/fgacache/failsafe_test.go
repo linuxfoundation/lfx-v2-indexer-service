@@ -263,6 +263,39 @@ func TestFailSafe_BoundsConcurrentCalls(t *testing.T) {
 	wg.Wait()
 }
 
+func TestFailSafe_QueuedCallBypassesAStoreMarkedDownWhileItWaited(t *testing.T) {
+	logger, _ := newTestLogger()
+	store := newFakeStore()
+	store.blockGet = make(chan struct{})
+	c := newFailSafe(store, 5*time.Second, time.Hour, logger)
+	defer c.Close()
+	waitReady(t, c)
+
+	var wg sync.WaitGroup
+	for range maxConcurrentOps {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = c.Get(context.Background(), []string{"k"}, contracts.InvalidationMarker{})
+		}()
+	}
+	require.Eventually(t, func() bool { return store.inFlight.Load() == maxConcurrentOps }, 2*time.Second, time.Millisecond)
+
+	queued := make(chan error, 1)
+	go func() {
+		_, err := c.Get(context.Background(), []string{"k"}, contracts.InvalidationMarker{})
+		queued <- err
+	}()
+	time.Sleep(20 * time.Millisecond)
+
+	c.markDown(errors.New("slot holder failed"))
+	close(store.blockGet)
+	wg.Wait()
+
+	assert.ErrorIs(t, <-queued, contracts.ErrCacheBypassed)
+	assert.Equal(t, int64(maxConcurrentOps), store.calls.Load(), "the queued call never reached the store")
+}
+
 func TestFailSafe_InvalidateIsAttemptedWhileDown(t *testing.T) {
 	logger, _ := newTestLogger()
 	store := newFakeStore()
