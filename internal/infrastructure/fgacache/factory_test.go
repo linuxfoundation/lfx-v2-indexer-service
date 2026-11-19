@@ -37,7 +37,7 @@ func TestNew_TurnsTheCacheOffWithoutFailing(t *testing.T) {
 			c.Timeout = 0
 			return c
 		}(), true},
-		{"valkey before it is built", cacheConfig(config.CacheBackendValkey), true},
+		{"valkey without an address", cacheConfig(config.CacheBackendValkey), true},
 	}
 
 	for _, tt := range tests {
@@ -73,4 +73,19 @@ func TestNew_NATSKV(t *testing.T) {
 		_, err := c.CurrentMarker(testContext(t))
 		return err == nil
 	}, 2*time.Second, 5*time.Millisecond)
+}
+
+func TestNew_ValkeyWithNothingListeningStillStarts(t *testing.T) {
+	cfg := cacheConfig(config.CacheBackendValkey)
+	cfg.TTL = time.Hour
+	cfg.ValkeyAddr = unusedAddr(t)
+
+	logger, buf := newTestLogger()
+	c := New(cfg, nil, logger)
+	defer c.Close()
+
+	assert.Equal(t, config.CacheBackendValkey, c.Backend)
+	_, err := c.CurrentMarker(testContext(t))
+	assert.ErrorIs(t, err, contracts.ErrCacheBypassed)
+	require.Eventually(t, func() bool { return buf.warnCount() > 0 }, 2*time.Second, 5*time.Millisecond)
 }

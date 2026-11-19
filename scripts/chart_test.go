@@ -122,3 +122,47 @@ func TestAuditChartHookSettings(t *testing.T) {
 		})
 	}
 }
+
+// TestCacheChartSettings checks that each cache backend renders only its own
+// settings and that Valkey credentials arrive as mounted files.
+func TestCacheChartSettings(t *testing.T) {
+	valkey := []string{"cache.backend=valkey", "cache.valkey.addr=valkey.example.test:6379"}
+	withSecret := append(append([]string{}, valkey...), "cache.valkey.existingSecret=example-valkey")
+	for _, tt := range []struct {
+		name    string
+		audited bool
+		values  []string
+		want    []string
+		absent  []string
+	}{
+		{"default is off", false, nil,
+			[]string{"name: CACHE_BACKEND\n              value: \"none\""},
+			[]string{"CACHE_BUCKET", "VALKEY_", "valkey-auth"}},
+		{"natskv", false, []string{"cache.backend=natskv"},
+			[]string{"name: CACHE_BUCKET\n              value: \"fga-sync-cache\""},
+			[]string{"CACHE_TTL", "VALKEY_", "valkey-auth"}},
+		{"valkey without auth", false, valkey,
+			[]string{"name: VALKEY_ADDR\n              value: \"valkey.example.test:6379\"", "name: VALKEY_TLS\n              value: \"true\"", "name: CACHE_TTL\n              value: \"3h\""},
+			[]string{"CACHE_BUCKET", "VALKEY_USERNAME_FILE", "VALKEY_PASSWORD_FILE", "valkey-auth"}},
+		{"valkey with auth", false, withSecret,
+			[]string{"value: \"/etc/valkey-auth/username\"", "value: \"/etc/valkey-auth/password\"", "mountPath: /etc/valkey-auth", "secretName: example-valkey"},
+			nil},
+		{"valkey password only", false, append(append([]string{}, withSecret...), "cache.valkey.usernameKey="),
+			[]string{"value: \"/etc/valkey-auth/password\""},
+			[]string{"VALKEY_USERNAME_FILE"}},
+		{"valkey auth alongside audit", true, append(append([]string{}, withSecret...), "nats.ackWait=160s", "nats.drainTimeout=155s", "app.terminationGracePeriodSeconds=160"),
+			[]string{"mountPath: /etc/indexer\n", "mountPath: /etc/valkey-auth", "name: audit-policy", "secretName: example-valkey"},
+			nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			output, err := renderIndexerChart(t, tt.audited, tt.values...)
+			require.NoError(t, err, "%s", output)
+			for _, want := range tt.want {
+				require.Contains(t, output, want)
+			}
+			for _, absent := range tt.absent {
+				require.NotContains(t, output, absent)
+			}
+		})
+	}
+}

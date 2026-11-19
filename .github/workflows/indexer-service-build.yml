@@ -29,6 +29,15 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 30
+      valkey:
+        image: valkey/valkey@sha256:5032c4dd7abe08d6fd9382054608183e2bf1f7e3895ef619b8784698454325f7 # 8.1.12
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
 
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
@@ -59,6 +68,7 @@ jobs:
         env:
           TEST_OPENSEARCH_URL: http://127.0.0.1:9200
           TEST_OPENSEARCH_ISOLATED: "true"
+          TEST_VALKEY_ADDR: 127.0.0.1:6379
 
       - name: Repeat audit concurrency integration tests
         run: go test -v -race -count=3 -timeout=3m -run '^TestAuditOpenSearch_Concurrent' ./internal/infrastructure/storage

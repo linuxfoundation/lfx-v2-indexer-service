@@ -381,15 +381,58 @@ LOG_FORMAT=text                              # Log format (text,json)
 JANITOR_ENABLED=true                         # Enable cleanup service (default: true)
 
 # FGA check cache (off by default; run.sh sets natskv, so set it yourself with make run)
-CACHE_BACKEND=none                           # natskv or none
-CACHE_BUCKET=fga-sync-cache                  # NATS KV bucket, shared with lfx-v2-fga-sync
+CACHE_BACKEND=none                           # natskv, valkey or none
+CACHE_BUCKET=fga-sync-cache                  # NATS KV bucket, shared with lfx-v2-fga-sync (natskv)
 CACHE_TIMEOUT=5s                             # Limit for each cache call
 CACHE_RETRY_INTERVAL=30s                     # How often a failed cache is retried
+CACHE_TTL=3h                                 # Lifetime of each cached result (valkey)
+VALKEY_ADDR=                                 # host:port, or a redis:// or rediss:// URL matching VALKEY_TLS; required for valkey
+VALKEY_TLS=true                              # Connect to Valkey over TLS
+VALKEY_USERNAME_FILE=                        # Optional file holding the ACL username
+VALKEY_PASSWORD_FILE=                        # Optional file holding the password; no AUTH when unset
 ```
 
 The cache is never required. If the store is missing or unreachable, or a cache
 setting is invalid, the indexer logs a warning (at most one per retry interval),
-answers without the cache, and keeps running.
+answers without the cache, and keeps running. Invalid settings include an
+unknown `CACHE_BACKEND`, `valkey` without `VALKEY_ADDR`, a duration or boolean
+that does not parse, a non-positive duration, and a credential file that cannot
+be read; each turns the cache off with one warning naming the setting.
+
+While the cache is unavailable, every call skips it immediately, except
+invalidations, which are always attempted because the store is shared with
+lfx-v2-fga-sync. Each call is bounded by `CACHE_TIMEOUT`.
+
+On Valkey, results are stored with `CACHE_TTL` and the invalidation counter
+(`inv`) never expires. Run Valkey as a single node with `noeviction` and no
+snapshots or append-only file. A result is fresh only while its stored counter
+equals `inv`, so an evicted `inv`, or a restore that rolls `inv` back, would
+make results cached before a later revocation look fresh again.
+
+The cache exports these OpenTelemetry counters:
+
+| Counter | Counts |
+| --- | --- |
+| `fga_cache.hits` | Relation keys answered from the cache |
+| `fga_cache.misses` | Relation keys absent or stale in the cache |
+| `fga_cache.errors` | Calls that failed in the store; the cache is then bypassed until it recovers |
+| `fga_cache.bypasses` | Calls that skipped the store because the cache was down or saturated |
+
+In the Helm chart, set `cache.backend` (default `none`) and the other `cache.*`
+values. A local Helm install that should use the cache sets
+`cache.backend: natskv`. For Valkey AUTH, put the credentials in a secret and
+name it in `cache.valkey.existingSecret`; it is mounted as files.
+
+To run the Valkey tests locally:
+
+```bash
+docker run -d --rm --name valkey-test -p 6379:6379 valkey/valkey:8
+TEST_VALKEY_ADDR=127.0.0.1:6379 go test ./internal/infrastructure/fgacache/...
+docker stop valkey-test
+```
+
+The tests flush the server's current database, so point them only at a
+disposable instance.
 
 With audit enabled and the default 30s OpenSearch timeout, configure at least
 160s ACK wait, 155s drain and 160s pod termination grace; larger legacy batching
@@ -442,7 +485,7 @@ for the formulas and first-type bootstrap sequence.
 │   │   │   ├── app_config.go     # Application configuration
 │   │   │   ├── cache_config.go   # FGA cache configuration
 │   │   │   └── cli_config.go     # CLI configuration
-│   │   ├── fgacache/             # FGA check cache backends (NATS KV, none)
+│   │   ├── fgacache/             # FGA check cache backends (NATS KV, Valkey, none)
 │   │   ├── cleanup/               # Background cleanup operations
 │   │   │   ├── cleanup_repository.go # Background cleanup repository
 │   │   │   └── cleanup_repository_test.go # Cleanup tests
