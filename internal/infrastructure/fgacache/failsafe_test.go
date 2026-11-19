@@ -45,13 +45,14 @@ func newTestLogger() (*slog.Logger, *lockedBuffer) {
 
 // fakeStore is a store whose connect and Get outcomes the test controls.
 type fakeStore struct {
-	connectErr atomic.Value // error, or nil
-	getErr     atomic.Value
-	getDelay   atomic.Int64 // nanoseconds
-	blockGet   chan struct{}
-	calls      atomic.Int64
-	inFlight   atomic.Int64
-	maxFlight  atomic.Int64
+	connectErr    atomic.Value // error, or nil
+	duringConnect atomic.Value // func(), run inside connect
+	getErr        atomic.Value
+	getDelay      atomic.Int64 // nanoseconds
+	blockGet      chan struct{}
+	calls         atomic.Int64
+	inFlight      atomic.Int64
+	maxFlight     atomic.Int64
 }
 
 func newFakeStore() *fakeStore {
@@ -70,7 +71,12 @@ func loadErr(v *atomic.Value) error {
 	return nil
 }
 
-func (f *fakeStore) connect(context.Context) error { return loadErr(&f.connectErr) }
+func (f *fakeStore) connect(context.Context) error {
+	if hook, ok := f.duringConnect.Load().(func()); ok {
+		hook()
+	}
+	return loadErr(&f.connectErr)
+}
 
 func (f *fakeStore) CurrentMarker(context.Context) (contracts.InvalidationMarker, error) {
 	f.calls.Add(1)
@@ -303,6 +309,44 @@ func TestFailSafe_InvalidateSkipsTheBudget(t *testing.T) {
 
 	close(store.blockGet)
 	wg.Wait()
+}
+
+func TestFailSafe_PendingRepairMarksDownEvenAfterCallerGaveUp(t *testing.T) {
+	logger, _ := newTestLogger()
+	c := newFailSafe(newFakeStore(), time.Second, time.Hour, logger)
+	defer c.Close()
+	waitReady(t, c)
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	assert.ErrorIs(t, c.result(canceled, errors.New("caller gave up")), contracts.ErrCacheBypassed)
+	assert.True(t, c.isReady(), "a canceled caller is not an outage")
+
+	assert.ErrorIs(t, c.result(canceled, errRepairPending), contracts.ErrCacheBypassed)
+	assert.False(t, c.isReady())
+}
+
+func TestFailSafe_ProbeDoesNotRecoverOverACallThatFailedDuringIt(t *testing.T) {
+	logger, _ := newTestLogger()
+	store := newFakeStore()
+	var c *failSafe
+	var failDuringProbe atomic.Bool
+	failDuringProbe.Store(true)
+	ready := make(chan struct{})
+	store.duringConnect.Store(func() {
+		<-ready
+		if failDuringProbe.Load() {
+			c.markDown(errRepairPending)
+		}
+	})
+	c = newFailSafe(store, time.Second, 20*time.Millisecond, logger)
+	defer c.Close()
+	close(ready)
+
+	assert.Never(t, c.isReady, 200*time.Millisecond, 5*time.Millisecond)
+	failDuringProbe.Store(false)
+	waitReady(t, c)
 }
 
 func TestNoneCache_AlwaysBypasses(t *testing.T) {

@@ -5,7 +5,9 @@ package fgacache
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -16,6 +18,11 @@ import (
 // (2 * cacheLookupConcurrency): the cache store is single-node, so every
 // replica's traffic lands on one server.
 const maxConcurrentOps = 128
+
+// errRepairPending means a possibly revoked result could not be hidden. The
+// store must stay down until its connect repairs it, even when the caller
+// that hit it had already given up.
+var errRepairPending = errors.New("a possibly revoked result could not be hidden in the cache")
 
 // store is a cache backend that the fail-safe wrapper can (re)connect.
 type store interface {
@@ -36,6 +43,11 @@ type failSafe struct {
 	sem   chan struct{}
 	ready atomic.Bool
 	down  chan struct{}
+
+	// failures counts markDown calls, so a probe does not report the store
+	// ready over a call that failed while the probe was running.
+	mu       sync.Mutex
+	failures int64
 
 	// probeCtx is canceled by Close so shutdown never waits for a probe.
 	probeCtx context.Context
@@ -95,6 +107,9 @@ func (c *failSafe) run() {
 func (c *failSafe) probe() {
 	ctx, cancel := context.WithTimeout(c.probeCtx, c.timeout)
 	defer cancel()
+	c.mu.Lock()
+	failures := c.failures
+	c.mu.Unlock()
 	if err := c.inner.connect(ctx); err != nil {
 		if c.probeCtx.Err() != nil {
 			return
@@ -104,13 +119,20 @@ func (c *failSafe) probe() {
 			"retry_in", c.retry.String())
 		return
 	}
-	if c.ready.CompareAndSwap(false, true) {
+	c.mu.Lock()
+	connected := c.failures == failures && c.ready.CompareAndSwap(false, true)
+	c.mu.Unlock()
+	if connected {
 		c.logger.Info("FGA cache connected")
 	}
 }
 
 func (c *failSafe) markDown(err error) {
-	if !c.ready.CompareAndSwap(true, false) {
+	c.mu.Lock()
+	c.failures++
+	wasReady := c.ready.Swap(false)
+	c.mu.Unlock()
+	if !wasReady {
 		return
 	}
 	c.logger.Warn("FGA cache call failed, bypassing it until it recovers",
@@ -146,7 +168,7 @@ func (c *failSafe) result(ctx context.Context, err error) error {
 	if err == nil {
 		return nil
 	}
-	if ctx.Err() == nil {
+	if ctx.Err() == nil || errors.Is(err, errRepairPending) {
 		c.markDown(err)
 	}
 	return contracts.ErrCacheBypassed

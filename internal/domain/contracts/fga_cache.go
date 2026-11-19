@@ -60,10 +60,10 @@ type FGACache interface {
 
 	// Set writes check results under the marker read before the check. If an
 	// invalidation landed since m, the results are not kept; on NATS KV a
-	// concurrent Get can still see them until they are removed when the
-	// invalidation lands while they are being written, and a failed removal
-	// is returned as an error. Callers must not pass results that carried an
-	// error.
+	// concurrent Get can still see them until they are hidden when the
+	// invalidation lands while they are being written. If they cannot be
+	// hidden the cache stays down until they are. Callers must not pass
+	// results that carried an error.
 	Set(ctx context.Context, results map[string]bool, m InvalidationMarker) error
 
 	// Invalidate records an invalidation and returns the marker of that

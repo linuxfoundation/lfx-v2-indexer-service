@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -25,10 +26,10 @@ import (
 // cut-off, and an entry created before it is stale. This needs only the
 // latest revision of each key, so it works with a bucket that keeps one.
 
-// removeTimeout bounds removing stale results after the caller's own deadline
-// has passed. Removing a possibly revoked grant is worth this extra time on a
-// path where the store is already failing.
-const removeTimeout = time.Second
+// repairTimeout bounds making stale results unreadable after the caller's own
+// deadline has passed. Hiding a possibly revoked grant is worth this extra
+// time on a path where the store is already failing.
+const repairTimeout = time.Second
 
 // natsKVStore is the NATS JetStream KV backend. It binds the bucket lazily,
 // so a missing bucket is reported as an error instead of failing startup.
@@ -38,6 +39,12 @@ type natsKVStore struct {
 
 	mu sync.RWMutex
 	kv jetstream.KeyValue
+
+	// repairsPending counts Set calls that could neither remove a possibly
+	// revoked result nor rewrite the marker. While it is non-zero Get fails
+	// and connect rewrites the marker before reporting the store healthy,
+	// because the result is also readable by lfx-v2-fga-sync.
+	repairsPending atomic.Int64
 
 	// afterWrites, when set by tests, runs between Set's writes and its
 	// second marker read.
@@ -49,7 +56,24 @@ func newNATSKVStore(js jetstream.JetStream, bucket string) *natsKVStore {
 }
 
 func (s *natsKVStore) connect(ctx context.Context) error {
-	return s.HealthCheck(ctx)
+	if pending := s.repairsPending.Load(); pending > 0 {
+		kv, err := s.bound(ctx)
+		if err != nil {
+			return errors.Join(errRepairPending, err)
+		}
+		if _, err := kv.Put(ctx, InvalidationKey, []byte("1")); err != nil {
+			return errors.Join(errRepairPending, err)
+		}
+		// A Set that failed meanwhile keeps its own repair pending.
+		s.repairsPending.CompareAndSwap(pending, 0)
+	}
+	if err := s.HealthCheck(ctx); err != nil {
+		return err
+	}
+	if s.repairsPending.Load() > 0 {
+		return errRepairPending
+	}
+	return nil
 }
 
 func (s *natsKVStore) bound(ctx context.Context) (jetstream.KeyValue, error) {
@@ -98,6 +122,9 @@ func (s *natsKVStore) CurrentMarker(ctx context.Context) (contracts.Invalidation
 }
 
 func (s *natsKVStore) Get(ctx context.Context, relationKeys []string, m contracts.InvalidationMarker) (map[string]bool, error) {
+	if s.repairsPending.Load() > 0 {
+		return nil, errRepairPending
+	}
 	kv, err := s.bound(ctx)
 	if err != nil {
 		return nil, err
@@ -126,9 +153,9 @@ func (s *natsKVStore) Get(ctx context.Context, relationKeys []string, m contract
 
 // Set does not keep results computed before an invalidation that landed after
 // m: their creation time alone would make them look fresh. It skips writing
-// when the marker has already moved, and removes what it wrote when the marker
+// when the marker has already moved, and hides what it wrote when the marker
 // moved during the writes. An invalidation landing between the first marker
-// read and the writes leaves the result readable until that removal; this is
+// read and the writes leaves the result readable until it is hidden; this is
 // stricter than lfx-v2-fga-sync, which keeps such a result until the TTL.
 func (s *natsKVStore) Set(ctx context.Context, results map[string]bool, m contracts.InvalidationMarker) error {
 	kv, err := s.bound(ctx)
@@ -143,33 +170,53 @@ func (s *natsKVStore) Set(ctx context.Context, results map[string]bool, m contra
 		return nil
 	}
 
-	written := make([]string, 0, len(results))
+	// A Put that fails can still have been stored, so a key is tracked
+	// before it is written.
+	attempted := make([]string, 0, len(results))
+	var writeErr error
 	for relationKey, allowed := range results {
 		cacheKey := CacheKey(relationKey)
-		if _, err := kv.Put(ctx, cacheKey, []byte(strconv.FormatBool(allowed))); err != nil {
-			return errors.Join(err, s.remove(ctx, kv, written))
+		attempted = append(attempted, cacheKey)
+		if _, writeErr = kv.Put(ctx, cacheKey, []byte(strconv.FormatBool(allowed))); writeErr != nil {
+			break
 		}
-		written = append(written, cacheKey)
 	}
 	if s.afterWrites != nil {
 		s.afterWrites()
 	}
-
+	if writeErr != nil {
+		// The failed Put may be stored after any marker read made now.
+		return errors.Join(writeErr, s.hide(ctx, kv, attempted))
+	}
 	current, err = s.CurrentMarker(ctx)
 	if err == nil && !current.Time().After(m.Time()) {
 		return nil
 	}
-	return errors.Join(err, s.remove(ctx, kv, written))
+	return s.hide(ctx, kv, attempted)
 }
 
-// remove deletes cacheKeys. An error is returned so the caller marks the
-// store down: a result that could not be removed may be a revoked grant.
-func (s *natsKVStore) remove(ctx context.Context, kv jetstream.KeyValue, cacheKeys []string) error {
-	if ctx.Err() != nil {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), removeTimeout)
-		defer cancel()
+// hide makes cacheKeys unreadable. It removes them, or else rewrites the
+// marker, which makes every entry stale as lfx-v2-fga-sync does after a write
+// it is unsure of. If both fail the store stays unusable until connect
+// rewrites the marker. Each step gets its own budget, since the caller's may
+// be spent.
+func (s *natsKVStore) hide(ctx context.Context, kv jetstream.KeyValue, cacheKeys []string) error {
+	removeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), repairTimeout)
+	removeErr := s.remove(removeCtx, kv, cacheKeys)
+	cancel()
+	if removeErr == nil {
+		return nil
 	}
+	markerCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), repairTimeout)
+	defer cancel()
+	if _, err := kv.Put(markerCtx, InvalidationKey, []byte("1")); err != nil {
+		s.repairsPending.Add(1)
+		return errors.Join(errRepairPending, removeErr, err)
+	}
+	return nil
+}
+
+func (s *natsKVStore) remove(ctx context.Context, kv jetstream.KeyValue, cacheKeys []string) error {
 	var errs []error
 	for _, cacheKey := range cacheKeys {
 		if err := kv.Delete(ctx, cacheKey); err != nil {

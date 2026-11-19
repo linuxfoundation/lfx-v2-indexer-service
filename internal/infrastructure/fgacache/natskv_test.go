@@ -4,6 +4,8 @@
 package fgacache
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"testing"
@@ -223,6 +225,158 @@ func TestNATSKV_SetRemovesResultsWhenInvalidatedDuringTheWrites(t *testing.T) {
 
 	_, err = kv.Get(ctx, CacheKey("obj:10#writer@user:a"))
 	assert.ErrorIs(t, err, jetstream.ErrKeyNotFound, "the written result was removed")
+}
+
+// faultKV wraps a real bucket so a test can make writes fail.
+type faultKV struct {
+	jetstream.KeyValue
+	// beforePut runs before each Put reaches the bucket.
+	beforePut func(key string)
+	// putErr, when it returns an error, is returned after the Put was stored.
+	putErr        func(key string) error
+	failDelete    bool
+	failMarkerPut atomic.Bool
+}
+
+func (f *faultKV) Put(ctx context.Context, key string, value []byte) (uint64, error) {
+	if key == InvalidationKey && f.failMarkerPut.Load() {
+		return 0, errors.New("marker write failed")
+	}
+	if f.beforePut != nil {
+		f.beforePut(key)
+	}
+	rev, err := f.KeyValue.Put(ctx, key, value)
+	if err == nil && f.putErr != nil {
+		err = f.putErr(key)
+	}
+	return rev, err
+}
+
+func (f *faultKV) Delete(ctx context.Context, key string, opts ...jetstream.KVDeleteOpt) error {
+	if f.failDelete {
+		return errors.New("delete failed")
+	}
+	return f.KeyValue.Delete(ctx, key, opts...)
+}
+
+func newFaultStore(t *testing.T) (*natsKVStore, jetstream.KeyValue, *faultKV) {
+	t.Helper()
+	js := connectJetStream(t, startJetStream(t))
+	name := newBucketName()
+	kv := createBucket(t, js, name)
+	c := newNATSKVStore(js, name)
+	require.NoError(t, c.connect(testContext(t)))
+	fault := &faultKV{KeyValue: kv}
+	c.kv = fault
+	return c, kv, fault
+}
+
+func TestNATSKV_SetHidesAWriteThatFailedAfterBeingStored(t *testing.T) {
+	ctx := testContext(t)
+	c, kv, fault := newFaultStore(t)
+	cacheKey := CacheKey("obj:11#writer@user:a")
+	fault.beforePut = func(key string) {
+		if key == cacheKey {
+			_, err := kv.Put(ctx, InvalidationKey, []byte("1"))
+			require.NoError(t, err)
+		}
+	}
+	fault.putErr = func(key string) error {
+		if key == cacheKey {
+			return context.DeadlineExceeded
+		}
+		return nil
+	}
+
+	beforeCheck, err := c.CurrentMarker(ctx)
+	require.NoError(t, err)
+	err = c.Set(ctx, map[string]bool{"obj:11#writer@user:a": true}, beforeCheck)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	_, err = kv.Get(ctx, cacheKey)
+	assert.ErrorIs(t, err, jetstream.ErrKeyNotFound, "the stored result was removed")
+}
+
+func TestNATSKV_SetRemovesAFailedWriteEvenIfTheMarkerHasNotMoved(t *testing.T) {
+	ctx := testContext(t)
+	c, kv, fault := newFaultStore(t)
+	cacheKey := CacheKey("obj:14#writer@user:a")
+	fault.putErr = func(key string) error {
+		if key == cacheKey {
+			return context.DeadlineExceeded
+		}
+		return nil
+	}
+
+	beforeCheck, err := c.CurrentMarker(ctx)
+	require.NoError(t, err)
+	err = c.Set(ctx, map[string]bool{"obj:14#writer@user:a": true}, beforeCheck)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	_, err = kv.Get(ctx, cacheKey)
+	assert.ErrorIs(t, err, jetstream.ErrKeyNotFound, "a write that may land later is removed")
+}
+
+func markerRevision(t *testing.T, kv jetstream.KeyValue) uint64 {
+	t.Helper()
+	entry, err := kv.Get(testContext(t), InvalidationKey)
+	require.NoError(t, err)
+	return entry.Revision()
+}
+
+func TestNATSKV_SetRewritesMarkerWhenRemovalFails(t *testing.T) {
+	ctx := testContext(t)
+	c, kv, fault := newFaultStore(t)
+	fault.failDelete = true
+	var invalidated uint64
+	c.afterWrites = func() {
+		rev, err := kv.Put(ctx, InvalidationKey, []byte("1"))
+		require.NoError(t, err)
+		invalidated = rev
+	}
+
+	beforeCheck, err := c.CurrentMarker(ctx)
+	require.NoError(t, err)
+	require.NoError(t, c.Set(ctx, map[string]bool{"obj:12#writer@user:a": true}, beforeCheck))
+
+	assert.Greater(t, markerRevision(t, kv), invalidated, "Set rewrote the marker")
+	current, err := c.CurrentMarker(ctx)
+	require.NoError(t, err)
+	got, err := c.Get(ctx, []string{"obj:12#writer@user:a"}, current)
+	require.NoError(t, err)
+	assert.Empty(t, got, "the rewritten marker makes the result stale")
+}
+
+func TestNATSKV_UnhiddenResultKeepsStoreUnusableUntilMarkerRewritten(t *testing.T) {
+	ctx := testContext(t)
+	c, kv, fault := newFaultStore(t)
+	fault.failDelete = true
+	var invalidated uint64
+	c.afterWrites = func() {
+		rev, err := kv.Put(ctx, InvalidationKey, []byte("1"))
+		require.NoError(t, err)
+		invalidated = rev
+		fault.failMarkerPut.Store(true)
+	}
+
+	beforeCheck, err := c.CurrentMarker(ctx)
+	require.NoError(t, err)
+	err = c.Set(ctx, map[string]bool{"obj:13#writer@user:a": true}, beforeCheck)
+	require.ErrorIs(t, err, errRepairPending)
+
+	_, err = c.Get(ctx, []string{"obj:13#writer@user:a"}, beforeCheck)
+	require.ErrorIs(t, err, errRepairPending)
+	require.ErrorIs(t, c.connect(ctx), errRepairPending)
+	assert.Equal(t, invalidated, markerRevision(t, kv))
+
+	fault.failMarkerPut.Store(false)
+	require.NoError(t, c.connect(ctx))
+	assert.Greater(t, markerRevision(t, kv), invalidated, "connect rewrote the marker")
+	current, err := c.CurrentMarker(ctx)
+	require.NoError(t, err)
+	got, err := c.Get(ctx, []string{"obj:13#writer@user:a"}, current)
+	require.NoError(t, err)
+	assert.Empty(t, got)
 }
 
 func TestNATSKV_InvalidateReturnsMarkerOfItsWrite(t *testing.T) {
