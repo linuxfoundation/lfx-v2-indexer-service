@@ -14,10 +14,12 @@ import (
 var ErrCacheBypassed = errors.New("fga cache bypassed")
 
 // InvalidationMarker is the cut-off read from the cache's invalidation key.
-// Callers treat it as opaque: it is a time on NATS KV and a counter on Valkey.
+// Callers treat it as opaque: it is a time on NATS KV and a generation and
+// counter on Valkey.
 type InvalidationMarker struct {
-	at      time.Time
-	counter int64
+	at         time.Time
+	generation string
+	counter    int64
 }
 
 // NewTimeMarker returns a marker for backends that compare store write times.
@@ -26,14 +28,19 @@ func NewTimeMarker(at time.Time) InvalidationMarker {
 }
 
 // NewCounterMarker returns a marker for backends that compare an
-// invalidation counter.
-func NewCounterMarker(counter int64) InvalidationMarker {
-	return InvalidationMarker{counter: counter}
+// invalidation counter within a generation of the store's contents.
+func NewCounterMarker(generation string, counter int64) InvalidationMarker {
+	return InvalidationMarker{generation: generation, counter: counter}
 }
 
 // Time returns the cut-off time of a time-based marker.
 func (m InvalidationMarker) Time() time.Time {
 	return m.at
+}
+
+// Generation returns the generation of a counter-based marker.
+func (m InvalidationMarker) Generation() string {
+	return m.generation
 }
 
 // Counter returns the counter value of a counter-based marker.

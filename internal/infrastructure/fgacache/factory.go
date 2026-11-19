@@ -47,8 +47,12 @@ func New(cfg config.CacheConfig, nc *natsgo.Conn, logger *slog.Logger) *Cache {
 		c := newFailSafe(newNATSKVStore(js, cfg.Bucket), cfg.Timeout, cfg.RetryInterval, logger)
 		return &Cache{FGACache: c, Backend: cfg.Backend, close: c.Close}
 	case config.CacheBackendValkey:
-		logger.Warn("FGA cache turned off: the valkey backend is not available in this version")
-		return off()
+		store := newValkeyStore(cfg)
+		c := newFailSafe(store, cfg.Timeout, cfg.RetryInterval, logger)
+		return &Cache{FGACache: c, Backend: cfg.Backend, close: func() {
+			c.Close()
+			store.close()
+		}}
 	case config.CacheBackendNone:
 		return off()
 	default:

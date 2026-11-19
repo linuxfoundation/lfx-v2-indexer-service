@@ -19,6 +19,7 @@ would reject those other equally valid overrides.
 {{- if lt (int .Values.app.terminationGracePeriodSeconds) $minGracePeriod }}
 {{- fail (printf "app.terminationGracePeriodSeconds (%d) must be at least nats.drainTimeout (%s) + 5s margin for the health server's own shutdown delay (= %ds), or the pod is SIGKILLed mid-drain before DrainWithTimeout returns" (int .Values.app.terminationGracePeriodSeconds) $drainTimeout $minGracePeriod) }}
 {{- end }}
+{{- $valkeyAuth := and (eq .Values.cache.backend "valkey") (not (empty .Values.cache.valkey.existingSecret)) }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -172,6 +173,32 @@ spec:
               value: {{ .Values.health.cacheDuration }}
             - name: HEALTH_DETAILED_RESPONSE
               value: {{ .Values.health.enableDetailedResponse | quote }}
+            - name: CACHE_BACKEND
+              value: {{ .Values.cache.backend | quote }}
+            - name: CACHE_TIMEOUT
+              value: {{ .Values.cache.timeout | quote }}
+            - name: CACHE_RETRY_INTERVAL
+              value: {{ .Values.cache.retryInterval | quote }}
+            {{- if eq .Values.cache.backend "natskv" }}
+            - name: CACHE_BUCKET
+              value: {{ .Values.cache.bucket | quote }}
+            {{- end }}
+            {{- if eq .Values.cache.backend "valkey" }}
+            - name: CACHE_TTL
+              value: {{ .Values.cache.ttl | quote }}
+            - name: VALKEY_ADDR
+              value: {{ .Values.cache.valkey.addr | quote }}
+            - name: VALKEY_TLS
+              value: {{ .Values.cache.valkey.tls | quote }}
+            {{- with .Values.cache.valkey.existingSecret }}
+            {{- if $.Values.cache.valkey.usernameKey }}
+            - name: VALKEY_USERNAME_FILE
+              value: {{ printf "/etc/valkey-auth/%s" $.Values.cache.valkey.usernameKey | quote }}
+            {{- end }}
+            - name: VALKEY_PASSWORD_FILE
+              value: {{ printf "/etc/valkey-auth/%s" (required "cache.valkey.passwordKey is required when cache.valkey.existingSecret is set" $.Values.cache.valkey.passwordKey) | quote }}
+            {{- end }}
+            {{- end }}
             {{- with .Values.app.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -235,11 +262,18 @@ spec:
               name: web
           resources:
             {{- toYaml .Values.app.resources | nindent 12 }}
-          {{- if .Values.audit.enabled }}
+          {{- if or .Values.audit.enabled $valkeyAuth }}
           volumeMounts:
+            {{- if .Values.audit.enabled }}
             - name: audit-policy
               mountPath: /etc/indexer
               readOnly: true
+            {{- end }}
+            {{- if $valkeyAuth }}
+            - name: valkey-auth
+              mountPath: /etc/valkey-auth
+              readOnly: true
+            {{- end }}
           {{- end }}
           livenessProbe:
             httpGet:
@@ -259,14 +293,22 @@ spec:
               port: web
             failureThreshold: 30
             periodSeconds: 1
-      {{- if .Values.audit.enabled }}
+      {{- if or .Values.audit.enabled $valkeyAuth }}
       volumes:
+        {{- if .Values.audit.enabled }}
         - name: audit-policy
           configMap:
             name: {{ required "audit.policyConfigMap is required when audit.enabled is true" .Values.audit.policyConfigMap }}
             items:
               - key: policy.json
                 path: audit-policy.json
+        {{- end }}
+        {{- if $valkeyAuth }}
+        - name: valkey-auth
+          secret:
+            secretName: {{ .Values.cache.valkey.existingSecret }}
+            optional: true
+        {{- end }}
       {{- end }}
       {{- with .Values.topologySpreadConstraints }}
       topologySpreadConstraints:

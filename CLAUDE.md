@@ -168,7 +168,7 @@ NATS_V1_INDEXING_SUBJECT=lfx.v1.index.>
 PORT=8080
 LOG_LEVEL=info
 JANITOR_ENABLED=true
-CACHE_BACKEND=none              # FGA check cache: natskv or none; never required to start
+CACHE_BACKEND=none              # FGA check cache: natskv, valkey or none; never required to start
 ```
 
 ## Development Guidelines

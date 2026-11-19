@@ -39,6 +39,7 @@ type failSafe struct {
 	timeout time.Duration
 	retry   time.Duration
 	logger  *slog.Logger
+	metrics *cacheMetrics
 
 	sem   chan struct{}
 	ready atomic.Bool
@@ -62,6 +63,7 @@ func newFailSafe(inner store, timeout, retry time.Duration, logger *slog.Logger)
 		timeout:  timeout,
 		retry:    retry,
 		logger:   logger,
+		metrics:  defaultMetrics(),
 		sem:      make(chan struct{}, maxConcurrentOps),
 		down:     make(chan struct{}, 1),
 		probeCtx: probeCtx,
@@ -148,6 +150,7 @@ func (c *failSafe) markDown(err error) {
 // running it.
 func (c *failSafe) call(ctx context.Context, fn func(context.Context) error) error {
 	if !c.ready.Load() {
+		c.metrics.bypass(ctx)
 		return contracts.ErrCacheBypassed
 	}
 	callCtx, cancel := context.WithTimeout(ctx, c.timeout)
@@ -158,11 +161,13 @@ func (c *failSafe) call(ctx context.Context, fn func(context.Context) error) err
 		defer func() { <-c.sem }()
 	case <-callCtx.Done():
 		// Saturation is not an outage; in-flight calls decide that.
+		c.metrics.bypass(ctx)
 		return contracts.ErrCacheBypassed
 	}
 	// A call that held a slot may have marked the store down while this one
 	// waited.
 	if !c.ready.Load() {
+		c.metrics.bypass(ctx)
 		return contracts.ErrCacheBypassed
 	}
 
@@ -173,6 +178,7 @@ func (c *failSafe) result(ctx context.Context, err error) error {
 	if err == nil {
 		return nil
 	}
+	c.metrics.storeError(ctx)
 	if ctx.Err() == nil || errors.Is(err, errRepairPending) {
 		c.markDown(err)
 	}
@@ -199,6 +205,13 @@ func (c *failSafe) Get(ctx context.Context, relationKeys []string, m contracts.I
 	if err != nil {
 		return nil, err
 	}
+	hits := 0
+	for _, relationKey := range relationKeys {
+		if _, ok := found[relationKey]; ok {
+			hits++
+		}
+	}
+	c.metrics.lookup(ctx, len(relationKeys), hits)
 	return found, nil
 }
 

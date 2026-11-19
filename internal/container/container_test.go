@@ -1056,6 +1056,7 @@ func TestContainer_FGACacheNeverBlocksStartup(t *testing.T) {
 		{"default is off", "", config.CacheBackendNone},
 		{"unknown backend turns the cache off", "bogus", config.CacheBackendNone},
 		{"natskv with no NATS server still starts", config.CacheBackendNATSKV, config.CacheBackendNATSKV},
+		{"valkey with nothing listening still starts", config.CacheBackendValkey, config.CacheBackendValkey},
 	}
 
 	for _, tt := range tests {
@@ -1066,6 +1067,7 @@ func TestContainer_FGACacheNeverBlocksStartup(t *testing.T) {
 			t.Setenv("JWT_AUDIENCES", "test-audience")
 			t.Setenv("CACHE_BACKEND", tt.backend)
 			t.Setenv("CACHE_RETRY_INTERVAL", "50ms")
+			t.Setenv("VALKEY_ADDR", "127.0.0.1:1")
 
 			c, err := NewContainer(logging.NewLogger(false), nil)
 			require.NoError(t, err)

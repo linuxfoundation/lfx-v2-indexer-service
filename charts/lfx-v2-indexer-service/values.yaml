@@ -332,6 +332,38 @@ health:
   # enableDetailedResponse enables detailed health check responses
   enableDetailedResponse: true
 
+# cache is the configuration for the FGA check cache. It is never required:
+# when the store is unreachable or a setting is invalid, the indexer logs a
+# warning and answers without the cache.
+cache:
+  # backend is natskv, valkey or none (off)
+  backend: none
+  # timeout is the limit for each cache call
+  timeout: "5s"
+  # retryInterval is how often an unavailable cache is retried
+  retryInterval: "30s"
+  # bucket is the NATS KV bucket (natskv), shared with lfx-v2-fga-sync
+  bucket: fga-sync-cache
+  # ttl is how long a Valkey entry lives (valkey)
+  ttl: "3h"
+  valkey:
+    # addr is the Valkey server as host:port, or a redis:// or rediss:// URL
+    # whose scheme matches tls; required for the valkey backend
+    addr: ""
+    # tls connects to Valkey over TLS
+    tls: true
+    # existingSecret names a secret mounted as files for Valkey AUTH. Leave it
+    # empty to connect without AUTH. Plaintext credentials are not accepted
+    # here to avoid committing secrets to VCS in GitOps workflows. If the
+    # secret is missing at startup the cache stays off with a warning; restart
+    # the pods after creating it.
+    existingSecret: ""
+    # passwordKey is the key in existingSecret holding the password
+    passwordKey: password
+    # usernameKey is the key in existingSecret holding the ACL username; set
+    # it to "" to authenticate as the default user with the password only
+    usernameKey: username
+
 # messaging is the configuration for messaging
 messaging:
   # queue is the NATS queue name
