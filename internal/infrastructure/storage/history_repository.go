@@ -91,6 +91,21 @@ func (r *HistoryRepository) CreateOrVerify(ctx context.Context, record *contract
 // verify distinguishes an identical retained mutation from identity misuse or a
 // permanent erasure fence without fetching the potentially large private audit.
 func (r *HistoryRepository) verify(ctx context.Context, id string, record *contracts.HistoryRecord) (bool, error) {
+	_, err := r.readAndVerify(ctx, id, record, false)
+	return false, err
+}
+
+// VerifyExisting uses a realtime GET so an appended event is recognized on
+// replay before any directory lookup, even before an index refresh.
+func (r *HistoryRepository) VerifyExisting(ctx context.Context, record *contracts.HistoryRecord) (bool, error) {
+	if r == nil || r.client == nil || record == nil || !types.ValidAuditPublisherName(record.Publisher) ||
+		!historyEventPattern.MatchString(record.EventID) || record.Fingerprint == "" {
+		return false, fmt.Errorf("history repository or record is not configured")
+	}
+	return r.readAndVerify(ctx, record.Publisher+":"+record.EventID, record, true)
+}
+
+func (r *HistoryRepository) readAndVerify(ctx context.Context, id string, record *contracts.HistoryRecord, allowAbsent bool) (bool, error) {
 	requestCtx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
 	res, err := (opensearchapi.GetRequest{
@@ -101,6 +116,9 @@ func (r *HistoryRepository) verify(ctx context.Context, id string, record *contr
 		return false, fmt.Errorf("verify existing history document: transport failure")
 	}
 	defer func() { _ = res.Body.Close() }()
+	if allowAbsent && res.StatusCode == http.StatusNotFound {
+		return false, verifyHistoryDocumentMiss(res.Body)
+	}
 	if res.IsError() {
 		return false, fmt.Errorf("verify existing history document: OpenSearch status %d", res.StatusCode)
 	}
@@ -125,7 +143,47 @@ func (r *HistoryRepository) verify(ctx context.Context, id string, record *contr
 		found.Source.ResourceRevision != record.ResourceRevision || found.Source.Action != record.Action {
 		return false, fmt.Errorf("history event identity reused with different content")
 	}
-	return false, nil
+	return true, nil
+}
+
+// verifyHistoryDocumentMiss distinguishes document absence from storage errors.
+// Require the Get Document API's found:false result, not a proxy/index error.
+// Storage errors stop replay checking before directory resolution; never echo
+// response values in errors.
+func verifyHistoryDocumentMiss(body io.Reader) error {
+	invalid := func() error { return fmt.Errorf("verify existing history document: invalid not-found response") }
+	payload, err := io.ReadAll(io.LimitReader(body, 8193))
+	if err != nil || len(payload) > 8192 {
+		return invalid()
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
+		return invalid()
+	}
+	seen := make(map[string]bool)
+	foundAbsent := false
+	for decoder.More() {
+		token, err := decoder.Token()
+		key, ok := token.(string)
+		if err != nil || !ok || seen[key] || key == "error" || key == "_source" {
+			return invalid()
+		}
+		seen[key] = true
+		var value json.RawMessage
+		if decoder.Decode(&value) != nil {
+			return invalid()
+		}
+		if key == "found" {
+			if !bytes.Equal(bytes.TrimSpace(value), []byte("false")) {
+				return invalid()
+			}
+			foundAbsent = true
+		}
+	}
+	if token, err := decoder.Token(); err != nil || token != json.Delim('}') || !foundAbsent || decoder.Decode(new(any)) != io.EOF {
+		return invalid()
+	}
+	return nil
 }
 
 // Erase replaces one retained record with a minimal permanent fence in the

@@ -33,7 +33,10 @@ kind: Deployment
 {{- $timeout := include "lfx-v2-indexer-service.durationMillis" (dict "name" "opensearch.timeout" "value" .Values.opensearch.timeout) | int64 }}
 {{- $batch := include "lfx-v2-indexer-service.durationMillis" (dict "name" "opensearch.batchMaxWait" "value" .Values.opensearch.batchMaxWait) | int64 }}
 {{- if or (le $timeout 0) (le $batch 0) }}{{ fail "opensearch.timeout and batchMaxWait must be positive" }}{{- end }}
-{{- $budget := max (mul 5 $timeout) (add $timeout $batch) }}
+{{- /* Six OpenSearch requests plus 3 token key fetches (5s each) and two
+users' cache get/directory/cache set (5s each): constants.AuditAttributionBudget.
+Identity-cache calls have their own 5s cap, independent of cache.timeout. */}}
+{{- $budget := max (add (mul 6 $timeout) 45000) (add $timeout $batch) }}
 {{- $minAck := add $budget 10000 }}
 {{- $minDrain := add $budget 5000 }}
 {{- $ackValue := default "0s" .Values.nats.ackWait }}

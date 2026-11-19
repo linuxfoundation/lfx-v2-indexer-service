@@ -46,9 +46,11 @@ field and array item as one level. Policy loading rejects schemas that describe
 values beyond the same runtime limit. The policy
 binds a validated service principal to a publisher namespace, resource types,
 origins and versioned snapshot schemas. A source must capture and attest both
-historical actor references. Each `user:` actor must carry its immutable profile
-snapshot or explicit unavailable-profile status; `service:` actors must not carry
-profile snapshots. The indexer cannot reconstruct historical attribution at delivery.
+historical actor references and may include JWT evidence for each role. The
+indexer verifies matching signed principal claims and stores verification flags;
+missing/invalid evidence is unverified, not rejected. Publishers must not send
+profiles, identities or flags. The indexer retains only username/email for users;
+service actors have no identity record. See the [actor contract](audit-v2-contract.md#attribution-and-authentication).
 Only admit publisher/resource combinations whose source-owned field allowlist
 has been approved. Never put tokens, raw headers or user values in this file.
 
@@ -81,6 +83,37 @@ that preparatory guard until the type is fenced and rechecked/rebootstrapped.
    backing indices. Do not roll over or retarget aliases during audited delivery;
    pause dispatch, preserve/bootstrap revision metadata, and revalidate the
    target before resuming.
+
+   For an existing history index created before the retained-identity revision,
+   pause audited dispatch and apply this **additive** mapping update using the
+   provisioning role before restarting an audit-enabled indexer with this code
+   or setting `audit.enabled=true`:
+
+   ```http
+   PUT /resource-history-v1/_mapping
+   Content-Type: application/json
+
+   {
+     "properties": {
+       "actor_ref": { "type": "keyword" },
+       "effective_actor_ref": { "type": "keyword" },
+       "actor_verified": { "type": "boolean" },
+       "effective_actor_verified": { "type": "boolean" }
+     }
+   }
+   ```
+
+   Read back `GET /resource-history-v1/_mapping` and verify all four fields as
+   well as the existing `dynamic: strict`, disabled `audit` object and full
+   `_source`. Each actor field must be indexed: an omitted `index` uses the
+   OpenSearch default `true`; explicit `index: false` is rejected at startup.
+   Do not change existing field types, delete/recreate the index or
+   overwrite existing history documents. If a target is an alias, perform and
+   verify the update on its single concrete history index; repeat per environment.
+   An existing incompatible field type or disabled indexing requires a separate
+   migration decision, not coercion or disabling strictness. The create-only Helm hook does not
+   perform this upgrade, and startup verification deliberately fails until it is
+   complete. The additive update does not populate actor fields on older records.
 2. Configure OpenSearch roles **outside this chart**. The runtime indexer needs:
    - Create and read access to `resource-history-v1`, including immutable-event
      verification on duplicate delivery; targeted erasure needs its separately
@@ -121,11 +154,17 @@ that preparatory guard until the type is fenced and rechecked/rebootstrapped.
    requires at least one required type with an approved mutation schema.
    Enable all required private-index/projection-mapping hooks and OpenSearch auth.
    Configure each timeout to cover the larger of its audited and legacy budgets:
-   - ACK wait: `max(5 × OPENSEARCH_TIMEOUT + 10s, OPENSEARCH_TIMEOUT + OPENSEARCH_BATCH_MAX_WAIT + 10s)`.
-   - Drain timeout: `max(5 × OPENSEARCH_TIMEOUT + 5s, OPENSEARCH_TIMEOUT + OPENSEARCH_BATCH_MAX_WAIT + 5s)`.
+   - ACK wait: `max(6 × OPENSEARCH_TIMEOUT + 45s, OPENSEARCH_TIMEOUT + OPENSEARCH_BATCH_MAX_WAIT) + 10s`.
+   - Drain timeout: `max(6 × OPENSEARCH_TIMEOUT + 45s, OPENSEARCH_TIMEOUT + OPENSEARCH_BATCH_MAX_WAIT) + 5s`.
+   - The attribution budget covers three 5s token key fetches and two users'
+     5s cache get, 5s directory request and 5s cache set. Each cache operation is
+     capped independently, even if `CACHE_TIMEOUT` is configured higher, so a
+     cache miss/failure cannot consume the directory fallback's time budget.
 
-   For example, a 1s OpenSearch timeout and 10s batch wait require at least 21s
-   ACK wait and 16s drain, not the smaller audited-only bounds. Set the pod
+   For example, a 1s OpenSearch timeout and 10s batch wait require at least 61s
+   ACK wait and 56s drain: the audited budget is larger here. A 60s batch wait
+   with the same 1s timeout instead makes legacy batching dominate, requiring
+   71s ACK wait and 66s drain. Set the pod
    termination grace period above drain plus shutdown headroom. The chart's
    default 45s/55s/60s timings are deliberately insufficient for the default
    audited OpenSearch request budget.
@@ -190,7 +229,8 @@ OpenSearch cluster before turning on publisher delivery.
   current state. This normal replay path also restores missing history when
   current state already exists; a guarded current no-op emits no new
   notification. No separate history-repair operator API is provided. Do not invent a fresh ID or
-  actor profile on replay.
+  actor identity on replay. Existing history is checked before any directory
+  lookup and retains the first append's identity/verification.
 - Terminal-error classification is a separate shared-consumer follow-up. The
   current consumer NAKs all handler errors up to its five-delivery limit,
   including deterministic admission, erasure-fence and identity/revision
@@ -200,7 +240,7 @@ OpenSearch cluster before turning on publisher delivery.
 - Approved audit data, including captured personal fields, has no age-based
   expiry. A targeted erasure overwrites the single publisher/event document
   with a permanent minimal fence. If this primitive is exercised, coordinate
-  source outbox copies and backups;
+  source outbox copies, identity-cache entries and backups;
   a fence in OpenSearch alone does not erase those copies. No age-based job
   purges the index or the fence. Deleted-committee history access fails closed
   when its committee FGA tuples are gone; public-resource grants never grant

@@ -3,7 +3,7 @@
 
 // Package types provides public indexer contracts and construction helpers.
 // NewMessageV2 freezes audited source data without transport credentials;
-// NewAuditActorProfile, NewAuditAttribution, and NewAuditSnapshots construct its
+// NewAuditAttribution and NewAuditSnapshots construct its
 // nested metadata. Current consumers reject audit envelope version 2; structural
 // validation is not authorization, audited-delivery enablement, or persistence.
 // Existing unversioned clients continue using IndexerMessageEnvelope directly.

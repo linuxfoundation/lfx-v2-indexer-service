@@ -660,6 +660,11 @@ func NewMockAuthRepository() *MockAuthRepository {
 }
 
 // ValidateToken mocks validating a token
+// ValidateActorToken supplies explicitly configured actor claims for tests.
+func (m *MockAuthRepository) ValidateActorToken(ctx context.Context, token string) (*contracts.Principal, error) {
+	return m.ValidateToken(ctx, token)
+}
+
 func (m *MockAuthRepository) ValidateToken(_ context.Context, token string) (*contracts.Principal, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

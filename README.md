@@ -13,8 +13,9 @@ A high-performance, indexer service for the LFX V2 platform that processes resou
 > publisher policy, private index, and guarded projection are explicitly
 > enabled. See the [audit rollout guide](docs/audit-rollout.md). Existing
 > unversioned platform V1/V2 messages retain current behavior by default.
-> The contract preserves denormalized user attribution (name, avatar URL, email,
-> and username) so historical records do not depend on the actor account still existing.
+> The indexer verifies optional actor JWT evidence and retains only username/email
+> in private history. JWTs are stripped before persistence; name/avatar belong to
+> live query-service enrichment. Coordinated read-side rollout remains required.
 
 ## 📋 Overview
 
@@ -346,10 +347,10 @@ OPENSEARCH_INDEX=resources                   # OpenSearch index name
 NATS_MAX_RECONNECTS=-1                       # Max reconnection attempts (-1 = infinite, recommended for production)
 NATS_RECONNECT_WAIT=2s                       # Wait time between reconnects
 NATS_CONNECTION_TIMEOUT=10s                  # Initial connection timeout
-NATS_DRAIN_TIMEOUT=55s                       # Legacy minimum: timeout + batch wait + 5s. Audit minimum: max(5*timeout + 5s, legacy minimum); validated at startup and chart render
+NATS_DRAIN_TIMEOUT=55s                       # Legacy minimum: timeout + batch wait + 5s. Audit: max(6*timeout + 45s, timeout + batch wait) + 5s (230s at default audit settings)
 
 # NATS Consumer/Worker Settings
-NATS_ACK_WAIT=45s                            # Chart default, not the derived code default. Unset/0 derives timeout + batch wait + 10s; audit uses max(5*timeout + 10s, legacy minimum)
+NATS_ACK_WAIT=45s                            # Chart default; unset/0 derives the minimum. Legacy: timeout + batch wait + 10s. Audit: max(6*timeout + 45s, timeout + batch wait) + 10s (235s at defaults)
 NATS_WORKER_COUNT=100                        # Concurrent message handlers per pod
 NATS_MAX_ACK_PENDING=100                     # JetStream consumer's MaxAckPending (cluster-wide, shared across replicas); size to aggregate worker capacity, e.g. NATS_WORKER_COUNT * replica count
 NATS_PENDING_MSG_LIMIT=1000000               # Max pending messages buffered per subscription
@@ -440,11 +441,15 @@ The tests flush the server's current database, so point them only at a
 disposable instance.
 
 With audit enabled and the default 30s OpenSearch timeout, configure at least
-160s ACK wait, 155s drain and 160s pod termination grace; larger legacy batching
+235s ACK wait, 230s drain and 235s pod termination grace; larger legacy batching
 budgets can raise these minimums. An unset/zero ACK wait derives its valid bound.
 Helm rejects insufficient audit timings before deployment, including the grace
 period's drain-plus-5s headroom. Chart timing guards support integer h/m/s/ms
-components (for example `2m40s` or `1500ms`). See [audit rollout](docs/audit-rollout.md)
+components (for example `3m55s` or `1500ms`). The audit budget includes six
+OpenSearch requests and 45s for publisher/actor key fetches and identity lookup/cache
+work. Identity-cache operations are capped at 5s each (or a shorter configured
+cache timeout), preserving a separate auth-service fallback window.
+See [audit rollout](docs/audit-rollout.md)
 for the formulas and first-type bootstrap sequence.
 
 ### NATS Subject Patterns & Load Balancing

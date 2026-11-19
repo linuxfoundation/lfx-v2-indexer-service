@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 )
 
 // TestAuditConfig_RequiredTypeGrammar rejects required types that no valid wire
@@ -67,10 +69,14 @@ func TestAuditConfig_JetStreamTimeoutBudget(t *testing.T) {
 	t.Setenv("OPENSEARCH_USERNAME", "fixture")
 	t.Setenv("OPENSEARCH_PASSWORD", "fixture")
 	t.Setenv("NATS_ACK_WAIT", "0s")
-	t.Setenv("NATS_DRAIN_TIMEOUT", "160s")
+	t.Setenv("NATS_DRAIN_TIMEOUT", "230s")
 	cfg, err := LoadConfig()
 	require.NoError(t, err)
-	require.Equal(t, auditMaxOpenSearchRequests*cfg.OpenSearch.Timeout+ackWaitSafetyMargin, cfg.NATS.AckWait)
+	require.Equal(t, 6*cfg.OpenSearch.Timeout+constants.AuditAttributionBudget+ackWaitSafetyMargin, cfg.NATS.AckWait)
+	require.NoError(t, cfg.validateNATS())
+	cfg.NATS.AckWait -= time.Nanosecond
+	require.ErrorContains(t, cfg.validateNATS(), "NATS ack wait")
+	cfg.NATS.AckWait += time.Nanosecond
 	require.NoError(t, cfg.validateNATS())
 	cfg.NATS.AckWait = 45 * time.Second
 	require.ErrorContains(t, cfg.validateNATS(), "NATS ack wait")
@@ -85,8 +91,8 @@ func TestAuditConfig_DrainCoversLegacyAndAuditedWork(t *testing.T) {
 		batchWait, minimum time.Duration
 	}{
 		{"legacy", false, 180 * time.Second, 215 * time.Second},
-		{"audited bound dominates", true, time.Second, 155 * time.Second},
-		{"legacy bound dominates with audit enabled", true, 180 * time.Second, 215 * time.Second},
+		{"audited bound dominates", true, time.Second, 230 * time.Second},
+		{"legacy bound dominates with audit enabled", true, 240 * time.Second, 275 * time.Second},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := baseValidConfig()

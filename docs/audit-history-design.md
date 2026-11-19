@@ -24,7 +24,7 @@ payload fingerprint and does not copy transport credentials or raw current-resou
 projection data into history; only validated audit snapshots are retained. The
 fingerprint covers the source audit metadata, current projection data/tags/config,
 resource type and action, excluding transport headers and ingestion time. The
-mapping intentionally leaves `audit` unindexed (including user profiles and
+mapping intentionally leaves `audit` unindexed (including retained identity and
 snapshots). Query-service must approve the final fields before reads are
 enabled. An explicit erasure overwrites the same document ID with only a
 permanent `publisher`/`event_id`/`erased`/`erased_at` fence. Create-only replay
@@ -116,7 +116,7 @@ durable repair source. None of these components establish an audit history start
 
 Use the [version 2 contract](audit-v2-contract.md) rather than a second envelope
 definition here. It adds explicit version/identity/time/origin, required source
-revision, actor/effective actor refs and denormalized user profiles, before/after
+revision, actor/effective actor refs and optional JWT evidence, before/after
 scope, and approved snapshots while
 leaving existing messages compatible. It requires complete deletion context.
 The previous metadata-only proposal is superseded: metadata alone records that
@@ -129,18 +129,20 @@ unknown metadata, duplicate keys, unsafe shapes, and unapproved snapshot content
 through the caller's required schema validator. Runtime identity/delegation trust
 is a separate required gate, not a property of structural validation.
 
-Attribution explicitly captures name, avatar URL, email, and username for both
-user actors. Nullable attributes and a capture-availability marker preserve known
-facts without fabricating missing data or depending on an account still existing.
-These profile snapshots are immutable event metadata, not arbitrary directory
-objects and not the outbox relay's current profile. Retention/erasure and index
-permissions must cover them, both actor copies, and all replay/repair sources.
-An avatar URL is not an archived image; the indexer must not fetch it.
+The indexer verifies optional actor evidence against the explicit signed principal
+claim (never `sub` fallback), strips credentials and retains only username/email
+for both user roles. It resolves primary email through auth-service when matched
+token evidence has none. Required uncached lookup failures are transient; cache
+failures merely bypass the cache. Service actors have no identity record.
+Name/avatar are not stored; query-service's live-enrichment rollout is separate.
+Retention/erasure and index permissions must cover both retained identity copies
+and all replay/repair sources. The indexer never fetches avatar bytes.
 
 The committee PostgreSQL migration should commit the mutation and an immutable
 outbox event in one database transaction. A relay attaches fresh service
-authentication and waits for JetStream persistence acknowledgment; no user JWTs
-or raw auth headers belong in the durable outbox/history payload. Retrying an
+authentication and waits for JetStream persistence acknowledgment. Optional actor
+JWTs may remain in the protected frozen source payload until outbox retention
+prunes it, but never in history; raw dispatch headers are never frozen. Retrying an
 outbox row preserves its event ID and source revision. An outbox in PostgreSQL
 cannot make an authoritative state write still performed in NATS KV atomic;
 coverage starts only for mutation paths actually using the transactional handoff.
@@ -160,9 +162,10 @@ never add history records to `resources`, set `latest` on them, or run the
 current-document janitor against them. Its schema is strict (`dynamic: strict`), with
 keyword event/resource/scope/auth fields and date fields for occurrence and
 ingestion times. Coordinate exact field names and mapping with query-service
-before enabling history reads. Actor references and denormalized
-profile snapshots are sensitive and require restricted index access. Approved
-audit events, including captured profiles and approved snapshots, are retained
+before enabling history reads. Top-level actor refs and verification flags are
+searchable; username/email remain inside the disabled `audit` object. Actor refs
+and retained identity are sensitive and require restricted index access. Approved
+audit events, including retained identity and approved snapshots, are retained
 indefinitely without time-based expiry; keep personal data out of general
 full-text search by default.
 
@@ -175,7 +178,10 @@ that accepts arbitrary caller-supplied fingerprints.
 OpenSearch create-only writes use a deterministic document ID derived from
 publisher namespace plus event ID. A duplicate reads back the immutable identity
 and fingerprint, rather than blindly treating HTTP 409 as success: an identity
-reused with different content is an error. The fingerprint excludes ingestion time,
+reused with different content is an error. A realtime read checks existing history
+before first-append identity resolution; replay never re-resolves the identity or
+changes its first-append flags. The fingerprint excludes actor JWTs, derived
+identity/verification and ingestion time,
 which is assigned on first successful creation and must not change on replay.
 Erasure replaces the payload in that same document slot with a permanent minimal
 fence. Create-only appends cannot overwrite the fence; a conflicting append
@@ -275,7 +281,7 @@ no event may represent a failed mutation.
   deleted-committee access fails closed when the committee's tuples are removed.
   Do not guess a project auditor grant. The project-level anchor in tests is
   illustrative, not the selected policy.
-- Approved audit records, including profiles and snapshots, have no age-based
+- Approved audit records, including retained identity and snapshots, have no age-based
   expiry. Provision a private index with restricted permissions and no automatic
   time-based delete policy. Explicit targeted erasure, when required, is an
   exception to append-only ingestion: atomically replace the retained payload

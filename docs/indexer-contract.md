@@ -24,10 +24,12 @@ helpers, and preflight validators. Runtime processing is **disabled by default**
 It is rejected before indexing/authentication side effects until explicitly
 enabled with a trusted publisher/schema policy and private history index; see
 [rollout requirements](audit-rollout.md).
-The versioned attribution contract includes immutable user name/avatar URL/email/
-username snapshots alongside actor refs, with explicit unavailability rather
-than a dependency on live account lookup. These are private history metadata,
-not additions to the current-resource document shape.
+The versioned attribution contract accepts actor refs and optional JWT evidence,
+never publisher profiles, retained identity or verification flags. The indexer
+verifies evidence, strips credentials and retains only username/email on first
+append. Name/avatar are a query-service live-enrichment responsibility. Retained
+identity is private history metadata, not current-resource document data. See
+the audit contract for coordinated read-side rollout and outstanding cleanup.
 
 `schema_version` and `audit` are reserved, lowercase discriminator fields. A
 present audit block without a version (including null), unsupported/invalid

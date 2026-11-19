@@ -23,8 +23,8 @@ type auditMappingField struct {
 	Properties map[string]auditMappingField `json:"properties"`
 }
 
-// auditFieldsMatch recursively checks required types and explicit privacy flags,
-// allowing OpenSearch's implicit object type when properties are present.
+// auditFieldsMatch recursively checks required types, indexing and privacy flags,
+// honoring OpenSearch's default indexing and implicit object types.
 func auditFieldsMatch(actual, required map[string]auditMappingField) bool {
 	for name, expected := range required {
 		field, present := actual[name]
@@ -33,8 +33,9 @@ func auditFieldsMatch(actual, required map[string]auditMappingField) bool {
 			field.Type = "object"
 		}
 		enabled := field.Enabled == nil || *field.Enabled
+		indexed := field.Index == nil || *field.Index
 		if !present || field.Type != expected.Type ||
-			(expected.Index != nil && (field.Index == nil || *field.Index != *expected.Index)) ||
+			(expected.Index != nil && indexed != *expected.Index) ||
 			(expected.Enabled != nil && enabled != *expected.Enabled) ||
 			(expected.Dynamic != "" && field.Dynamic != expected.Dynamic) || !auditFieldsMatch(field.Properties, expected.Properties) {
 			return false
@@ -60,9 +61,14 @@ func auditPrivateFields(history bool) map[string]auditMappingField {
 	for _, name := range []string{"object_type", "object_id", "action", "history_check_object", "history_check_relation"} {
 		fields[name] = auditMappingField{Type: "keyword"}
 	}
+	for _, name := range []string{"actor_ref", "effective_actor_ref"} {
+		fields[name] = auditMappingField{Type: "keyword", Index: &yes}
+	}
 	fields["resource_revision"] = auditMappingField{Type: "long"}
 	fields["occurred_at"] = auditMappingField{Type: "date"}
 	fields["ingested_at"] = auditMappingField{Type: "date"}
+	fields["actor_verified"] = auditMappingField{Type: "boolean", Index: &yes}
+	fields["effective_actor_verified"] = auditMappingField{Type: "boolean", Index: &yes}
 	fields["audit"] = auditMappingField{Type: "object", Enabled: &no}
 	fields["scope"] = auditMappingField{Type: "object", Enabled: &yes, Dynamic: "strict", Properties: map[string]auditMappingField{
 		"before": {Type: "keyword"}, "after": {Type: "keyword"},

@@ -13,10 +13,17 @@ type TokenValidator interface {
 	ValidateToken(ctx context.Context, token string) (*Principal, error)
 }
 
+// ActorTokenValidator verifies Heimdall evidence using the explicit principal
+// claim only (never a sub fallback), without logging token contents or identity.
+type ActorTokenValidator interface {
+	ValidateActorToken(ctx context.Context, token string) (*Principal, error)
+}
+
 // AuthRepository defines the contract for authentication operations
 // Handles JWT validation and principal parsing for authorization
 type AuthRepository interface {
 	TokenValidator
+	ActorTokenValidator
 
 	// ParsePrincipals parses principals from HTTP headers with delegation support
 	ParsePrincipals(ctx context.Context, headers map[string]string) ([]Principal, error)

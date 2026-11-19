@@ -9,10 +9,14 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/infrastructure/config"
 )
 
 // renderIndexerChart exercises real Helm rather than reproducing template math.
@@ -53,16 +57,18 @@ func TestAuditChartTiming(t *testing.T) {
 		wantError string
 	}{
 		{"defaults need audit timings", nil, "audit.enabled requires nats.ackWait"},
-		{"drain also required", []string{"nats.ackWait=160s"}, "audit.enabled requires nats.drainTimeout"},
-		{"exact audited bounds", []string{"nats.ackWait=160s", "nats.drainTimeout=155s", "app.terminationGracePeriodSeconds=160"}, ""},
-		{"compound durations", []string{"nats.ackWait=2m40s", "nats.drainTimeout=2m35s", "app.terminationGracePeriodSeconds=160"}, ""},
-		{"automatic ack", []string{"nats.ackWait=0s", "nats.drainTimeout=155s", "app.terminationGracePeriodSeconds=160"}, ""},
-		{"empty automatic ack", []string{"nats.ackWait=", "nats.drainTimeout=155s", "app.terminationGracePeriodSeconds=160"}, ""},
-		{"legacy bound dominates", []string{"opensearch.timeout=1s", "opensearch.batchMaxWait=10s", "nats.ackWait=21s", "nats.drainTimeout=16s", "app.terminationGracePeriodSeconds=21"}, ""},
-		{"legacy ack under budget", []string{"opensearch.timeout=1s", "opensearch.batchMaxWait=10s", "nats.ackWait=20s", "nats.drainTimeout=16s", "app.terminationGracePeriodSeconds=21"}, "nats.ackWait >= 21000ms"},
-		{"legacy drain under budget", []string{"opensearch.timeout=1s", "opensearch.batchMaxWait=10s", "nats.ackWait=21s", "nats.drainTimeout=15s", "app.terminationGracePeriodSeconds=21"}, "nats.drainTimeout >= 16000ms"},
-		{"millisecond bounds", []string{"opensearch.timeout=1500ms", "opensearch.batchMaxWait=500ms", "nats.ackWait=17500ms", "nats.drainTimeout=12500ms", "app.terminationGracePeriodSeconds=18"}, ""},
-		{"grace rounds up", []string{"opensearch.timeout=1500ms", "opensearch.batchMaxWait=500ms", "nats.ackWait=17500ms", "nats.drainTimeout=12500ms", "app.terminationGracePeriodSeconds=17"}, "terminationGracePeriodSeconds"},
+		{"drain also required", []string{"nats.ackWait=235s"}, "audit.enabled requires nats.drainTimeout"},
+		{"exact audited bounds", []string{"nats.ackWait=235s", "nats.drainTimeout=230s", "app.terminationGracePeriodSeconds=235"}, ""},
+		{"old five-request bound", []string{"nats.ackWait=160s", "nats.drainTimeout=155s", "app.terminationGracePeriodSeconds=160"}, "nats.ackWait >= 235000ms"},
+		{"six requests without attribution", []string{"nats.ackWait=190s", "nats.drainTimeout=185s", "app.terminationGracePeriodSeconds=190"}, "nats.ackWait >= 235000ms"},
+		{"compound durations", []string{"nats.ackWait=3m55s", "nats.drainTimeout=3m50s", "app.terminationGracePeriodSeconds=235"}, ""},
+		{"automatic ack", []string{"nats.ackWait=0s", "nats.drainTimeout=230s", "app.terminationGracePeriodSeconds=235"}, ""},
+		{"empty automatic ack", []string{"nats.ackWait=", "nats.drainTimeout=230s", "app.terminationGracePeriodSeconds=235"}, ""},
+		{"legacy bound dominates", []string{"opensearch.timeout=1s", "opensearch.batchMaxWait=60s", "nats.ackWait=71s", "nats.drainTimeout=66s", "app.terminationGracePeriodSeconds=71"}, ""},
+		{"legacy ack under budget", []string{"opensearch.timeout=1s", "opensearch.batchMaxWait=60s", "nats.ackWait=70s", "nats.drainTimeout=66s", "app.terminationGracePeriodSeconds=71"}, "nats.ackWait >= 71000ms"},
+		{"legacy drain under budget", []string{"opensearch.timeout=1s", "opensearch.batchMaxWait=60s", "nats.ackWait=71s", "nats.drainTimeout=65s", "app.terminationGracePeriodSeconds=71"}, "nats.drainTimeout >= 66000ms"},
+		{"millisecond bounds", []string{"opensearch.timeout=1500ms", "opensearch.batchMaxWait=500ms", "nats.ackWait=64000ms", "nats.drainTimeout=59000ms", "app.terminationGracePeriodSeconds=64"}, ""},
+		{"grace rounds up", []string{"opensearch.timeout=1501ms", "opensearch.batchMaxWait=500ms", "nats.ackWait=64006ms", "nats.drainTimeout=59006ms", "app.terminationGracePeriodSeconds=64"}, "terminationGracePeriodSeconds"},
 		{"negative ack", []string{"nats.ackWait=-1s"}, "nats.ackWait must use integer"},
 		{"duration overflow", []string{"nats.ackWait=99999999h"}, "exceeds Go's duration range"},
 	} {
@@ -87,7 +93,7 @@ func TestAuditChartTiming(t *testing.T) {
 // TestAuditChartHookSettings checks shared Job settings and decoded private-index
 // bodies, without changing the pure JSON fixtures consumed by storage tests.
 func TestAuditChartHookSettings(t *testing.T) {
-	output, err := renderIndexerChart(t, true, "nats.ackWait=160s", "nats.drainTimeout=155s", "app.terminationGracePeriodSeconds=160",
+	output, err := renderIndexerChart(t, true, "nats.ackWait=235s", "nats.drainTimeout=230s", "app.terminationGracePeriodSeconds=235",
 		"opensearch.indexingJob.enabled=true", "opensearch.indexingJob.restartPolicy=Never", "opensearch.indexingJob.numberOfShards=3", "opensearch.indexingJob.numberOfReplicas=0")
 	require.NoError(t, err, "%s", output)
 	for _, file := range []string{"job.yaml", "history-index-job.yaml", "audit-deliveries-job.yaml", "audit-projection-mapping-job.yaml"} {
@@ -150,7 +156,7 @@ func TestCacheChartSettings(t *testing.T) {
 		{"valkey password only", false, append(append([]string{}, withSecret...), "cache.valkey.usernameKey="),
 			[]string{"value: \"/etc/valkey-auth/password\""},
 			[]string{"VALKEY_USERNAME_FILE"}},
-		{"valkey auth alongside audit", true, append(append([]string{}, withSecret...), "nats.ackWait=160s", "nats.drainTimeout=155s", "app.terminationGracePeriodSeconds=160"),
+		{"valkey auth alongside audit", true, append(append([]string{}, withSecret...), "nats.ackWait=235s", "nats.drainTimeout=230s", "app.terminationGracePeriodSeconds=235"),
 			[]string{"mountPath: /etc/indexer\n", "mountPath: /etc/valkey-auth", "name: audit-policy", "secretName: example-valkey"},
 			nil},
 	} {
@@ -164,5 +170,82 @@ func TestCacheChartSettings(t *testing.T) {
 				require.NotContains(t, output, absent)
 			}
 		})
+	}
+}
+
+func TestAuditChartTiming_RuntimeParity(t *testing.T) {
+	for _, tt := range []struct{ timeout, batch string }{
+		{"30s", "200ms"}, {"1501ms", "500ms"}, {"1s", "60s"},
+	} {
+		t.Run(tt.timeout+"/"+tt.batch, func(t *testing.T) {
+			t.Setenv("AUDIT_ENABLED", "true")
+			t.Setenv("NATS_ACK_WAIT", "0s")
+			t.Setenv("OPENSEARCH_TIMEOUT", tt.timeout)
+			t.Setenv("OPENSEARCH_BATCH_MAX_WAIT", tt.batch)
+			cfg, err := config.LoadConfig()
+			require.NoError(t, err)
+			// ACK safety is 10s; drain safety is 5s. Kubernetes adds 5s
+			// after draining, rounding its grace period up to whole seconds.
+			drain := cfg.NATS.AckWait - 5*time.Second
+			grace := (cfg.NATS.AckWait + time.Second - 1) / time.Second
+			values := []string{"opensearch.timeout=" + tt.timeout, "opensearch.batchMaxWait=" + tt.batch,
+				"nats.ackWait=" + cfg.NATS.AckWait.String(), "nats.drainTimeout=" + drain.String(),
+				"app.terminationGracePeriodSeconds=" + strconv.FormatInt(int64(grace), 10)}
+			// Use integer milliseconds: Go's Duration.String can print fractional
+			// seconds, whereas chart timing inputs use integer components.
+			values[2] = "nats.ackWait=" + strconv.FormatInt(cfg.NATS.AckWait.Milliseconds(), 10) + "ms"
+			values[3] = "nats.drainTimeout=" + strconv.FormatInt(drain.Milliseconds(), 10) + "ms"
+			output, err := renderIndexerChart(t, true, values...)
+			require.NoError(t, err, "%s", output)
+			output, err = renderIndexerChart(t, true, append(values, "nats.ackWait="+strconv.FormatInt(cfg.NATS.AckWait.Milliseconds()-1, 10)+"ms")...)
+			require.Error(t, err)
+			require.Contains(t, output, "nats.ackWait >=")
+			output, err = renderIndexerChart(t, true, append(values, "nats.drainTimeout="+strconv.FormatInt(drain.Milliseconds()-1, 10)+"ms")...)
+			require.Error(t, err)
+			require.Contains(t, output, "nats.drainTimeout >=")
+		})
+	}
+}
+
+// TestAuditRunbookTimingExample validates the actual documented example even
+// when Helm is unavailable, rather than maintaining another detached fixture.
+func TestAuditRunbookTimingExample(t *testing.T) {
+	document, err := os.ReadFile("../docs/audit-rollout.md")
+	require.NoError(t, err)
+	match := regexp.MustCompile(`For example, a ([0-9]+)s OpenSearch timeout and ([0-9]+)s batch wait require at least ([0-9]+)s\s+ACK wait and ([0-9]+)s drain`).FindStringSubmatch(string(document))
+	require.Len(t, match, 5)
+	t.Setenv("AUDIT_ENABLED", "true")
+	t.Setenv("NATS_ACK_WAIT", "0s")
+	t.Setenv("OPENSEARCH_TIMEOUT", match[1]+"s")
+	t.Setenv("OPENSEARCH_BATCH_MAX_WAIT", match[2]+"s")
+	cfg, err := config.LoadConfig()
+	require.NoError(t, err)
+	ack, err := time.ParseDuration(match[3] + "s")
+	require.NoError(t, err)
+	drain, err := time.ParseDuration(match[4] + "s")
+	require.NoError(t, err)
+	require.Equal(t, cfg.NATS.AckWait, ack)
+	require.Equal(t, cfg.NATS.AckWait-5*time.Second, drain)
+}
+
+func TestAuditRunbookAttributionMapping(t *testing.T) {
+	document, err := os.ReadFile("../docs/audit-rollout.md")
+	require.NoError(t, err)
+	match := regexp.MustCompile("(?s)```http\\s+PUT /resource-history-v1/_mapping\\s+Content-Type: application/json\\s+(.*?)\\s+```").FindStringSubmatch(string(document))
+	require.Len(t, match, 2)
+	var update map[string]map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal([]byte(match[1]), &update))
+	require.Len(t, update, 1, "mapping update must not change dynamic, _source or other settings")
+	require.Len(t, update["properties"], 4)
+	fixture, err := os.ReadFile("../charts/lfx-v2-indexer-service/files/opensearch-resource-history-v1.json")
+	require.NoError(t, err)
+	var provisioned struct {
+		Mappings struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+		} `json:"mappings"`
+	}
+	require.NoError(t, json.Unmarshal(fixture, &provisioned))
+	for _, field := range []string{"actor_ref", "effective_actor_ref", "actor_verified", "effective_actor_verified"} {
+		require.JSONEq(t, string(provisioned.Mappings.Properties[field]), string(update["properties"][field]), field)
 	}
 }

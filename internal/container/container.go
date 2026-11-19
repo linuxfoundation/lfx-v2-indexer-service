@@ -27,6 +27,7 @@ import (
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/infrastructure/cleanup"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/infrastructure/config"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/infrastructure/fgacache"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/infrastructure/identity"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/infrastructure/messaging"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/infrastructure/storage"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/presentation/handlers"
@@ -407,6 +408,23 @@ func (c *Container) initializeApplication() error {
 		if err != nil {
 			return fmt.Errorf("initialize audited processing: %w", err)
 		}
+		directory, err := identity.NewDirectory(c.NATSConnection, constants.AuditIdentityLookupTimeout)
+		if err != nil {
+			return fmt.Errorf("initialize audited identity: %w", err)
+		}
+		var identityCache contracts.IdentityCache
+		if c.FGACache != nil {
+			identityCache = c.FGACache
+		}
+		identities, err := services.NewAuditIdentityResolver(directory, identityCache)
+		if err != nil {
+			return err
+		}
+		attribution, err := services.NewAuditAttributionService(c.AuthRepository, identities, c.Logger)
+		if err != nil {
+			return err
+		}
+		workflow.SetAttributionService(attribution)
 		if err := c.MessageProcessor.SetAuditWorkflow(workflow, c.Config.Audit.RequiredTypes); err != nil {
 			return err
 		}

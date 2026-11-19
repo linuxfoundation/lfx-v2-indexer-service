@@ -189,8 +189,9 @@ heimdall:
 # approved immutable schema and the private OpenSearch index are ready.
 audit:
   # With the default 30s OpenSearch timeout, enabling audit requires at least
-  # nats.ackWait=160s (or 0s for automatic derivation), drainTimeout=155s,
-  # and app.terminationGracePeriodSeconds=160. Larger legacy batch budgets
+  # nats.ackWait=235s (or 0s for automatic derivation), drainTimeout=230s,
+  # and app.terminationGracePeriodSeconds=235. This covers six OpenSearch
+  # calls and 45s for actor verification and identity I/O. Larger legacy budgets
   # raise those bounds; Helm and Go both enforce max(audited, legacy).
   enabled: false
   requiredTypes: []

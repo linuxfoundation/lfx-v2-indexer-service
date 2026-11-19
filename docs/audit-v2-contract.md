@@ -3,6 +3,17 @@
 
 # Version 2 audit envelope contract
 
+> **Attribution revision in progress:** the verification, retained-identity and cleanup requirements
+> below specify the coordinated change tracked in
+> [ops #1527](https://github.com/linuxfoundation/lfx-self-serve-ops/issues/1527).
+> Public input types, ingestion verification, credential stripping, first-append
+> identity resolution, replay checks and searchable history actor fields are
+> implemented in the indexer. Query-service live enrichment and the coordinated
+> legacy/current-document cleanup remain outstanding. Audited production
+> publishing remains disabled; do not adopt this revision with old readers.
+> This revision replaces publisher-supplied profile snapshots; update publishers,
+> indexer and history-query readers together before adoption.
+
 This is the owner specification for `schema_version: 2` in
 `types.IndexerMessageEnvelope`. The public types and preflight validators are
 implemented in `pkg/types/audit.go`; public construction helpers live in
@@ -10,7 +21,7 @@ implemented in `pkg/types/audit.go`; public construction helpers live in
 before authentication, OpenSearch writes, cleanup, and post-index publication**.
 Audited ingestion is opt-in and requires a reviewed, closed publisher/schema
 policy and the separate private history index; no production publisher policy
-is bundled. The history-query endpoint remains separate work. See the
+is bundled. The history-query endpoint is owned by query-service. See the
 [rollout guide](audit-rollout.md).
 
 Do not enable publisher outbox delivery based on the public types alone.
@@ -23,8 +34,11 @@ they are not held indefinitely until a future consumer can process them.
   Existing messages on those subjects are unversioned, current-resource messages.
 - **Envelope version 2** explicitly sets `schema_version: 2` and supplies `audit`.
   Its guarantees are additional to the existing platform protocol.
-- Platform V1 traffic remains on `lfx.v1.index.<object_type>` with present-tense
-  actions. It must not carry the new envelope discriminator or audit block.
+- The current implementation also accepts platform V1 traffic with present-tense
+  actions. The coordinated #1527 implementation removes that subscription and
+  processing path; platform V2 subject naming and envelope versioning remain
+  independent. The compatibility table below describes the current code, not
+  the post-removal target.
 
 The legacy/current contract is [indexer-contract.md](indexer-contract.md).
 The opt-in storage/recovery implementation and remaining rollout gates are
@@ -50,17 +64,34 @@ The fields are additive. Legacy Go publishers leave `SchemaVersion` at zero and
 `Audit` nil; `omitempty` preserves their wire format. Explicit JSON zero/null is
 not omission. There is deliberately no explicit envelope version 1 alias.
 
+**Pre-adoption schema-v2 correction (ops #1527):** the contract owner confirmed
+that the superseded profile-bearing representation has no compatibility-dependent
+consumers or frozen outboxes, and explicitly approved retaining version 2 as a
+one-time exception to the usual envelope-versioning rule. Ref-only version-2
+events remain supported. Publisher profiles, including null profiles, are now
+rejected by both wire decoding and `RestoreMessageV2`; they are not silently
+converted into trusted identity. Regenerate obsolete development fixtures from
+trusted source data under this contract rather than stripping fields from frozen
+events. If an unexpected old outbox or consumer is discovered, stop adoption and
+agree on a versioned compatibility plan before dispatch. This exception is not
+permission to make future incompatible changes to an adopted version.
+
 ## Envelope and source identity
 
 ### Public Go construction library
 
 Publishers use `types.NewMessageV2` with `MessageV2Options` and the approved
-`AuditContentValidator` to construct and freeze a complete event. Nested helpers
-`NewAuditActorProfile`, `NewAuditAttribution`, and `NewAuditSnapshots` construct
-the closed profile/attribution/content structures without live lookups. Simple
-source metadata and scope use the public `AuditEvent` and `AuditScope` types.
-Full construction/restore applies the same strict decoding, limits, and contract
+`AuditContentValidator` to construct and freeze a complete event. Simple source
+metadata and scope use the public `AuditEvent` and `AuditScope` types.
+Construction/restore applies the same strict decoding, limits, and contract
 semantics as preflight; mutation schema approval is never defaulted.
+
+`NewAuditAttribution` accepts refs and optional JWT evidence, never
+publisher-supplied identity. The old profile builder/type have been removed.
+`AuditActorIdentity` contains only nullable username/email; stored attribution
+uses `actor_identity` and `effective_actor_identity` alongside verification flags.
+`NewAuditSnapshots` still constructs approved
+resource content; it is unrelated to actor identity.
 
 The immutable `MessageV2` JSON contains no transport headers (`headers: null`).
 Persist it and its resource type with the source mutation. `RestoreMessageV2`
@@ -69,7 +100,10 @@ schema. `MessageV2.Envelope` creates an independent envelope with fresh service
 authorization for dispatch; the public `ValidateV2`/`DecodeV2Envelope` still
 require authorization. Neither a builder nor structural preflight authenticates
 or authorizes a publisher. Constructors never allocate event identity/time/
-revision, refresh profiles, publish, or enable consumer admission.
+revision, verify actor JWTs, resolve identity, publish, or enable consumer
+admission. After the coordinated update, frozen attribution may include actor
+JWTs without weakening the prohibition on transport headers. Builders validate
+structure only; the consumer verifies evidence when it ingests the event.
 
 See the [Go client guide](client-guide.md#go-client-example) and
 [compile-tested, offline-by-default example](../examples/audit-v2/main.go).
@@ -89,7 +123,7 @@ inside the audit block.
 | `occurred_at` | Required nonzero RFC3339 source occurrence time, independent of ingestion time |
 | `resource_revision` | JSON integer from 1 through 9223372036854775807; monotonic for the resource |
 | `origin` | `mutation`, `reindex`, `backfill`, or `sync_echo` |
-| `attribution` | Required initiating/effective refs and denormalized user profile snapshots |
+| `attribution` | Required initiating/effective refs and optional JWT evidence; verification and retained identity are indexer-owned output |
 | `scope` | Required before/after ownership references according to the action |
 | `content` | Approved before/after snapshots for mutations; absent for projection-only origins |
 
@@ -127,99 +161,136 @@ Duplicate-key and depth checks still apply inside those opaque objects.
 
 `attribution.actor_ref` identifies the initiating actor;
 `attribution.effective_actor_ref` identifies the effective/on-behalf-of actor.
-They are equal without delegation. Each is a stable `user:<opaque-id>` or
-`service:<opaque-id>` correlation reference, not an instruction to look up a live
-account. A background system mutation explicitly identifies a service actor;
-missing authentication must never be converted into a system identity. The
-fresh relay/publisher credential is not the original initiating user.
+They are equal without delegation. Use `user:<principal>`, where the ID is
+exactly the Heimdall `principal` claim, or `service:<client name>`, whose signed
+principal is `<client name>@clients`. Do not substitute an email or Auth0 subject
+for the principal. A background mutation explicitly identifies a service actor;
+missing authentication must never be converted into a system identity. The fresh
+relay credential is not the original initiating user's credential.
 
-### Denormalized user attribution
+### Publisher input and indexer-owned output
 
-For every `user:` actor, include a required `actor_profile` or
-`effective_actor_profile`, respectively. These preserve the requested **name,
-avatar URL, email, and username** independently of whether that account still
-exists. Retain the refs alongside the snapshots; username/email changes must
-not rebind a stable user ref to a different person. Both profiles must match
-when the refs match; capture once and reuse the result without a second lookup.
-Delegated operations capture the initiating and effective users separately.
+Publishers send the two refs and optional `actor_jwt` and `effective_actor_jwt`
+strings. An envelope supplying `actor_verified`, `effective_actor_verified`,
+`actor_profile` or `effective_actor_profile` is invalid, even if a flag is false
+or a profile is null. Strict wire decoding must distinguish explicit false from
+omission. Publishers cannot assert verification or retained identity.
 
-Each profile is a closed object with all five keys present:
+Only the indexer sets verification booleans and retained user identities. Stored
+attribution includes the refs, booleans, and, for users, an identity with **only
+nullable `username` and `email`**. Service actors have no identity record.
+Neither JWTs nor name/avatar snapshots belong in stored attribution.
 
-| Profile field | Meaning / validation |
+### Verification at ingestion
+
+Use the existing JWT validator, including issuer, audience, signature and
+`JWT_CLOCK_SKEW` checks. Never treat unverified decoded claims as evidence.
+
+| Flag | Rule |
 | --- | --- |
-| `availability` | `captured` if at least one attribute was captured; `unavailable` if none could be captured |
-| `name` | Display name as observed at the source operation; string up to 1024 UTF-8 bytes, or null |
-| `avatar_url` | Stable, credential-free absolute HTTPS avatar URL up to 2048 bytes, or null; no userinfo, query, or fragment |
-| `email` | Bare email mailbox (`addr-spec`) up to 320 bytes, or null; no name-addr wrappers; valid quoted local parts are preserved |
-| `username` | Username as observed at the source operation, up to 256 UTF-8 bytes, or null |
+| `actor_verified` | True only when `actor_jwt` validates and its `principal` matches the actor ref under the user/service rules above |
+| `effective_actor_verified`, different refs | True only when `effective_actor_jwt` validates, its `principal` matches the effective actor ref, and the authenticated dispatch principal is a machine user |
+| `effective_actor_verified`, equal refs | Exactly `actor_verified`; reuse the initiating actor's verification result |
 
-Unavailable attributes are **explicit nulls**, not omitted fields, empty strings,
-or instructions to enrich later. Non-null values must be nonempty valid UTF-8
-without control characters. A `captured` profile may be partial; an `unavailable`
-profile must have all four attributes null. A transient lookup failure or an
-already absent user must not force a publisher to fabricate personal data or
-drop a committed mutation: record the available verified attributes, or the
-explicit unavailable profile. Never synthesize a username from an opaque ref.
-Service actors omit/null the human profile instead of inventing a human email
-or username. All other profile keys, including arbitrary directory/profile maps,
-phone/address fields, headers, and credentials, are rejected.
+A missing, expired, badly signed, or non-matching token sets false and logs a
+WARN; it **never rejects the event**. Warn using fixed reasons and actor roles,
+not tokens, decoded claims, raw validator errors, or user identity. Actor evidence
+does not authorize the publisher, origin, subject, schema, or history read.
 
-The trusted publisher captures these values from verified request/directory/cache
-context when it commits the source operation and immutable outbox event. They
-are the values recorded then, not a claim that a cache was a fresh directory
-read. Capture before deleting relevant user/context data where possible. Do not
-require that the actor account still exists when delivering or reading history.
-Do not refresh profiles from the directory, from the relay's service identity,
-or from the latest resource on retry/replay/read. Repeating an event ID with a
-renamed/re-enriched profile changes immutable content and is a conflict, not a
-permitted refresh. A history UI should display the recorded snapshot, including
-explicit unavailability, rather than silently replace it with current details.
-Render the strings as text, not trusted HTML. Retained outbox/history records
-must not depend on a live-user foreign key or cascade away solely because an
-account disappears; approved privacy-erasure workflows are a separate policy.
+Dispatch `headers.authorization` is the publisher's own machine credential and
+identifies it for the trusted-publisher policy. Audited messages do not use
+`x-on-behalf-of`; delegation evidence comes from explicit attribution.
 
-Avatar URLs preserve the observed **URL string**, not immutable image bytes;
-the remote image may later change or disappear. The indexer/validators do not
-fetch URLs. If a provider only supplies a signed/tokenized/query-bearing URL,
-capture an approved stable query-free equivalent or null; do not strip arbitrary
-parameters or persist credentials. Durable avatar image archival would require
-a separately designed storage/retention path and is not included here.
+Validate tokens and strip them before fingerprint construction, history append,
+delivery receipts, logs and post-indexing publication. The indexer must never
+persist a JWT. Frozen outbox payloads may retain the actor JWTs (not dispatch
+headers) until retired rows are pruned at the outbox retention limit. Publishers
+must expect delayed work beyond `JWT_CLOCK_SKEW` to be unverified; clock skew is
+not a token refresh or durable verification guarantee. Expired evidence must not
+cause a committed event to be dropped.
 
-These four personal attributes are explicitly part of the audit attribution
-contract for historical request accountability; this is not approval to persist
-an arbitrary user profile. They must not be copied into ordinary current-resource
-documents, general logs, metrics, tracing, or public/anonymous history responses.
-Profile data is not an authorization grant. Future storage/read implementations
-   must restrict it to history-authorized callers, retain approved audit data
-   indefinitely without age-based expiry, define targeted erasure/export obligations,
-   and avoid general full-text indexing of these fields
-by default. Approved resource snapshots remain a separate schema allowlist.
-Controlled erasure is an exception to ordinary append-only ingestion: it must
-cover both actor copies and applicable snapshots/outbox/repair stores, coordinate
-backup retention, and fence replay so erased profiles cannot be resurrected.
-Routine account disappearance is not a dependency failure for historical reads;
-retention/erasure decisions are governed by the approved policy, not live lookup.
-`availability` describes source capture, not later redaction. Future stored/read
-representations must distinguish policy-redacted data from source-unavailable
-data instead of rewriting that historical capture claim.
+### Retained identity at first append
+
+Set a user's `username` to the principal ID in its ref. Take `email` from the
+matched, validated actor token's email claim. Without valid matching evidence
+or an email claim, resolve email by principal through auth-service:
+
+- Subject: `lfx.auth-service.user_emails.read`.
+- Request: `{"user":{"auth_token":"<principal>"}}`. Despite the field name,
+  the owner supports principal/username input, not only tokens.
+- Success: `{"success":true,"data":{"primary_email":"user-1@example.com"}}`.
+  Retain the primary email, not alternate emails.
+- Not found: `{"success":false,"error":"user not found"}`; retain null email.
+
+The owner contract is `lfx-v2-auth-service/docs/subjects/user_emails.md`; the
+implementation is `lfx-v2-auth-service/internal/service/message_handler.go`.
+`user_metadata.read` supplies display metadata, not email.
+
+Cache results in the backend selected for the FGA cache under backend-safe
+`identity.` keys: 10-minute TTL for found users, 1 minute for not found. Backend
+selection comes from ops #1526; identity operations are implemented by #1527.
+Cache failures are misses, not deletion. NATS KV enforces identity expiry on read
+inside the shared bucket's retention window; Valkey also applies a per-key TTL.
+Identity-cache reads/writes are each bounded by 5 seconds (or a shorter cache or
+delivery deadline), independently of the 5-second auth-service lookup bound.
+Do not negative-cache timeouts, no-responders, malformed replies, or other errors.
+
+A timeout/no-responder during a required uncached lookup is transient:
+compatibility replies return `ERROR: transient: ...`, and durable delivery
+retries the whole envelope. A valid matching token with email, or an available
+cached result, avoids that dependency. A valid token with no email still needs
+fallback resolution. Never use the publisher's or a mismatched token's email.
+
+Resolve identity only for the first append. Replaying an already-appended event
+verifies its immutable fingerprint without re-resolving identity. Equal actor
+refs reuse one result. Concurrent first deliveries may resolve independently,
+but create-only storage retains the winning append's identity, verification
+flags and ingestion timestamp.
+
+Username/email are the retained data-governance record even after account rename
+or deletion. Do not copy them into current-resource documents, general logs,
+metrics, tracing or anonymous responses. This is not permission to store an
+arbitrary directory profile. Keep existing history authorization, indefinite
+retention, targeted erasure/export and replay fences. Erasure covers both actor
+copies, applicable snapshots, outbox/repair stores and backups; routine account
+disappearance must not cascade-delete audit history.
+
+### Live history presentation (query-service)
+
+The API keeps the profile shape `availability`, `name`, `avatar_url`, `email`,
+`username`. Email and username come only from the retained event. Resolve current
+name/avatar at read time using `lfx.auth-service.user_metadata.read` with the raw
+principal as the body; success fields `data.name` and `data.picture` provide the
+display values. Do not store these in history, receipts or post-indexing events,
+and do not fetch remote avatar image bytes.
+
+| `availability` | Meaning | Name/avatar |
+| --- | --- | --- |
+| `available` | Live lookup succeeded | Current values, nullable if not supplied |
+| `deleted` | Explicit user-not-found response | Both null |
+| `unavailable` | Lookup failed, timed out, or had no responder | Both null |
+
+All three statuses retain the stored email/username. Lookup failure never fails
+the history request. Pass both verification flags through unchanged. Resolve at
+most once per distinct actor per page across both roles, with an in-process
+cache: 10 minutes found, 1 minute not found. Do not cache failures as deletion.
+Enrich authorized events only; no extra per-user gate is added beyond existing
+history authorization. Render display strings as text, not trusted HTML.
 
 Opaque IDs are 1–256 printable non-space ASCII characters, excluding `:`, `#`,
 `@`, `{`, and `}`. Resource types use `[a-z][a-z0-9_]{0,63}`; scope/authorization
 references use `<type>:<id>`;
 relations use `[a-z][a-z0-9_]{0,63}`. These syntax checks do not prove authority.
 
-The outbox stores approved event data, **not user JWTs or raw headers**. At
-dispatch, the relay attaches fresh service authentication in the existing
+The outbox stores approved event data and optional actor evidence, **not raw
+transport headers or dispatch credentials**. At dispatch, the relay attaches
+fresh service authentication in the existing
 lowercase `headers.authorization` field. The indexer must bind that authenticated
 producer to its publisher namespace, allowed resource subjects, origin choices,
 and authority to attest actors/scope. A `publisher` string is not authentication.
-Delegation and the binding between each ref and its captured profile must be
-authorized/attested separately, not inferred from arbitrary client metadata.
-
-Legacy header-derived principal extraction is unchanged. The new attribution is
-not derived from an expired original request token and is never a read grant.
-The runtime trust/binding implementation is an enablement prerequisite, not
-something the public structural validators implement.
+Actor verification follows the rules above; references and retained identity
+are never read grants. Structural preflight does not validate JWTs or resolve
+identity. Runtime trust/binding remains an enablement prerequisite.
 
 ## Scope, deletion, and current-resource data
 
@@ -253,8 +324,14 @@ No project-level example grants access by itself. Missing metadata fails closed;
 Top-level `data` still shapes the current search projection. It is not implicitly
 an approved history snapshot. When included in an outbox payload, it must be the
 publisher's sanitized indexer representation, not a raw database row containing
-credentials. Ordinary search document fields and query behavior are unchanged
-by this contract-only release.
+credentials. This revision changes audit ingestion, public types, history
+mappings and deployment timing requirements. Current-resource attribution fields
+remain unchanged until the separate coordinated cleanup removes all nine
+fields (`created_by`, `created_by_principals`, `created_by_emails`, and the
+corresponding `updated_by*` and `deleted_by*` fields) from the mapping template,
+`TransactionBody`, and both projection paths. Existing index mappings may retain
+unused fields; no migration is required to populate or repurpose them.
+`ParsePrincipals` must no longer run to populate current-document attribution.
 
 ## Approved content schemas
 
@@ -283,6 +360,11 @@ version and coordinated retention/privacy review.
 scope, config, and an authorized producer. They must not be used by untrusted
 request fields to suppress auditing of a real mutation. Source revision remains
 the authoritative resource revision, not a newly invented business change.
+Computed values, rollups and third-party-shadowed data that must not create a
+history revision use `origin: reindex` with `resource_revision` copied unchanged
+from the authoritative resource. Do not increment it or manufacture a mutation
+to refresh the projection. A real authoritative business change remains a
+mutation even when a system initiates it.
 Projection operations use **`audit.event_id`**, namespaced by **`audit.publisher`**,
 just as mutations do: `(audit.publisher, audit.event_id)` is the delivery and
 deduplication key for every origin. Assign a distinct stable ID to each logical
@@ -310,13 +392,21 @@ not echoes merely because a system initiated them.
 An enabled mutation path must create/verify history first, then safely apply
 current state, and ACK only after required durable processing succeeds. History
 is separate from `resources`, with no current-resource janitor or public bypass.
-No history mapping or new current-document top-level fields are introduced here.
+The coordinated history mapping adds top-level `actor_ref` and
+`effective_actor_ref` keyword fields and `actor_verified` and
+`effective_actor_verified` boolean fields, populated at append time. All four
+fields must remain indexed (omitted `index` defaults to true; explicit false
+fails startup mapping validation). The private
+`audit` object stays `enabled: false` and must contain no JWT. These history-only
+fields do not add current-resource attribution fields.
 
 Use `(publisher, event_id)` as collision-free history identity. Compare immutable
 semantic content: action, subject resource type, projection data/tags/config,
-and all audit metadata/content, including both profile snapshots and their
-availability. Exclude transport authentication/tracing headers
-and indexer-assigned ingestion timestamps. Normalize object member order and
+and source audit metadata/content, including both actor refs. Exclude actor JWTs,
+indexer-derived verification flags and retained identities, transport
+authentication/tracing headers, and indexer-assigned ingestion timestamps.
+Refreshed actor evidence must produce the same fingerprint and must not rewrite
+the first append's attribution. Normalize object member order and
 timestamp instants, preserve exact numbers and meaningful array order. A retry
 must not change `ingested_at`, which is established on first successful append.
 
@@ -343,6 +433,41 @@ deleted current resource; its explicit policy is a rollout prerequisite.
 
 ## Rollout, coexistence, and rollback
 
+### Coordinated implementation of this revision
+
+The cache backend from
+[ops #1526](https://github.com/linuxfoundation/lfx-self-serve-ops/issues/1526)
+has merged. Indexer-side attribution is implemented; the query-service
+changes, coordinated cleanup and end-to-end rollout validation below are still
+needed before #1527 can be completed.
+
+Before enabling the revised contract:
+
+- Update public types, strict wire preflight, builders and type comments together;
+  reject publisher-supplied output fields, including false/null values.
+- Add actor verification, credential stripping, first-append identity resolution
+  and replay-without-resolution tests. Verify that refreshed evidence leaves
+  fingerprints unchanged and that JWTs/name/avatar values do not escape into
+  persisted attribution, receipts, general logs or post-indexing events.
+- Update `opensearch-resource-history-v1.json` and mapping validation for the
+  four searchable history attribution fields. Keep `audit` disabled for indexing.
+- Update query-service's Goa design, generated code and
+  `docs/audit-history-query.md` for retained identity, live display fields,
+  availability and verification flags. Test lookup deduplication and failures.
+- Remove the platform V1 subscription, configuration, header handling and
+  transaction path, plus the raw legacy-record payload field. Update the generic
+  contract, publisher compatibility inventory, README and Helm chart accordingly.
+  Remove the V1 stream subject/consumer filter in ArgoCD and the obsolete fields
+  from mockdata's duplicated reset mapping. This is not removal of unrelated
+  resource-service synchronization with legacy systems.
+- Remove current-document attribution fields as described above; do not replace
+  them with history identities or verification fields in the current index.
+- Run `make lint` and `make test` in each touched Go repository and validate
+  chart/deployment/reset changes before rollout. Keep audited adoption disabled
+  until these changes and the existing policy/provisioning gates are complete.
+
+### Existing audited-ingestion rollout gates
+
 1. Deploy these public types and fail-closed discriminator guards first. Keep
    audited publishers disabled; old messages continue their current behavior.
 2. Implement history storage/recovery, trusted publisher admission, approved
@@ -362,9 +487,8 @@ deleted current resource; its explicit policy is a rollout prerequisite.
    before restoring a consumer that ignores the new discriminator. Do not rely
    on the indexer's bounded retry window as long-term holding storage.
 
-Complete audited processing remains
-[indexer work](https://github.com/linuxfoundation/lfx-self-serve/issues/4616), with
-[publisher adoption](https://github.com/linuxfoundation/lfx-self-serve/issues/4615),
-[authorization policy](https://github.com/linuxfoundation/lfx-self-serve/issues/4617),
-and [history queries](https://github.com/linuxfoundation/lfx-self-serve/issues/4618)
-owned separately. Contract publication is not an audit history start date.
+The [history-query implementation](https://github.com/linuxfoundation/lfx-self-serve/issues/4618)
+still needs the read-side attribution revision. Resource
+[publisher adoption](https://github.com/linuxfoundation/lfx-self-serve/issues/4615)
+and [authorization policy](https://github.com/linuxfoundation/lfx-self-serve/issues/4617)
+remain separately owned. Contract publication is not an audit history start date.

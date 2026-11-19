@@ -37,7 +37,6 @@ func fixtureAuditEnvelope(action constants.MessageAction) *IndexerMessageEnvelop
 			OccurredAt: time.Date(2026, 10, 29, 16, 0, 0, 0, time.UTC),
 			Attribution: AuditAttribution{
 				ActorRef: "user:testuser01", EffectiveActorRef: "user:testuser01",
-				ActorProfile: fixtureAuditProfile(), EffectiveActorProfile: fixtureAuditProfile(),
 			},
 			Scope: AuditScope{Before: []string{"project:fixture-project"}, After: []string{"project:fixture-project"}},
 			Content: &AuditContent{
@@ -57,18 +56,6 @@ func fixtureAuditEnvelope(action constants.MessageAction) *IndexerMessageEnvelop
 	}
 	return e
 }
-
-func fixtureAuditProfile() *AuditActorProfile {
-	return &AuditActorProfile{
-		Availability: AuditProfileCaptured,
-		Name:         auditFixtureString("Test User 1"),
-		AvatarURL:    auditFixtureString("https://example.com/avatar.png"),
-		Email:        auditFixtureString("user-1@example.com"),
-		Username:     auditFixtureString("testuser01"),
-	}
-}
-
-func auditFixtureString(value string) *string { return &value }
 
 // This allowlist is a test-only schema, not approval of any resource's audit fields.
 func fixtureAuditValidator(publisher, objectType string, content AuditContent) error {

@@ -12,6 +12,10 @@
       "ingested_at": { "type": "date" },
       "history_check_object": { "type": "keyword" },
       "history_check_relation": { "type": "keyword" },
+      "actor_ref": { "type": "keyword" },
+      "effective_actor_ref": { "type": "keyword" },
+      "actor_verified": { "type": "boolean" },
+      "effective_actor_verified": { "type": "boolean" },
       "scope": {
         "dynamic": "strict",
         "properties": {

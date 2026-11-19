@@ -6,11 +6,14 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log/slog"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
@@ -35,6 +38,91 @@ func TestMessageProcessor_RequiredTypeGrammar(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAuditWorkflow_AttributionReplayAndCredentialStripping(t *testing.T) {
+	w, history, current, notifier := workflowFixture(t)
+	auth := &mocks.MockAuditTokenValidator{}
+	auth.On("ValidateActorToken", mock.Anything, "expired-private-evidence").Return(nil, fmt.Errorf("expired-private-evidence")).Once()
+	auth.On("ValidateActorToken", mock.Anything, "refreshed-private-evidence").Return(&contracts.Principal{Principal: "testuser01", Email: "changed@example.com"}, nil).Once()
+	directory := &mocks.MockIdentityDirectory{}
+	email := "user-1@example.com"
+	directory.On("LookupIdentity", mock.Anything, "testuser01").Return(contracts.IdentityLookup{Found: true, Email: &email}, nil).Once()
+	identities, err := services.NewAuditIdentityResolver(directory, nil)
+	require.NoError(t, err)
+	attribution, err := services.NewAuditAttributionService(auth, identities, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	require.NoError(t, err)
+	w.SetAttributionService(attribution)
+
+	var envelope types.IndexerMessageEnvelope
+	require.NoError(t, json.Unmarshal(workflowEnvelope(constants.ActionUpdated, "identity-replay", 42), &envelope))
+	envelope.Audit.Attribution = types.AuditAttribution{ActorRef: "user:testuser01", EffectiveActorRef: "user:testuser01", ActorJWT: "expired-private-evidence"}
+	envelope.Headers[constants.OnBehalfOfHeader] = "ignored-private-delegation"
+	payload, err := json.Marshal(envelope)
+	require.NoError(t, err)
+	current.Failure = true
+	require.ErrorContains(t, w.Process(context.Background(), payload, constants.IndexPrefix+"fixture_resource"), "current unavailable")
+	first := history.LastRecord
+	require.NotNil(t, first)
+	require.False(t, first.ActorVerified)
+	require.False(t, first.EffectiveActorVerified)
+	require.Equal(t, email, *first.Audit.Attribution.ActorIdentity.Email)
+	require.Equal(t, "testuser01", *first.Audit.Attribution.ActorIdentity.Username)
+	require.Equal(t, first.Audit.Attribution.ActorIdentity, first.Audit.Attribution.EffectiveActorIdentity)
+
+	current.Failure = false
+	envelope.Audit.Attribution.ActorJWT = "refreshed-private-evidence"
+	payload, err = json.Marshal(envelope)
+	require.NoError(t, err)
+	require.NoError(t, w.Process(context.Background(), payload, constants.IndexPrefix+"fixture_resource"))
+	require.Same(t, first, history.LastRecord, "replay must not rebuild first-append attribution")
+	require.Len(t, history.Records, 1)
+	require.Equal(t, 1, notifier.Events)
+	stored, err := json.Marshal(first)
+	require.NoError(t, err)
+	receipts, err := json.Marshal(w.receipts.(*mocks.MockAuditReceipts).Identities)
+	require.NoError(t, err)
+	for _, value := range []string{"expired-private-evidence", "refreshed-private-evidence", "ignored-private-delegation", "Bearer fixture-credential", "actor_jwt", "actor_profile", "avatar_url"} {
+		require.NotContains(t, string(stored), value)
+		require.NotContains(t, string(receipts), value)
+		require.NotContains(t, string(notifier.Last), value)
+	}
+	require.NotContains(t, string(notifier.Last), email)
+	auth.AssertExpectations(t)
+	directory.AssertExpectations(t)
+}
+
+func TestAuditWorkflow_IdentityOutageRetriesWholeEnvelope(t *testing.T) {
+	w, history, current, _ := workflowFixture(t)
+	directory := &mocks.MockIdentityDirectory{}
+	directory.On("LookupIdentity", mock.Anything, "testuser01").Return(contracts.IdentityLookup{}, fmt.Errorf("private-directory-response")).Once()
+	directory.On("LookupIdentity", mock.Anything, "testuser01").Return(contracts.IdentityLookup{Found: false}, nil).Once()
+	identities, err := services.NewAuditIdentityResolver(directory, nil)
+	require.NoError(t, err)
+	attribution, err := services.NewAuditAttributionService(&mocks.MockAuditTokenValidator{}, identities, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	require.NoError(t, err)
+	w.SetAttributionService(attribution)
+	var envelope types.IndexerMessageEnvelope
+	require.NoError(t, json.Unmarshal(workflowEnvelope(constants.ActionUpdated, "identity-outage", 42), &envelope))
+	envelope.Audit.Attribution = types.AuditAttribution{ActorRef: "user:testuser01", EffectiveActorRef: "user:testuser01"}
+	payload, err := json.Marshal(envelope)
+	require.NoError(t, err)
+	mp := &MessageProcessor{logger: slog.New(slog.NewJSONHandler(io.Discard, nil))}
+	require.NoError(t, mp.SetAuditWorkflow(w, []string{"fixture_resource"}))
+	var reply string
+	err = (&indexingHandler{useCase: mp}).HandleWithReply(context.Background(), payload, constants.IndexPrefix+"fixture_resource", func(body []byte) error {
+		reply = string(body)
+		return nil
+	})
+	require.EqualError(t, err, "transient: identity lookup unavailable")
+	require.Equal(t, "ERROR: transient: identity lookup unavailable", reply)
+	require.Empty(t, history.Records)
+	require.Zero(t, current.Writes)
+	require.NoError(t, w.Process(context.Background(), payload, constants.IndexPrefix+"fixture_resource"))
+	require.Len(t, history.Records, 1)
+	require.Equal(t, 1, current.Writes)
+	require.Nil(t, history.LastRecord.Audit.Attribution.ActorIdentity.Email)
+	directory.AssertExpectations(t)
 }
 
 // TestAuditWorkflow_MetadataOnlyMutationDoesNotNotify checks identity-only updates
@@ -103,6 +191,11 @@ func workflowFixture(t *testing.T) (*AuditWorkflow, *mocks.MockAuditHistoryRepos
 	receipts := &mocks.MockAuditReceipts{}
 	w, err := NewAuditWorkflow(a, h, receipts, c, n, &mocks.MockAuditCleanup{})
 	require.NoError(t, err)
+	identities, err := services.NewAuditIdentityResolver(&mocks.MockIdentityDirectory{}, nil)
+	require.NoError(t, err)
+	attribution, err := services.NewAuditAttributionService(auth, identities, slog.Default())
+	require.NoError(t, err)
+	w.SetAttributionService(attribution)
 	return w, h, c, n
 }
 

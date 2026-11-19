@@ -89,6 +89,41 @@ func setupAuditIntegration(t *testing.T) (*opensearch.Client, string) {
 	return client, currentIndex
 }
 
+func auditIntegrationEnvelope(eventID string, revision uint64, action constants.MessageAction, now time.Time) *types.IndexerMessageEnvelope {
+	e := &types.IndexerMessageEnvelope{
+		SchemaVersion: types.AuditSchemaVersion, Action: action, Data: map[string]any{"uid": "fixture-resource"},
+		IndexingConfig: &types.IndexingConfig{ObjectID: "fixture-resource", AccessCheckObject: "fixture_resource:fixture-resource", AccessCheckRelation: "viewer", HistoryCheckObject: "project:fixture-project", HistoryCheckRelation: "auditor"},
+		Audit: &types.AuditEvent{EventID: eventID, Publisher: "test-publisher", Origin: types.AuditOriginMutation, ResourceRevision: revision, OccurredAt: now,
+			Attribution: types.AuditAttribution{ActorRef: "service:fixture", EffectiveActorRef: "service:fixture"},
+			Scope:       types.AuditScope{Before: []string{"project:fixture-project"}, After: []string{"project:fixture-project"}},
+			Content: &types.AuditContent{Schema: "fixture.audit.v1", Representation: types.AuditRepresentationSnapshots,
+				Before: json.RawMessage(`{"name":"Before"}`), After: json.RawMessage(`{"name":"After"}`)},
+		},
+	}
+	if action == constants.ActionCreated {
+		e.Audit.Scope.Before, e.Audit.Content.Before = nil, nil
+	}
+	if action == constants.ActionDeleted {
+		e.Data = "fixture-resource"
+		e.Audit.Scope.After, e.Audit.Content.After = nil, nil
+	}
+	return e
+}
+
+// TestAuditIntegrationEnvelope_Preflight runs even without OpenSearch so storage
+// integration fixtures cannot silently drift from the public audit contract.
+func TestAuditIntegrationEnvelope_Preflight(t *testing.T) {
+	for _, action := range []constants.MessageAction{constants.ActionCreated, constants.ActionUpdated, constants.ActionDeleted} {
+		t.Run(string(action), func(t *testing.T) {
+			envelope := auditIntegrationEnvelope("fixture-event", 1, action, time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC))
+			record, err := contracts.NewHistoryRecord(envelope, "fixture_resource", func(string, string, types.AuditContent) error { return nil }, time.Now())
+			require.NoError(t, err)
+			require.Equal(t, action, record.Action)
+			require.NotEmpty(t, record.Fingerprint)
+		})
+	}
+}
+
 // TestAuditOpenSearch_RevisionAndHistoryIntegration checks retained identity,
 // ordering, erasure and opaque document IDs against the actual OpenSearch APIs.
 func TestAuditOpenSearch_RevisionAndHistoryIntegration(t *testing.T) {
@@ -98,16 +133,7 @@ func TestAuditOpenSearch_RevisionAndHistoryIntegration(t *testing.T) {
 	receipts := NewAuditDeliveryReceiptRepository(client, 10*time.Second)
 	now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
 	fixture := func(eventID string, revision uint64, action constants.MessageAction) *types.IndexerMessageEnvelope {
-		e := &types.IndexerMessageEnvelope{
-			Action: action, Data: map[string]any{"uid": "fixture-resource"},
-			IndexingConfig: &types.IndexingConfig{ObjectID: "fixture-resource", AccessCheckObject: "fixture_resource:fixture-resource", AccessCheckRelation: "viewer", HistoryCheckObject: "project:fixture-project", HistoryCheckRelation: "auditor"},
-			Audit: &types.AuditEvent{EventID: eventID, Publisher: "test-publisher", Origin: types.AuditOriginMutation, ResourceRevision: revision, OccurredAt: now,
-				Attribution: types.AuditAttribution{ActorRef: "service:fixture", EffectiveActorRef: "service:fixture"}},
-		}
-		if action == constants.ActionDeleted {
-			e.Data = "fixture-resource"
-		}
-		return e
+		return auditIntegrationEnvelope(eventID, revision, action, now)
 	}
 	apply := func(t *testing.T, e *types.IndexerMessageEnvelope, wantApplied bool) {
 		t.Helper()
@@ -123,7 +149,9 @@ func TestAuditOpenSearch_RevisionAndHistoryIntegration(t *testing.T) {
 	}
 
 	created := fixture("created-1", 1, constants.ActionCreated)
-	record := &contracts.HistoryRecord{Publisher: "test-publisher", EventID: "created-1", ObjectType: "fixture_resource", ObjectID: "fixture-resource", Action: constants.ActionCreated, ResourceRevision: 1, OccurredAt: now, IngestedAt: now, Fingerprint: strings.Repeat("a", 64), Audit: *created.Audit}
+	record, err := contracts.NewHistoryRecord(created, "fixture_resource", func(string, string, types.AuditContent) error { return nil }, now)
+	require.NoError(t, err)
+	record.Fingerprint = strings.Repeat("a", 64)
 	createdHistory, err := history.CreateOrVerify(context.Background(), record)
 	require.NoError(t, err)
 	require.True(t, createdHistory)

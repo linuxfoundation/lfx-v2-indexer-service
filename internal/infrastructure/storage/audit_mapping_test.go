@@ -33,9 +33,11 @@ func TestVerifyAuditMappings(t *testing.T) {
 		badHistorySource, badDeliverySource, badCurrentSource bool
 		currentAlias, multipleCurrentIndices                  bool
 		revisionDocValues                                     *bool
+		actorIndex                                            *bool
 		wantError                                             string
 	}{
 		{name: "valid"},
+		{name: "actor indexing explicitly enabled", actorIndex: &yes},
 		{name: "revision doc values explicitly enabled", revisionDocValues: &yes},
 		{name: "revision doc values disabled", revisionDocValues: &no, wantError: "doc values must be enabled"},
 		{name: "single backing index alias", currentAlias: true},
@@ -65,6 +67,12 @@ func TestVerifyAuditMappings(t *testing.T) {
 					}
 					if tt.badHistorySource {
 						mapping.(map[string]any)["mappings"].(map[string]any)["_source"] = map[string]any{"enabled": false}
+					}
+					if tt.actorIndex != nil {
+						fields := mapping.(map[string]any)["mappings"].(map[string]any)["properties"].(map[string]any)
+						for _, name := range []string{"actor_ref", "effective_actor_ref", "actor_verified", "effective_actor_verified"} {
+							fields[name].(map[string]any)["index"] = *tt.actorIndex
+						}
 					}
 					response = map[string]any{"resource-history-v1": mapping}
 				case "/resources/_mapping":
@@ -142,6 +150,9 @@ func TestVerifyAuditMappings_RequiredPrivateFields(t *testing.T) {
 	for _, field := range []string{"scope.before", "scope.after"} {
 		cases = append(cases, testCase{historyIndex, field, "missing"}, testCase{historyIndex, field, "type"})
 	}
+	for _, field := range []string{"actor_ref", "effective_actor_ref", "actor_verified", "effective_actor_verified"} {
+		cases = append(cases, testCase{historyIndex, field, "unindexed"}, testCase{historyIndex, field, "unindexed without doc values"})
+	}
 	cases = append(cases, testCase{historyIndex, "scope", "dynamic"}, testCase{historyIndex, "scope", "disabled"}, testCase{historyIndex, "audit", "enabled"}, testCase{historyIndex, "audit", "missing enabled"})
 	for _, tt := range cases {
 		t.Run(tt.index+"/"+tt.field+"/"+tt.change, func(t *testing.T) {
@@ -166,6 +177,10 @@ func TestVerifyAuditMappings_RequiredPrivateFields(t *testing.T) {
 						field["index"] = true
 					case "missing index":
 						delete(field, "index")
+					case "unindexed":
+						field["index"] = false
+					case "unindexed without doc values":
+						field["index"], field["doc_values"] = false, false
 					case "dynamic":
 						field["dynamic"] = "true"
 					case "enabled":
@@ -182,6 +197,28 @@ func TestVerifyAuditMappings_RequiredPrivateFields(t *testing.T) {
 			client, err := opensearch.NewClient(opensearch.Config{Addresses: []string{server.URL}})
 			require.NoError(t, err)
 			require.ErrorContains(t, VerifyAuditMappings(context.Background(), client, "resources", time.Second), "not strict and unindexed")
+		})
+	}
+}
+
+func TestAuditFieldsMatch_IndexDefaults(t *testing.T) {
+	yes, no := true, false
+	for _, tt := range []struct {
+		name             string
+		actual, required *bool
+		matches          bool
+	}{
+		{"omitted means indexed", nil, &yes, true},
+		{"explicitly indexed", &yes, &yes, true},
+		{"disabled is not indexed", &no, &yes, false},
+		{"omitted cannot satisfy private index false", nil, &no, false},
+		{"indexed cannot satisfy private index false", &yes, &no, false},
+		{"explicitly private", &no, &no, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			actual := map[string]auditMappingField{"field": {Type: "keyword", Index: tt.actual}}
+			required := map[string]auditMappingField{"field": {Type: "keyword", Index: tt.required}}
+			require.Equal(t, tt.matches, auditFieldsMatch(actual, required))
 		})
 	}
 }

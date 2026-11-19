@@ -10,42 +10,16 @@ import (
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 )
 
-// AuditProfileAttributes contains only the approved captured attributes. Nil
-// means unavailable; empty strings are not a substitute for null.
-type AuditProfileAttributes struct {
-	Name      *string
-	AvatarURL *string
-	Email     *string
-	Username  *string
-}
-
-// NewAuditActorProfile copies captured attributes and determines availability.
-// An empty input explicitly records unavailability. It never looks up a user.
-func NewAuditActorProfile(attributes AuditProfileAttributes) (*AuditActorProfile, error) {
-	profile := &AuditActorProfile{
-		Availability: AuditProfileUnavailable,
-		Name:         cloneAuditString(attributes.Name), AvatarURL: cloneAuditString(attributes.AvatarURL),
-		Email: cloneAuditString(attributes.Email), Username: cloneAuditString(attributes.Username),
-	}
-	if profile.Name != nil || profile.AvatarURL != nil || profile.Email != nil || profile.Username != nil {
-		profile.Availability = AuditProfileCaptured
-	}
-	if err := validateAuditActorProfile("user:captured", profile); err != nil {
-		return nil, err
-	}
-	return profile, nil
-}
-
-// AuditActor pairs a stable initiating/effective ref with its captured profile.
-// Service actors have nil profiles; user actors require an explicit profile.
+// AuditActor pairs an explicit actor ref with optional JWT evidence. Missing or
+// expired evidence does not erase the source actor or prevent event processing.
 type AuditActor struct {
-	Ref     string
-	Profile *AuditActorProfile
+	Ref string
+	JWT string
 }
 
-// NewAuditAttribution copies actor snapshots. A nil effective actor means no
-// delegation and reuses the captured initiating profile, without another lookup.
-// This validates structure, not authority to delegate or attest these actors.
+// NewAuditAttribution captures refs and evidence, never profile or identity.
+// A nil effective actor means no delegation and reuses the initiating actor.
+// This validates ref syntax, not JWT validity or delegation authority.
 func NewAuditAttribution(actor AuditActor, effective *AuditActor) (AuditAttribution, error) {
 	if effective == nil {
 		effective = &actor
@@ -55,10 +29,7 @@ func NewAuditAttribution(actor AuditActor, effective *AuditActor) (AuditAttribut
 	}
 	attribution := AuditAttribution{
 		ActorRef: actor.Ref, EffectiveActorRef: effective.Ref,
-		ActorProfile: cloneAuditProfile(actor.Profile), EffectiveActorProfile: cloneAuditProfile(effective.Profile),
-	}
-	if err := attribution.validateProfiles(); err != nil {
-		return AuditAttribution{}, err
+		ActorJWT: actor.JWT, EffectiveActorJWT: effective.JWT,
 	}
 	return attribution, nil
 }
@@ -91,7 +62,9 @@ type MessageV2Options struct {
 }
 
 // MessageV2 is a validated, frozen event suitable for an approved transactional
-// outbox. Its JSON is an envelope with null headers, never a dispatch credential.
+// outbox. Its JSON has null transport headers, never a dispatch credential.
+// Optional actor JWTs remain until the source outbox retention limit; protect
+// that store accordingly. The indexer never persists those credentials.
 // Store the resource type alongside the JSON; neither is an authorization grant.
 // Availability of these builders does not enable version 2 consumer admission.
 type MessageV2 struct {
@@ -134,7 +107,8 @@ func RestoreMessageV2(payload []byte, objectType string, validateContent AuditCo
 	return &MessageV2{payload: append([]byte(nil), payload...), objectType: objectType}, nil
 }
 
-// MarshalJSON returns a copy of immutable outbox data, without authentication.
+// MarshalJSON copies immutable outbox data, without dispatch authentication.
+// Optional actor JWT evidence remains in the protected source payload.
 func (m *MessageV2) MarshalJSON() ([]byte, error) {
 	if m == nil || len(m.payload) == 0 {
 		return nil, fmt.Errorf("a constructed version 2 event is required")
@@ -167,23 +141,4 @@ func (m *MessageV2) Envelope(authorization string, validateContent AuditContentV
 		return nil, fmt.Errorf("audit envelope exceeds maximum size")
 	}
 	return envelope, nil
-}
-
-func cloneAuditString(value *string) *string {
-	if value == nil {
-		return nil
-	}
-	copy := *value
-	return &copy
-}
-
-func cloneAuditProfile(profile *AuditActorProfile) *AuditActorProfile {
-	if profile == nil {
-		return nil
-	}
-	return &AuditActorProfile{
-		Availability: profile.Availability,
-		Name:         cloneAuditString(profile.Name), AvatarURL: cloneAuditString(profile.AvatarURL),
-		Email: cloneAuditString(profile.Email), Username: cloneAuditString(profile.Username),
-	}
 }

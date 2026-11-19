@@ -12,14 +12,12 @@ import (
 
 // encoding/json accepts case-insensitive struct field names and duplicate keys.
 // Both are ambiguous for immutable event comparison. Check the versioned wire
-// vocabulary exactly. Actor profiles are closed metadata; resource data and
+// vocabulary exactly. Actor input is closed metadata; resource data and
 // current-index contact profile maps remain governed by their owned schemas.
 var auditJSONFields = map[string][]string{
-	"":                                {"schema_version", "audit", "action", "headers", "data", "tags", "indexing_config"},
-	"audit":                           {"event_id", "publisher", "occurred_at", "resource_revision", "origin", "attribution", "scope", "content"},
-	"audit.attribution":               {"actor_ref", "effective_actor_ref", "actor_profile", "effective_actor_profile"},
-	"audit.attribution.actor_profile": {"availability", "name", "avatar_url", "email", "username"},
-	"audit.attribution.effective_actor_profile": {"availability", "name", "avatar_url", "email", "username"},
+	"":                           {"schema_version", "audit", "action", "headers", "data", "tags", "indexing_config"},
+	"audit":                      {"event_id", "publisher", "occurred_at", "resource_revision", "origin", "attribution", "scope", "content"},
+	"audit.attribution":          {"actor_ref", "effective_actor_ref", "actor_jwt", "effective_actor_jwt"},
 	"audit.scope":                {"before", "after"},
 	"audit.content":              {"schema", "representation", "before", "after"},
 	"indexing_config":            {"object_id", "public", "access_check_object", "access_check_relation", "history_check_object", "history_check_relation", "sort_name", "name_and_aliases", "parent_refs", "tags", "fulltext", "contacts"},
@@ -63,15 +61,6 @@ func auditJSONValue(decoder *json.Decoder, path string, depth int) bool {
 			}
 			if !auditJSONValue(decoder, auditJSONChildPath(path, key), depth+1) {
 				return false
-			}
-		}
-		if path == "audit.attribution.actor_profile" || path == "audit.attribution.effective_actor_profile" {
-			// Explicit nulls distinguish unavailable attributes from a producer
-			// forgetting to capture a requested field. Go snapshots emit every key.
-			for _, key := range auditJSONFields[path] {
-				if !seen[key] {
-					return false
-				}
 			}
 		}
 		token, err = decoder.Token()

@@ -16,9 +16,12 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	natsgo "github.com/nats-io/nats.go"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
@@ -35,7 +38,7 @@ import (
 // TestAuditOpenSearchClient_ExportedSpans exercises the actual container wiring
 // with tracing enabled, including duplicate read-backs, errors and janitor writes.
 func TestAuditOpenSearchClient_ExportedSpans(t *testing.T) {
-	for _, scenario := range []string{"success", "history duplicate", "receipt duplicate", "server rejection", "transport failure"} {
+	for _, scenario := range []string{"success", "history duplicate", "history replay", "history read error", "receipt duplicate", "server rejection", "transport failure"} {
 		t.Run(scenario, func(t *testing.T) {
 			const eventID = "fixture-user-event-private"
 			const resourceID = "fixture-user-resource-private"
@@ -43,7 +46,7 @@ func TestAuditOpenSearchClient_ExportedSpans(t *testing.T) {
 			const legacyID = "fixture-user-legacy-private"
 			const username, password = "fixture-private-runtime", "fixture-private-password"
 			const authorization = "Bearer fixture-private-authorization"
-			profile := &types.AuditActorProfile{Availability: types.AuditProfileUnavailable}
+			const retainedEmail = "fixture-private-email@example.com"
 			e := &types.IndexerMessageEnvelope{
 				SchemaVersion: types.AuditSchemaVersion, Action: constants.ActionUpdated,
 				Headers: map[string]string{constants.AuthorizationHeader: authorization},
@@ -52,7 +55,7 @@ func TestAuditOpenSearchClient_ExportedSpans(t *testing.T) {
 					AccessCheckRelation: "viewer", HistoryCheckObject: "project:fixture-project", HistoryCheckRelation: "auditor"},
 				Audit: &types.AuditEvent{Publisher: "test-publisher", EventID: eventID, Origin: types.AuditOriginMutation, ResourceRevision: 2,
 					OccurredAt:  time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC),
-					Attribution: types.AuditAttribution{ActorRef: actorID, EffectiveActorRef: actorID, ActorProfile: profile, EffectiveActorProfile: profile},
+					Attribution: types.AuditAttribution{ActorRef: actorID, EffectiveActorRef: actorID},
 					Scope:       types.AuditScope{Before: []string{"project:fixture-project"}, After: []string{"project:fixture-project"}},
 					Content: &types.AuditContent{Schema: "fixture.audit.v1", Representation: types.AuditRepresentationSnapshots,
 						Before: json.RawMessage(`{"name":"before"}`), After: json.RawMessage(`{"name":"after"}`)},
@@ -62,6 +65,9 @@ func TestAuditOpenSearchClient_ExportedSpans(t *testing.T) {
 			require.NoError(t, err)
 			mappings := auditMappingFixtures(t)
 			cleanupUpdated := make(chan struct{}, 1)
+			var historyReads, historyWrites, identityLookups atomic.Int32
+			var historyExists atomic.Bool
+			historyExists.Store(scenario == "history replay")
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				_, _ = io.Copy(io.Discard, r.Body)
 				user, pass, ok := r.BasicAuth()
@@ -79,14 +85,30 @@ func TestAuditOpenSearchClient_ExportedSpans(t *testing.T) {
 				switch path {
 				case "/resource-history-v1/_doc/test-publisher:" + eventID:
 					if r.Method == http.MethodGet {
+						historyReads.Add(1)
+						if scenario == "history read error" {
+							w.WriteHeader(http.StatusNotFound)
+							_, _ = io.WriteString(w, `{"error":{"type":"index_not_found_exception","reason":"`+password+`"},"status":404}`)
+							return
+						}
+						if !historyExists.Load() {
+							w.WriteHeader(http.StatusNotFound)
+							_, _ = io.WriteString(w, `{"found":false}`)
+							return
+						}
 						_ = json.NewEncoder(w).Encode(map[string]any{"_source": map[string]any{
 							"publisher": "test-publisher", "event_id": eventID, "fingerprint": fingerprint,
 							"object_id": resourceID, "object_type": "fixture_resource", "resource_revision": 2, "action": constants.ActionUpdated,
 						}})
-					} else if scenario == "history duplicate" {
-						w.WriteHeader(http.StatusConflict)
 					} else {
-						w.WriteHeader(http.StatusCreated)
+						historyWrites.Add(1)
+						historyExists.Store(true)
+						if scenario == "history duplicate" {
+							// A competing first delivery wins after our absence check.
+							w.WriteHeader(http.StatusConflict)
+						} else {
+							w.WriteHeader(http.StatusCreated)
+						}
 					}
 				case "/resource-audit-deliveries-v1/_doc/test-publisher:" + eventID:
 					if r.Method == http.MethodGet {
@@ -155,6 +177,15 @@ func TestAuditOpenSearchClient_ExportedSpans(t *testing.T) {
 			auth := mocks.NewMockAuthRepository()
 			auth.ValidateTokenResponse = &contracts.Principal{Principal: "fixture@clients"}
 			c.AuthRepository, c.MessagingRepository = auth, mocks.NewMockMessagingRepository()
+			c.NATSConnection = auditTestNATS(t)
+			subscription, err := c.NATSConnection.Subscribe(constants.AuthUserEmailsRead, func(message *natsgo.Msg) {
+				identityLookups.Add(1)
+				assert.JSONEq(t, `{"user":{"auth_token":"fixture-private-subject"}}`, string(message.Data))
+				assert.NoError(t, message.Respond([]byte(`{"success":true,"data":{"primary_email":"`+retainedEmail+`"}}`)))
+			})
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = subscription.Unsubscribe() })
+			require.NoError(t, c.NATSConnection.Flush())
 			require.NoError(t, c.initializeApplication())
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
@@ -167,12 +198,26 @@ func TestAuditOpenSearchClient_ExportedSpans(t *testing.T) {
 			require.NoError(t, err)
 			err = c.MessageProcessor.ProcessIndexingMessage(ctx, payload, constants.IndexPrefix+"fixture_resource")
 			switch scenario {
+			case "history read error":
+				require.ErrorContains(t, err, "invalid not-found response")
 			case "server rejection":
 				require.ErrorContains(t, err, "status 400")
 			case "transport failure":
 				require.ErrorContains(t, err, "transport failure")
 			default:
 				require.NoError(t, err)
+			}
+			wantReads := int32(1)
+			if scenario == "history duplicate" {
+				wantReads = 2 // absence check plus conflict verification
+			}
+			require.Equal(t, wantReads, historyReads.Load())
+			if scenario == "history replay" || scenario == "history read error" {
+				require.Zero(t, historyWrites.Load())
+				require.Zero(t, identityLookups.Load(), "existing history and storage errors must not resolve identity")
+			} else {
+				require.EqualValues(t, 1, historyWrites.Load(), "privacy test must exercise the history write path")
+				require.EqualValues(t, 1, identityLookups.Load(), "equal actors reuse one lookup")
 			}
 			if err != nil {
 				span.RecordError(err)
@@ -192,7 +237,7 @@ func TestAuditOpenSearchClient_ExportedSpans(t *testing.T) {
 			encoded, err := json.Marshal(spans)
 			require.NoError(t, err)
 			require.Contains(t, string(encoded), "legacy-http-control")
-			for _, marker := range []string{eventID, resourceID, actorID, legacyID, username, password, authorization, base64.StdEncoding.EncodeToString([]byte(username + ":" + password))} {
+			for _, marker := range []string{eventID, resourceID, actorID, legacyID, username, password, authorization, retainedEmail, base64.StdEncoding.EncodeToString([]byte(username + ":" + password))} {
 				require.NotContains(t, string(encoded), marker)
 			}
 		})
