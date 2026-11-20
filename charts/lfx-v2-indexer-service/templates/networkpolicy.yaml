@@ -1,0 +1,65 @@
+# Copyright The Linux Foundation and each contributor to LFX.
+# SPDX-License-Identifier: MIT
+{{- if .Values.networkPolicy.enabled }}
+{{- $policy := .Values.networkPolicy }}
+{{- if empty $policy.opensearchPorts }}{{ fail "networkPolicy.opensearchPorts must not be empty" }}{{- end }}
+{{- $ports := list }}
+{{- range $i, $port := $policy.opensearchPorts }}
+{{- $ports = append $ports (list (printf "networkPolicy.opensearchPorts[%d]" $i) $port) }}
+{{- end }}
+{{- range $key := list "natsPort" "heimdallJWKSPort" "otelGRPCPort" "otelHTTPPort" "valkeyPort" }}
+{{- $ports = append $ports (list (printf "networkPolicy.%s" $key) (index $policy $key)) }}
+{{- end }}
+{{- /* A blank or null-like port ("", null, "~") renders as an unspecified port,
+which allows every TCP port. A leading zero can be read as octal. */}}
+{{- range $entry := $ports }}
+{{- $value := trim (toString (index $entry 1)) }}
+{{- if or (not (regexMatch "^[1-9][0-9]{0,4}$" $value)) (gt (atoi $value) 65535) }}
+{{- fail (printf "%s must be a port from 1 to 65535" (index $entry 0)) }}
+{{- end }}
+{{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: lfx-v2-indexer-service
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: lfx-v2-indexer-service
+  policyTypes:
+    - Egress
+  egress:
+    # DNS resolution
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # NATS
+    - ports:
+        - port: {{ .Values.networkPolicy.natsPort }}
+          protocol: TCP
+    # OpenSearch
+    - ports:
+        {{- range .Values.networkPolicy.opensearchPorts }}
+        - port: {{ . }}
+          protocol: TCP
+        {{- end }}
+    # Heimdall JWKS endpoint for JWT verification
+    - ports:
+        - port: {{ .Values.networkPolicy.heimdallJWKSPort }}
+          protocol: TCP
+    # OpenTelemetry collector (gRPC and HTTP)
+    - ports:
+        - port: {{ .Values.networkPolicy.otelGRPCPort }}
+          protocol: TCP
+        - port: {{ .Values.networkPolicy.otelHTTPPort }}
+          protocol: TCP
+    # Valkey index cache. Port-based egress does not stop pods without a
+    # policy from reaching it.
+    - ports:
+        - port: {{ .Values.networkPolicy.valkeyPort }}
+          protocol: TCP
+{{- end }}
