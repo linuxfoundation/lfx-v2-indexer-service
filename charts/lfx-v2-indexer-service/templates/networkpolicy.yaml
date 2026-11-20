@@ -3,13 +3,20 @@
 {{- if .Values.networkPolicy.enabled }}
 {{- $policy := .Values.networkPolicy }}
 {{- if empty $policy.opensearchPorts }}{{ fail "networkPolicy.opensearchPorts must not be empty" }}{{- end }}
-{{- /* A blank port renders "port:" with no value, which allows every TCP port. */}}
+{{- $ports := list }}
 {{- range $i, $port := $policy.opensearchPorts }}
-{{- if or (empty $port) (empty (trim (toString $port))) }}{{ fail (printf "networkPolicy.opensearchPorts[%d] must be a port" $i) }}{{- end }}
+{{- $ports = append $ports (list (printf "networkPolicy.opensearchPorts[%d]" $i) $port) }}
 {{- end }}
 {{- range $key := list "natsPort" "heimdallJWKSPort" "otelGRPCPort" "otelHTTPPort" "valkeyPort" }}
-{{- $port := index $policy $key }}
-{{- if or (empty $port) (empty (trim (toString $port))) }}{{ fail (printf "networkPolicy.%s must be a port" $key) }}{{- end }}
+{{- $ports = append $ports (list (printf "networkPolicy.%s" $key) (index $policy $key)) }}
+{{- end }}
+{{- /* A blank or null-like port ("", null, "~") renders as an unspecified port,
+which allows every TCP port. A leading zero can be read as octal. */}}
+{{- range $entry := $ports }}
+{{- $value := trim (toString (index $entry 1)) }}
+{{- if or (not (regexMatch "^[1-9][0-9]{0,4}$" $value)) (gt (atoi $value) 65535) }}
+{{- fail (printf "%s must be a port from 1 to 65535" (index $entry 0)) }}
+{{- end }}
 {{- end }}
 ---
 apiVersion: networking.k8s.io/v1

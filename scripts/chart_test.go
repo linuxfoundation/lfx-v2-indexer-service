@@ -183,26 +183,35 @@ func TestCacheChartSettings(t *testing.T) {
 	}
 }
 
-// TestNetworkPolicyChartPorts rejects blank ports, which would render a rule
-// with no port and so allow all TCP egress.
+// TestNetworkPolicyChartPorts rejects ports that are not 1-65535, because a
+// blank or null-like port renders as unspecified and allows all TCP egress.
 func TestNetworkPolicyChartPorts(t *testing.T) {
+	defaults := []string{"53/UDP 53/TCP", "4222/TCP", "443/TCP 9200/TCP", "4457/TCP", "4317/TCP 4318/TCP", "6379/TCP"}
 	for _, tt := range []struct {
 		name      string
 		flags     []string
 		wantError string
 		want      []string
 	}{
-		{"defaults", nil, "", []string{"port: 4222", "port: 443", "port: 9200", "port: 6379"}},
-		{"valid overrides", []string{"--set", "networkPolicy.opensearchPorts={9201}", "--set", "networkPolicy.natsPort=4223"}, "", []string{"port: 9201", "port: 4223"}},
+		{"defaults", nil, "", defaults},
+		{"valid overrides", []string{"--set", "networkPolicy.opensearchPorts={9201}", "--set", "networkPolicy.natsPort=4223", "--set-string", "networkPolicy.valkeyPort=65535"}, "",
+			[]string{"53/UDP 53/TCP", "4223/TCP", "9201/TCP", "4457/TCP", "4317/TCP 4318/TCP", "65535/TCP"}},
 		{"empty list", []string{"--set-json", "networkPolicy.opensearchPorts=[]"}, "networkPolicy.opensearchPorts must not be empty", nil},
 		{"blank list entry", []string{"--set-json", `networkPolicy.opensearchPorts=[443,""]`}, "networkPolicy.opensearchPorts[1] must be a port", nil},
 		{"whitespace list entry", []string{"--set-json", `networkPolicy.opensearchPorts=[" "]`}, "networkPolicy.opensearchPorts[0] must be a port", nil},
 		{"null list entry", []string{"--set-json", "networkPolicy.opensearchPorts=[null]"}, "networkPolicy.opensearchPorts[0] must be a port", nil},
+		{"tilde list entry", []string{"--set-json", `networkPolicy.opensearchPorts=["~"]`}, "networkPolicy.opensearchPorts[0] must be a port", nil},
 		{"blank nats port", []string{"--set-string", "networkPolicy.natsPort="}, "networkPolicy.natsPort must be a port", nil},
+		{"null string nats port", []string{"--set-string", "networkPolicy.natsPort=null"}, "networkPolicy.natsPort must be a port", nil},
 		{"blank heimdall port", []string{"--set-string", "networkPolicy.heimdallJWKSPort="}, "networkPolicy.heimdallJWKSPort must be a port", nil},
 		{"blank otel grpc port", []string{"--set-string", "networkPolicy.otelGRPCPort="}, "networkPolicy.otelGRPCPort must be a port", nil},
 		{"blank otel http port", []string{"--set-string", "networkPolicy.otelHTTPPort="}, "networkPolicy.otelHTTPPort must be a port", nil},
 		{"null valkey port", []string{"--set", "networkPolicy.valkeyPort=null"}, "networkPolicy.valkeyPort must be a port", nil},
+		{"uppercase null valkey port", []string{"--set-string", "networkPolicy.valkeyPort=NULL"}, "networkPolicy.valkeyPort must be a port", nil},
+		{"zero port", []string{"--set", "networkPolicy.natsPort=0"}, "networkPolicy.natsPort must be a port", nil},
+		{"port above range", []string{"--set", "networkPolicy.natsPort=70000"}, "networkPolicy.natsPort must be a port", nil},
+		{"leading zero port", []string{"--set-string", "networkPolicy.natsPort=04222"}, "networkPolicy.natsPort must be a port", nil},
+		{"named port", []string{"--set-string", "networkPolicy.natsPort=nats"}, "networkPolicy.natsPort must be a port", nil},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			output, err := renderIndexerChartArgs(t, append([]string{"--show-only", "templates/networkpolicy.yaml"}, tt.flags...)...)
@@ -212,9 +221,7 @@ func TestNetworkPolicyChartPorts(t *testing.T) {
 				return
 			}
 			require.NoError(t, err, "%s", output)
-			for _, want := range tt.want {
-				require.Contains(t, output, want)
-			}
+			require.Equal(t, tt.want, networkPolicyEgress(t, output))
 		})
 	}
 	t.Run("disabled ignores blank ports", func(t *testing.T) {
@@ -223,6 +230,44 @@ func TestNetworkPolicyChartPorts(t *testing.T) {
 		require.NoError(t, err, "%s", output)
 		require.NotContains(t, output, "kind: NetworkPolicy")
 	})
+}
+
+// networkPolicyEgress decodes the rendered policy and returns each egress rule
+// as "port/protocol" entries, failing on any rule or port that is unrestricted.
+func networkPolicyEgress(t *testing.T, output string) []string {
+	t.Helper()
+	var policy struct {
+		Kind string `yaml:"kind"`
+		Spec struct {
+			PodSelector struct {
+				MatchLabels map[string]string `yaml:"matchLabels"`
+			} `yaml:"podSelector"`
+			PolicyTypes []string `yaml:"policyTypes"`
+			Egress      []struct {
+				To    []any `yaml:"to"`
+				Ports []struct {
+					Port     *int   `yaml:"port"`
+					Protocol string `yaml:"protocol"`
+				} `yaml:"ports"`
+			} `yaml:"egress"`
+		} `yaml:"spec"`
+	}
+	require.NoError(t, yaml.Unmarshal([]byte(output), &policy))
+	require.Equal(t, "NetworkPolicy", policy.Kind)
+	require.Equal(t, map[string]string{"app": "lfx-v2-indexer-service"}, policy.Spec.PodSelector.MatchLabels)
+	require.Equal(t, []string{"Egress"}, policy.Spec.PolicyTypes)
+	rules := make([]string, 0, len(policy.Spec.Egress))
+	for _, rule := range policy.Spec.Egress {
+		require.Empty(t, rule.To)
+		require.NotEmpty(t, rule.Ports)
+		entries := make([]string, 0, len(rule.Ports))
+		for _, port := range rule.Ports {
+			require.NotNil(t, port.Port, "%s", output)
+			entries = append(entries, strconv.Itoa(*port.Port)+"/"+port.Protocol)
+		}
+		rules = append(rules, strings.Join(entries, " "))
+	}
+	return rules
 }
 
 func TestAuditChartTiming_RuntimeParity(t *testing.T) {
