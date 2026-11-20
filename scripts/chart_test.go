@@ -25,15 +25,7 @@ import (
 // CI installs a pinned binary; local contributors can provide HELM_BINARY.
 func renderIndexerChart(t *testing.T, audited bool, overrides ...string) (string, error) {
 	t.Helper()
-	binary := os.Getenv("HELM_BINARY")
-	if binary == "" {
-		var err error
-		binary, err = exec.LookPath("helm")
-		if err != nil {
-			t.Skip("requires helm or HELM_BINARY")
-		}
-	}
-	args := []string{"template", "fixture", "../charts/lfx-v2-indexer-service"}
+	var args []string
 	if audited {
 		for _, value := range []string{
 			"audit.enabled=true", "audit.requiredTypes[0]=fixture_resource", "audit.policyConfigMap=fixture-policy",
@@ -46,6 +38,22 @@ func renderIndexerChart(t *testing.T, audited bool, overrides ...string) (string
 	for _, value := range overrides {
 		args = append(args, "--set-string", value)
 	}
+	return renderIndexerChartArgs(t, args...)
+}
+
+// renderIndexerChartArgs passes Helm flags through unchanged, for values that
+// --set-string would turn into strings, such as booleans and null.
+func renderIndexerChartArgs(t *testing.T, flags ...string) (string, error) {
+	t.Helper()
+	binary := os.Getenv("HELM_BINARY")
+	if binary == "" {
+		var err error
+		binary, err = exec.LookPath("helm")
+		if err != nil {
+			t.Skip("requires helm or HELM_BINARY")
+		}
+	}
+	args := append([]string{"template", "fixture", "../charts/lfx-v2-indexer-service"}, flags...)
 	output, err := exec.Command(binary, args...).CombinedOutput()
 	return string(output), err
 }
@@ -173,6 +181,48 @@ func TestCacheChartSettings(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestNetworkPolicyChartPorts rejects blank ports, which would render a rule
+// with no port and so allow all TCP egress.
+func TestNetworkPolicyChartPorts(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		flags     []string
+		wantError string
+		want      []string
+	}{
+		{"defaults", nil, "", []string{"port: 4222", "port: 443", "port: 9200", "port: 6379"}},
+		{"valid overrides", []string{"--set", "networkPolicy.opensearchPorts={9201}", "--set", "networkPolicy.natsPort=4223"}, "", []string{"port: 9201", "port: 4223"}},
+		{"empty list", []string{"--set-json", "networkPolicy.opensearchPorts=[]"}, "networkPolicy.opensearchPorts must not be empty", nil},
+		{"blank list entry", []string{"--set-json", `networkPolicy.opensearchPorts=[443,""]`}, "networkPolicy.opensearchPorts[1] must be a port", nil},
+		{"whitespace list entry", []string{"--set-json", `networkPolicy.opensearchPorts=[" "]`}, "networkPolicy.opensearchPorts[0] must be a port", nil},
+		{"null list entry", []string{"--set-json", "networkPolicy.opensearchPorts=[null]"}, "networkPolicy.opensearchPorts[0] must be a port", nil},
+		{"blank nats port", []string{"--set-string", "networkPolicy.natsPort="}, "networkPolicy.natsPort must be a port", nil},
+		{"blank heimdall port", []string{"--set-string", "networkPolicy.heimdallJWKSPort="}, "networkPolicy.heimdallJWKSPort must be a port", nil},
+		{"blank otel grpc port", []string{"--set-string", "networkPolicy.otelGRPCPort="}, "networkPolicy.otelGRPCPort must be a port", nil},
+		{"blank otel http port", []string{"--set-string", "networkPolicy.otelHTTPPort="}, "networkPolicy.otelHTTPPort must be a port", nil},
+		{"null valkey port", []string{"--set", "networkPolicy.valkeyPort=null"}, "networkPolicy.valkeyPort must be a port", nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			output, err := renderIndexerChartArgs(t, append([]string{"--show-only", "templates/networkpolicy.yaml"}, tt.flags...)...)
+			if tt.wantError != "" {
+				require.Error(t, err)
+				require.Contains(t, output, tt.wantError)
+				return
+			}
+			require.NoError(t, err, "%s", output)
+			for _, want := range tt.want {
+				require.Contains(t, output, want)
+			}
+		})
+	}
+	t.Run("disabled ignores blank ports", func(t *testing.T) {
+		output, err := renderIndexerChartArgs(t, "--set", "networkPolicy.enabled=false", "--set", "networkPolicy.natsPort=null",
+			"--set-json", `networkPolicy.opensearchPorts=[""]`)
+		require.NoError(t, err, "%s", output)
+		require.NotContains(t, output, "kind: NetworkPolicy")
+	})
 }
 
 func TestAuditChartTiming_RuntimeParity(t *testing.T) {
