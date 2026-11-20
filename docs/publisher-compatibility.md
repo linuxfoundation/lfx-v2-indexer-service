@@ -34,7 +34,7 @@ reserved top-level JSON field declarations in the inspected producers. This is
 not a claim about arbitrary dynamic maps or every possible NATS publisher.
 
 No collision was found in these known source paths. An upstream record field
-named `audit` or `schema_version` remains safe **inside** `data` or `v1_data`:
+named `audit` or `schema_version` remains safe **inside** `data`:
 the reservation applies only to envelope-level discriminator keys. A regression
 test exercises successful legacy processing with both names nested in resource
 data. The new SDK fields are `omitempty`, so leaving them unset does not add
@@ -44,12 +44,12 @@ zero/null discriminator fields to old envelopes.
 
 Before deploying the reservation guard:
 
-1. Identify deployed publishers and operational/backfill clients for both
-   `lfx.index.*` and `lfx.v1.index.*`. Compare their actual deployed source/build
+1. Identify deployed publishers and operational/backfill clients for the
+   supported indexing subjects. Compare their actual deployed source/build
    revisions with the inventory; inspect any additional producer before rollout.
 2. Verify representative staging messages by their **envelope key names only**.
-   Include retained/backlogged legacy messages and platform V1 traffic, not just
-   freshly generated platform V2 messages. Do not copy raw payloads, headers,
+   Include retained/backlogged unversioned messages, not just freshly generated
+   platform V2 messages. Do not copy raw payloads, headers,
    tokens, actor identifiers, or resource data into logs or review evidence.
 3. If an existing custom publisher uses either name at envelope level, stop the
    guard rollout until it migrates that metadata under `data` or an isolated audit
@@ -63,3 +63,31 @@ Before deploying the reservation guard:
 
 Keep audited publisher delivery disabled regardless of this inventory until
 the [version 2 processing prerequisites](audit-v2-contract.md) are implemented.
+
+## Retired platform protocol source audit (2026-11-19)
+
+Current default branches of all 20 `linuxfoundation/lfx-v2-*-service` repositories
+(including the archived test template) and `lfx-v1-sync-helper` were fetched and
+inspected. The search covered topic literals, assembled prefixes, SDK aliases,
+legacy header/action identifiers, scripts, tests and chart configuration. No
+production publisher of `lfx.v1.index.*` was found. All references implementing
+that protocol were in this indexer's compatibility consumer/configuration and
+its tests/documentation; those runtime paths have now been removed.
+
+Campaign, committee, formation, mailing-list, meeting, member, project, survey and
+voting publisher implementations use `lfx.index.*` (directly or through SDK
+constants). Resource names such as `v1_meeting` are still on that supported
+protocol. The sync helper replicates legacy data through KV/API paths and consumes
+post-index domain events, not the retired indexing ingress. No publisher source
+changes are required in these repositories for this removal.
+
+This does not prove which builds or runtime overrides are deployed, inspect
+external clients, or account for retained messages. Before rolling out removal,
+confirm no deployed/operational publisher uses the retired subject. Inspect its
+stream backlog and reconcile any unprocessed work before narrowing filters. The
+indexer chart owns the `index-events` Stream subject declaration; the application
+updates the existing `indexer-consumer` filter without recreating the stream or
+purging messages. Externally managed streams require equivalent configuration
+cleanup. Rollback must restore the stream subject before restoring an old
+consumer configuration that refers to it. Do not enable audited publishing as
+part of this protocol cleanup.

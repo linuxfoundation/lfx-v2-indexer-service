@@ -16,7 +16,7 @@ Quick checklist form. The narrative lives in `../SKILL.md`. Use this file in a c
 
 - [ ] No inline action string literals. Use `pkg/constants/` (`ActionCreated`, `ActionUpdated`, `ActionDeleted`).
 - [ ] No new top-level OpenSearch field or in-place envelope mutation without updating `docs/indexer-contract.md` and coordinating with `lfx-v2-query-service`.
-- [ ] Subject strings (`lfx.index.>`, `lfx.v1.index.>`, `lfx.{object_type}.{action}`) live in `pkg/constants/` or runtime config.
+- [ ] Subject strings (`lfx.index.>`, `lfx.{object_type}.{action}`) live in `pkg/constants/` or runtime config.
 
 ## Logging
 
@@ -27,8 +27,8 @@ Quick checklist form. The narrative lives in `../SKILL.md`. Use this file in a c
 ## NATS handler
 
 - [ ] Replies `"OK"` on success, `"ERROR: <details>"` on failure when the message carries a reply subject; no reply is sent for a plain publish.
-- [ ] Routes on subject prefix to pick V2 vs V1, not on payload sniffing.
-- [ ] V2 and V1 subscriptions both bind to `lfx.indexer.queue`.
+- [ ] Rejects unsupported subjects; audit admission stays in the message processor.
+- [ ] Production uses the `indexer-consumer` JetStream durable on `index-events`, filtered by `NATS.IndexingSubject`. Queue-group subscriptions (`lfx.indexer.queue`) are compatibility helpers only.
 - [ ] Connection drain runs through the existing shutdown path; no ad-hoc `nc.Close()`.
 
 ## OpenSearch storage
@@ -45,7 +45,7 @@ Quick checklist form. The narrative lives in `../SKILL.md`. Use this file in a c
 ## Auth
 
 - [ ] Handler layer extracts auth headers. Domain services read from request context only, never headers directly.
-- [ ] V1 paths handle `x-username` / `x-email`; V2 paths validate JWT via Heimdall.
+- [ ] V2 paths validate JWT via Heimdall; no unsigned legacy-header bypass.
 - [ ] `x-on-behalf-of` is forwarded through context.
 
 ## Errors
@@ -59,7 +59,7 @@ Quick checklist form. The narrative lives in `../SKILL.md`. Use this file in a c
 - [ ] `*_test.go` co-located with the code under test.
 - [ ] Mocks live in `internal/mocks/`.
 - [ ] Table-driven tests for branching behavior.
-- [ ] Both V2 and V1 covered where the path diverges.
+- [ ] Supported V2 envelopes, unsupported subjects/actions, and legacy-backed resource names covered.
 - [ ] Layer-specific target runs clean: `make test-domain`, `make test-application`, `make test-infrastructure`, `make test-presentation`. `make test` clean before handoff.
 
 ## Formatting, lint, headers

@@ -337,7 +337,7 @@ func TestMessageProcessor_AuditRoutingAndLegacyGuard(t *testing.T) {
 	require.Equal(t, 1, current.Writes)
 	legacy := []byte(`{"action":"updated","data":{"uid":"fixture-resource"}}`)
 	require.ErrorContains(t, mp.ProcessIndexingMessage(context.Background(), legacy, subject), "requires schema_version 2")
-	require.ErrorContains(t, mp.ProcessV1IndexingMessage(context.Background(), legacy, constants.FromV1Prefix+"fixture_resource"), "rejects platform V1")
+	require.ErrorContains(t, mp.ProcessIndexingMessage(context.Background(), legacy, "unsupported.fixture_resource"), "invalid V2 subject")
 	require.Equal(t, 1, current.Writes)
 	invalid := []byte(`{"schema_version":3,"action":"updated"}`)
 	require.Error(t, mp.ProcessIndexingMessage(context.Background(), invalid, subject))

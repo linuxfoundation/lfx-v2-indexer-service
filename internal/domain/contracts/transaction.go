@@ -44,12 +44,11 @@ type TransactionBody struct {
 	Data                 map[string]any      `json:"data,omitempty"`
 	Fulltext             string              `json:"fulltext,omitempty"`
 	Contacts             []types.ContactBody `json:"contacts,omitempty"`
-	V1Data               map[string]any      `json:"v1_data,omitempty"`
 }
 
 // LFXTransaction represents the input transaction data
 type LFXTransaction struct {
-	// Action is expected to be one of "create", "update", or "delete".
+	// Action is expected to be a past-tense ActionCreated, ActionUpdated or ActionDeleted.
 	Action constants.MessageAction `json:"action"`
 	// Headers (at this time) is used to pass the authenticated-principal HTTP
 	// headers from the originating request. These are passed as part of the NATS
@@ -78,14 +77,10 @@ type LFXTransaction struct {
 	// be a searchable tag, then it should set the `tags` JSON field to ["uid"].
 	Tags []string `json:"tags"`
 
-	// V1Data contains the raw Platform DB record data from LFX v1.
-	V1Data map[string]any `json:"v1_data,omitempty"`
-
 	// Capture timestamp at ingest time.
 	Timestamp time.Time `json:"-"`
 
 	// Enhanced fields for improved validation and processing
-	IsV1             bool        `json:"-"`
 	ParsedPrincipals []Principal `json:"-"`
 
 	// IndexingConfig contains the indexing configuration for the resource,

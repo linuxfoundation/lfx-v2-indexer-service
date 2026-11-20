@@ -127,7 +127,7 @@ func TestIndexerMessageEnvelope_ValidateV2(t *testing.T) {
 		{name: "missing_before_scope", mutate: func(e *IndexerMessageEnvelope) { e.Audit.Scope.Before = nil }},
 		{name: "missing_after_scope", mutate: func(e *IndexerMessageEnvelope) { e.Audit.Scope.After = nil }},
 		{name: "malformed_scope", mutate: func(e *IndexerMessageEnvelope) { e.Audit.Scope.Before = []string{"project:fixture#auditor"} }},
-		{name: "wrong_action", mutate: func(e *IndexerMessageEnvelope) { e.Action = constants.ActionUpdate }},
+		{name: "wrong_action", mutate: func(e *IndexerMessageEnvelope) { e.Action = constants.MessageAction("update") }},
 		{name: "data_array", mutate: func(e *IndexerMessageEnvelope) { e.Data = []string{"fixture-resource"} }},
 		{name: "data_null", mutate: func(e *IndexerMessageEnvelope) { e.Data = nil }},
 		{name: "missing_content", mutate: func(e *IndexerMessageEnvelope) { e.Audit.Content = nil }},

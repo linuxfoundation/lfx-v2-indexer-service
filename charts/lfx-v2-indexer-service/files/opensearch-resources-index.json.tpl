@@ -67,9 +67,6 @@
           "bot": { "type": "boolean" },
           "profile": { "type": "flat_object" }
         }
-      },
-      "v1_data": {
-        "type": "flat_object"
       }
     }
   }

@@ -76,8 +76,8 @@ of this new envelope version.
 
 - Hardcoded subject strings outside `pkg/constants/`.
 - Sending `IndexingConfig: nil` and expecting the indexer to fill defaults.
-- Mixing V1 (`lfx.v1.index.>`, present-tense actions) and V2 (`lfx.index.>`,
-  past-tense actions) handler logic.
+- Using unsupported subjects or present-tense actions; only platform V2
+  (`lfx.index.>`, past-tense actions) is supported. This does not imply audit adoption.
 - Writing OpenSearch documents directly from a publisher. Indexer-service owns
   current-document writes under the `object_ref` document ID and emits the
   post-index domain event.

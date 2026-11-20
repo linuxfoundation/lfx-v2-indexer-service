@@ -189,18 +189,16 @@ func TestNewMessageProcessor(t *testing.T) {
 	assert.Equal(t, constants.DefaultIndex, mp.index)
 	assert.Equal(t, constants.DefaultQueue, mp.queue)
 	assert.Equal(t, constants.AllSubjects, mp.indexingSubject)
-	assert.Equal(t, constants.AllV1Subjects, mp.v1IndexingSubject)
 }
 
 func TestMessageProcessor_Configure(t *testing.T) {
 	mp, _, _ := setupTestMessageProcessor()
 
-	mp.Configure("custom-index", "custom-queue", "custom.index.>", "custom.v1.index.>")
+	mp.Configure("custom-index", "custom-queue", "custom.index.>")
 
 	assert.Equal(t, "custom-index", mp.index)
 	assert.Equal(t, "custom-queue", mp.queue)
 	assert.Equal(t, "custom.index.>", mp.indexingSubject)
-	assert.Equal(t, "custom.v1.index.>", mp.v1IndexingSubject)
 }
 
 // Test ProcessIndexingMessage success case
@@ -247,7 +245,7 @@ func TestMessageProcessor_ProcessIndexingMessage_Success(t *testing.T) {
 
 func TestMessageProcessor_ProcessIndexingMessage_UsesConfiguredIndex(t *testing.T) {
 	mp, mockMessagingRepo, mockStorageRepo := setupTestMessageProcessor()
-	mp.Configure("configured-index", "", "", "")
+	mp.Configure("configured-index", "", "")
 	ctx := context.Background()
 
 	testData := map[string]any{
@@ -384,77 +382,42 @@ func TestMessageProcessor_ProcessIndexingMessage_MissingAuthHeader(t *testing.T)
 	assert.Contains(t, err.Error(), "authorization header is required")
 }
 
-// Test ProcessV1IndexingMessage success case
-func TestMessageProcessor_ProcessV1IndexingMessage_Success(t *testing.T) {
-	mp, mockMessagingRepo, mockStorageRepo := setupTestMessageProcessor()
-	ctx := context.Background()
-
-	// Test V1 data
-	testData := map[string]any{
-		"action": "create",
-		"data": map[string]any{
-			"id":   "test-123",
-			"name": "Test Project",
-		},
-		"v1_data": map[string]any{
-			"legacy_field": "legacy_value",
-		},
-		"headers": map[string]string{
-			"x-trace-id": "trace-123",
-		},
-		"indexing_config": map[string]any{
-			"object_id":              "test-123",
-			"access_check_object":    "project:test-123",
-			"access_check_relation":  "viewer",
-			"history_check_object":   "project:test-123",
-			"history_check_relation": "viewer",
-		},
+func TestMessageProcessor_RetiredProtocolRejected(t *testing.T) {
+	for _, tt := range []struct {
+		name, subject, action, wantError string
+		headers                          map[string]string
+	}{
+		{"retired subject", "lfx.v1.index.project", "created", "invalid V2 subject", map[string]string{constants.AuthorizationHeader: "Bearer fixture-token"}},
+		{"retired subject and action", "lfx.v1.index.project", "create", "invalid V2 subject", nil},
+		{"present-tense create", constants.ProjectSubject, "create", "invalid V2 transaction action", nil},
+		{"present-tense update", constants.ProjectSubject, "update", "invalid V2 transaction action", nil},
+		{"present-tense delete", constants.ProjectSubject, "delete", "invalid V2 transaction action", nil},
+		{"unsigned legacy headers", constants.ProjectSubject, "created", "authorization header is required", map[string]string{"x-username": "fixture-user", "x-email": "user-1@example.com"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			processor, messaging, storage := setupTestMessageProcessor()
+			payload, err := json.Marshal(map[string]any{
+				"action": tt.action, "headers": tt.headers, "data": map[string]any{"id": "fixture-resource"},
+				"indexing_config": map[string]string{"object_id": "fixture-resource", "access_check_object": "project:fixture-resource", "access_check_relation": "viewer", "history_check_object": "project:fixture-resource", "history_check_relation": "auditor"},
+			})
+			require.NoError(t, err)
+			err = processor.ProcessIndexingMessage(context.Background(), payload, tt.subject)
+			require.ErrorContains(t, err, tt.wantError)
+			storage.AssertNumberOfCalls(t, "Index", 0)
+			messaging.AssertNumberOfCalls(t, "Publish", 0)
+			messaging.AssertNumberOfCalls(t, "ParsePrincipals", 0)
+		})
 	}
-	data, _ := json.Marshal(testData)
-	subject := "lfx.v1.index.project"
-
-	// Mock expectations
-	mockStorageRepo.On("Index", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
-	mockMessagingRepo.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(nil)
-
-	// Execute
-	err := mp.ProcessV1IndexingMessage(ctx, data, subject)
-
-	// Assertions
-	assert.NoError(t, err)
-	mockStorageRepo.AssertExpectations(t)
-}
-
-// Test ProcessV1IndexingMessage with invalid subject
-func TestMessageProcessor_ProcessV1IndexingMessage_InvalidSubject(t *testing.T) {
-	mp, _, _ := setupTestMessageProcessor()
-	ctx := context.Background()
-
-	// Valid JSON but invalid V1 subject
-	testData := map[string]any{
-		"action": "create",
-		"data":   map[string]any{"id": "test-123"},
-	}
-	data, _ := json.Marshal(testData)
-	subject := "invalid.v1.subject"
-
-	// Execute
-	err := mp.ProcessV1IndexingMessage(ctx, data, subject)
-
-	// Assertions
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid V1 subject format")
 }
 
 // Test StartSubscriptions success case
 func TestMessageProcessor_StartSubscriptions_Success(t *testing.T) {
 	mp, mockMessagingRepo, _ := setupTestMessageProcessor()
 	ctx := context.Background()
-	mp.Configure("", "custom-queue", "custom.index.>", "custom.v1.index.>")
+	mp.Configure("", "custom-queue", "custom.index.>")
 
 	// Mock expectations
 	mockMessagingRepo.On("QueueSubscribeWithReply", mock.Anything, "custom.index.>", "custom-queue", mock.Anything).Return(nil)
-	mockMessagingRepo.On("QueueSubscribeWithReply", mock.Anything, "custom.v1.index.>", "custom-queue", mock.Anything).Return(nil)
 
 	// Execute
 	err := mp.StartSubscriptions(ctx)
@@ -462,6 +425,7 @@ func TestMessageProcessor_StartSubscriptions_Success(t *testing.T) {
 	// Assertions
 	assert.NoError(t, err)
 	mockMessagingRepo.AssertExpectations(t)
+	mockMessagingRepo.AssertNumberOfCalls(t, "QueueSubscribeWithReply", 1)
 }
 
 // Test StartSubscriptions with V2 subscription error
@@ -478,24 +442,6 @@ func TestMessageProcessor_StartSubscriptions_V2Error(t *testing.T) {
 	// Assertions
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to subscribe to V2 messages")
-	mockMessagingRepo.AssertExpectations(t)
-}
-
-// Test StartSubscriptions with V1 subscription error
-func TestMessageProcessor_StartSubscriptions_V1Error(t *testing.T) {
-	mp, mockMessagingRepo, _ := setupTestMessageProcessor()
-	ctx := context.Background()
-
-	// Mock expectations
-	mockMessagingRepo.On("QueueSubscribeWithReply", mock.Anything, constants.AllSubjects, constants.DefaultQueue, mock.Anything).Return(nil)
-	mockMessagingRepo.On("QueueSubscribeWithReply", mock.Anything, constants.AllV1Subjects, constants.DefaultQueue, mock.Anything).Return(errors.New("v1 subscription error"))
-
-	// Execute
-	err := mp.StartSubscriptions(ctx)
-
-	// Assertions
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to subscribe to V1 messages")
 	mockMessagingRepo.AssertExpectations(t)
 }
 
@@ -549,56 +495,6 @@ func TestIndexingHandler_HandleWithReply_V2Message(t *testing.T) {
 	assert.True(t, replyCalled)
 	mockStorageRepo.AssertExpectations(t)
 	mockMessagingRepo.AssertExpectations(t)
-}
-
-// Test indexingHandler HandleWithReply with V1 message
-func TestIndexingHandler_HandleWithReply_V1Message(t *testing.T) {
-	mp, mockMessagingRepo, mockStorageRepo := setupTestMessageProcessor()
-	ctx := context.Background()
-
-	// Test V1 data
-	testData := map[string]any{
-		"action": "create",
-		"data": map[string]any{
-			"id":   "test-123",
-			"name": "Test Project",
-		},
-		"v1_data": map[string]any{
-			"legacy_field": "legacy_value",
-		},
-		"indexing_config": map[string]any{
-			"object_id":              "test-123",
-			"access_check_object":    "project:test-123",
-			"access_check_relation":  "viewer",
-			"history_check_object":   "project:test-123",
-			"history_check_relation": "viewer",
-		},
-	}
-	data, _ := json.Marshal(testData)
-	subject := "lfx.v1.index.project"
-
-	// Mock reply function
-	replyCalled := false
-	replyFunc := func(response []byte) error {
-		replyCalled = true
-		assert.Equal(t, "OK", string(response))
-		return nil
-	}
-
-	// Mock expectations
-	mockStorageRepo.On("Index", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
-	mockMessagingRepo.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(nil)
-
-	// Create handler
-	handler := &indexingHandler{useCase: mp}
-
-	// Execute
-	err := handler.HandleWithReply(ctx, data, subject, replyFunc)
-
-	// Assertions
-	assert.NoError(t, err)
-	assert.True(t, replyCalled)
-	mockStorageRepo.AssertExpectations(t)
 }
 
 // Test indexingHandler HandleWithReply with processing error
@@ -865,7 +761,6 @@ func TestMessageProcessor_IntegrationWorkflow(t *testing.T) {
 
 	// Setup subscription mocks
 	mockMessagingRepo.On("QueueSubscribeWithReply", mock.Anything, constants.AllSubjects, constants.DefaultQueue, mock.Anything).Return(nil)
-	mockMessagingRepo.On("QueueSubscribeWithReply", mock.Anything, constants.AllV1Subjects, constants.DefaultQueue, mock.Anything).Return(nil)
 
 	// Setup storage mocks
 	mockStorageRepo.On("Index", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
@@ -900,26 +795,8 @@ func TestMessageProcessor_IntegrationWorkflow(t *testing.T) {
 	err = mp.ProcessIndexingMessage(ctx, data, "lfx.index.project")
 	require.NoError(t, err)
 
-	// Process V1 message
-	testDataV1 := map[string]any{
-		"action": "create",
-		"data": map[string]any{
-			"id":   "test-456",
-			"name": "Test Project V1",
-		},
-		"v1_data": map[string]any{
-			"legacy_field": "legacy_value",
-		},
-		"indexing_config": map[string]any{
-			"object_id":              "test-456",
-			"access_check_object":    "project:test-456",
-			"access_check_relation":  "viewer",
-			"history_check_object":   "project:test-456",
-			"history_check_relation": "viewer",
-		},
-	}
-	dataV1, _ := json.Marshal(testDataV1)
-	err = mp.ProcessV1IndexingMessage(ctx, dataV1, "lfx.v1.index.project")
+	// Legacy-backed resource names still use the supported platform V2 protocol.
+	err = mp.ProcessIndexingMessage(ctx, data, constants.IndexPrefix+"v1_meeting")
 	require.NoError(t, err)
 
 	// Verify all expectations

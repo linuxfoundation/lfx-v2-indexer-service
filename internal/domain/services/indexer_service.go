@@ -92,19 +92,19 @@ func (s *IndexerService) SetDocIndexer(docIndexer contracts.DocumentIndexer) {
 // TRANSACTION ACTION HELPERS
 // =================
 
-// isCreateAction returns true if this is a create action (both V1 and V2)
+// isCreateAction returns true for a completed create operation.
 func (s *IndexerService) isCreateAction(transaction *contracts.LFXTransaction) bool {
-	return transaction.Action == constants.ActionCreate || transaction.Action == constants.ActionCreated
+	return transaction.Action == constants.ActionCreated
 }
 
-// isUpdateAction returns true if this is an update action (both V1 and V2)
+// isUpdateAction returns true for a completed update operation.
 func (s *IndexerService) isUpdateAction(transaction *contracts.LFXTransaction) bool {
-	return transaction.Action == constants.ActionUpdate || transaction.Action == constants.ActionUpdated
+	return transaction.Action == constants.ActionUpdated
 }
 
-// isDeleteAction returns true if this is a delete action (both V1 and V2)
+// isDeleteAction returns true for a completed delete operation.
 func (s *IndexerService) isDeleteAction(transaction *contracts.LFXTransaction) bool {
-	return transaction.Action == constants.ActionDelete || transaction.Action == constants.ActionDeleted
+	return transaction.Action == constants.ActionDeleted
 }
 
 // =================
@@ -112,9 +112,9 @@ func (s *IndexerService) isDeleteAction(transaction *contracts.LFXTransaction) b
 // =================
 
 // CreateTransactionFromMessage creates a transaction from message data
-func (s *IndexerService) CreateTransactionFromMessage(messageData map[string]any, objectType string, isV1 bool) (*contracts.LFXTransaction, error) {
+func (s *IndexerService) CreateTransactionFromMessage(messageData map[string]any, objectType string) (*contracts.LFXTransaction, error) {
 	logger := s.logger
-	if err := validateEnvelopeAdmission(messageData, isV1); err != nil {
+	if err := validateEnvelopeAdmission(messageData); err != nil {
 		return nil, err
 	}
 
@@ -123,16 +123,14 @@ func (s *IndexerService) CreateTransactionFromMessage(messageData map[string]any
 	if !ok || actionStr == "" {
 		logging.LogError(logger, "Failed to create transaction: missing action",
 			fmt.Errorf("missing or invalid action in message data"),
-			"object_type", objectType,
-			"is_v1", isV1)
+			"object_type", objectType)
 		return nil, fmt.Errorf("missing or invalid action in message data")
 	}
 	action := constants.MessageAction(actionStr)
 
 	logger.Debug("Creating transaction from message",
 		"action", action,
-		"object_type", objectType,
-		"is_v1", isV1)
+		"object_type", objectType)
 
 	// Create transaction directly without constructors
 	transaction := &contracts.LFXTransaction{
@@ -141,12 +139,6 @@ func (s *IndexerService) CreateTransactionFromMessage(messageData map[string]any
 		Data:       messageData["data"],
 		Headers:    make(map[string]string),
 		Timestamp:  time.Now(),
-		IsV1:       isV1,
-	}
-
-	// Set V1 data if this is a V1 transaction
-	if isV1 {
-		s.setV1Data(transaction, messageData)
 	}
 
 	// Parse indexing_config if present (for resource indexing)
@@ -186,24 +178,10 @@ func (s *IndexerService) CreateTransactionFromMessage(messageData map[string]any
 		"transaction_id", s.generateTransactionID(transaction),
 		"action", action,
 		"object_type", objectType,
-		"is_v1", isV1,
 		"tags", transaction.Tags,
 		"header_count", headerCount)
 
 	return transaction, nil
-}
-
-// setV1Data sets V1-specific data on the transaction
-func (s *IndexerService) setV1Data(transaction *contracts.LFXTransaction, messageData map[string]any) {
-	if v1Data, ok := messageData["v1_data"].(map[string]any); ok {
-		transaction.V1Data = v1Data
-		s.logger.Debug("V1 data set on transaction",
-			"object_type", transaction.ObjectType,
-			"v1_data_fields", len(v1Data))
-	} else {
-		s.logger.Debug("No V1 data found in message",
-			"object_type", transaction.ObjectType)
-	}
 }
 
 // ValidateTransactionData validates transaction data
@@ -312,54 +290,22 @@ func (s *IndexerService) ValidateTransactionHeaders(transaction *contracts.LFXTr
 
 	logger.Debug("Validating transaction headers",
 		"transaction_id", transactionID,
-		"is_v1", transaction.IsV1,
 		"header_count", len(transaction.Headers))
 
 	if transaction.Headers == nil {
 		err := fmt.Errorf("headers field is required")
 		logging.LogError(logger, "Transaction header validation failed: missing headers", err,
 			"transaction_id", transactionID,
-			"validation_step", "headers_presence",
-			"is_v1", transaction.IsV1)
+			"validation_step", "headers_presence")
 		return err
 	}
 
-	// Dispatch to version-specific validation
-	var err error
-	if transaction.IsV1 {
-		err = s.validateV1Headers(transaction, transactionID)
-	} else {
-		err = s.validateV2Headers(transaction, transactionID)
-	}
-
-	if err != nil {
+	if err := s.validateV2Headers(transaction, transactionID); err != nil {
 		return err
 	}
 
 	logger.Debug("Transaction header validation completed successfully",
-		"transaction_id", transactionID,
-		"is_v1", transaction.IsV1)
-	return nil
-}
-
-// validateV1Headers validates headers for V1 transactions
-func (s *IndexerService) validateV1Headers(transaction *contracts.LFXTransaction, transactionID string) error {
-	logger := s.logger
-	// V1 transactions don't require authorization headers
-	// They use X-Username and X-Email headers instead
-
-	logger.Debug("Validating V1 headers",
-		"transaction_id", transactionID,
-		"has_x_username", transaction.Headers[constants.HeaderXUsername] != "",
-		"has_x_email", transaction.Headers[constants.HeaderXEmail] != "")
-
-	// Log if V1 headers are present (for debugging)
-	if username := transaction.Headers[constants.HeaderXUsername]; username != "" {
-		logger.Debug("V1 username header found",
-			"transaction_id", transactionID,
-			"username", username)
-	}
-
+		"transaction_id", transactionID)
 	return nil
 }
 
@@ -414,61 +360,23 @@ func (s *IndexerService) ValidateObjectType(transaction *contracts.LFXTransactio
 	return nil
 }
 
-// ValidateTransactionAction validates the transaction action based on transaction version
+// ValidateTransactionAction accepts only completed platform V2 actions.
 func (s *IndexerService) ValidateTransactionAction(transaction *contracts.LFXTransaction) error {
 	logger := s.logger
 	transactionID := s.generateTransactionID(transaction)
 
 	logger.Debug("Validating transaction action",
 		"transaction_id", transactionID,
-		"action", transaction.Action,
-		"is_v1", transaction.IsV1)
+		"action", transaction.Action)
 
-	// Dispatch to version-specific validation
-	var err error
-	if transaction.IsV1 {
-		err = s.validateV1Action(transaction, transactionID)
-	} else {
-		err = s.validateV2Action(transaction, transactionID)
-	}
-
-	if err != nil {
+	if err := s.validateV2Action(transaction, transactionID); err != nil {
 		return err
 	}
 
 	logger.Debug("Transaction action validation completed successfully",
 		"transaction_id", transactionID,
-		"action", transaction.Action,
-		"is_v1", transaction.IsV1)
-	return nil
-}
-
-// validateV1Action validates actions for V1 transactions
-func (s *IndexerService) validateV1Action(transaction *contracts.LFXTransaction, transactionID string) error {
-	logger := s.logger
-	// V1 transactions are sent by the v1-sync-helper service
-	// These use present-tense actions to match the original V1 API format
-	// Subject pattern: lfx.v1.index.{object_type}
-
-	logger.Debug("Validating V1 action",
-		"transaction_id", transactionID,
 		"action", transaction.Action)
-
-	switch transaction.Action {
-	case constants.ActionCreate, constants.ActionUpdate, constants.ActionDelete:
-		logger.Debug("V1 action validation passed",
-			"transaction_id", transactionID,
-			"action", transaction.Action)
-		return nil
-	default:
-		err := fmt.Errorf("invalid V1 transaction action: %s", transaction.Action)
-		logging.LogError(logger, "V1 action validation failed", err,
-			"transaction_id", transactionID,
-			"validation_step", "action_check",
-			"action", transaction.Action,
-			"valid_actions", []constants.MessageAction{constants.ActionCreate, constants.ActionUpdate, constants.ActionDelete})
-		return err
-	}
+	return nil
 }
 
 // validateV2Action validates actions for V2 transactions
@@ -496,20 +404,6 @@ func (s *IndexerService) validateV2Action(transaction *contracts.LFXTransaction,
 			"action", transaction.Action,
 			"valid_actions", []constants.MessageAction{constants.ActionCreated, constants.ActionUpdated, constants.ActionDeleted})
 		return err
-	}
-}
-
-// GetCanonicalAction returns the canonical (past-tense) action for indexing
-func (s *IndexerService) GetCanonicalAction(transaction *contracts.LFXTransaction) constants.MessageAction {
-	switch transaction.Action {
-	case constants.ActionCreate, constants.ActionCreated:
-		return constants.ActionCreated
-	case constants.ActionUpdate, constants.ActionUpdated:
-		return constants.ActionUpdated
-	case constants.ActionDelete, constants.ActionDeleted:
-		return constants.ActionDeleted
-	default:
-		return transaction.Action
 	}
 }
 
@@ -542,8 +436,7 @@ func (s *IndexerService) EnrichTransaction(ctx context.Context, transaction *con
 	logger.Debug("Starting transaction enrichment",
 		"transaction_id", transactionID,
 		"action", transaction.Action,
-		"object_type", transaction.ObjectType,
-		"is_v1", transaction.IsV1)
+		"object_type", transaction.ObjectType)
 
 	// Validate transaction action
 	if err := s.ValidateTransactionAction(transaction); err != nil {
@@ -575,14 +468,14 @@ func (s *IndexerService) EnrichTransaction(ctx context.Context, transaction *con
 	logger.Debug("Data parsing completed", "transaction_id", transactionID)
 
 	// For create/update actions, indexing_config is required before we do principal work
-	canonicalAction := s.GetCanonicalAction(transaction)
+	canonicalAction := transaction.Action
 	if canonicalAction == constants.ActionCreated || canonicalAction == constants.ActionUpdated {
 		if transaction.IndexingConfig == nil {
 			return fmt.Errorf("indexing_config is required for object_type %q", transaction.ObjectType)
 		}
 	}
 
-	// Parse principals based on transaction version
+	// Parse authenticated platform V2 principals.
 	principals, err := s.parsePrincipals(ctx, transaction)
 	if err != nil {
 		return fmt.Errorf("failed to parse principals: %w", err)
@@ -627,7 +520,6 @@ func (s *IndexerService) GenerateTransactionBody(ctx context.Context, transactio
 
 	body := &contracts.TransactionBody{
 		ObjectType: transaction.ObjectType,
-		V1Data:     transaction.V1Data,
 		Tags:       transaction.Tags,
 	}
 
@@ -636,7 +528,7 @@ func (s *IndexerService) GenerateTransactionBody(ctx context.Context, transactio
 	body.Latest = &latest
 
 	// Set fields based on action
-	canonicalAction := s.GetCanonicalAction(transaction)
+	canonicalAction := transaction.Action
 	logger.Debug("Using canonical action",
 		"transaction_id", transactionID,
 		"original_action", transaction.Action,
@@ -746,7 +638,6 @@ func (s *IndexerService) ProcessTransaction(ctx context.Context, transaction *co
 		"transaction_id", transactionID,
 		"action", transaction.Action,
 		"object_type", transaction.ObjectType,
-		"is_v1", transaction.IsV1,
 		"index", index)
 
 	// Enrich the transaction
@@ -805,7 +696,7 @@ func (s *IndexerService) ProcessTransaction(ctx context.Context, transaction *co
 
 	// Publish post-indexing event. Non-blocking — failure is logged but does not
 	// affect the result of the indexing operation itself.
-	s.publishIndexingEvent(ctx, body, s.GetCanonicalAction(transaction))
+	s.publishIndexingEvent(ctx, body, transaction.Action)
 
 	return result, nil
 }
@@ -1060,24 +951,14 @@ func (s *IndexerService) setPrincipalFields(body *contracts.TransactionBody, pri
 	}
 }
 
-// parsePrincipals parses principals based on transaction version
+// parsePrincipals parses authenticated platform V2 principals.
 func (s *IndexerService) parsePrincipals(ctx context.Context, transaction *contracts.LFXTransaction) ([]contracts.Principal, error) {
 	logger := logging.FromContext(ctx, s.logger)
 	transactionID := s.generateTransactionID(transaction)
 
 	logger.Debug("Parsing principals",
 		"transaction_id", transactionID,
-		"is_v1", transaction.IsV1,
 		"header_count", len(transaction.Headers))
-
-	// Dispatch to version-specific parsing
-	if transaction.IsV1 {
-		principals := s.parseV1Principals(transaction, transactionID)
-		logger.Debug("V1 principals parsed",
-			"transaction_id", transactionID,
-			"principal_count", len(principals))
-		return principals, nil
-	}
 
 	principals, err := s.parseV2Principals(ctx, transaction, transactionID)
 	if err != nil {
@@ -1088,38 +969,6 @@ func (s *IndexerService) parsePrincipals(ctx context.Context, transaction *contr
 		"transaction_id", transactionID,
 		"principal_count", len(principals))
 	return principals, nil
-}
-
-// parseV1Principals converts V1 headers to Principal structure
-func (s *IndexerService) parseV1Principals(transaction *contracts.LFXTransaction, transactionID string) []contracts.Principal {
-	logger := s.logger
-	var principal contracts.Principal
-
-	for header, value := range transaction.Headers {
-		header = strings.ToLower(header)
-		switch header {
-		case constants.HeaderXUsername:
-			principal.Principal = value
-			logger.Debug("Found V1 username header",
-				"transaction_id", transactionID,
-				"username", value)
-		case constants.HeaderXEmail:
-			principal.Email = value
-			logger.Debug("Found V1 email header",
-				"transaction_id", transactionID,
-				"email", value)
-		}
-	}
-
-	// If there was no X-Username header, return empty set
-	if principal.Principal == "" {
-		logger.Debug("No V1 username header found, returning empty principals",
-			"transaction_id", transactionID)
-		return nil
-	}
-
-	// Return the parsed principal as a slice of 1
-	return []contracts.Principal{principal}
 }
 
 // parseV2Principals parses principals for V2 transactions
@@ -1236,7 +1085,6 @@ func (s *IndexerService) buildTransactionBodyFromIndexingConfig(
 		Data:       data,
 		ObjectID:   config.ObjectID,
 		ObjectRef:  fmt.Sprintf("%s:%s", transaction.ObjectType, config.ObjectID),
-		V1Data:     transaction.V1Data,
 	}
 
 	// Set latest flag (server-side field)
@@ -1269,7 +1117,7 @@ func (s *IndexerService) buildTransactionBodyFromIndexingConfig(
 	body.Contacts = config.Contacts
 
 	// Set timestamp and principal fields based on action (server-side fields)
-	canonicalAction := s.GetCanonicalAction(transaction)
+	canonicalAction := transaction.Action
 	switch canonicalAction {
 	case constants.ActionCreated:
 		body.CreatedAt = &transaction.Timestamp

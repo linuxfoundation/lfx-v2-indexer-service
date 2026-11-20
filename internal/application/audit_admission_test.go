@@ -17,7 +17,7 @@ import (
 )
 
 func TestIndexingHandler_AuditAdmission(t *testing.T) {
-	for _, subject := range []string{constants.ProjectSubject, constants.V1ProjectSubject} {
+	for _, subject := range []string{constants.ProjectSubject, "unsupported.project"} {
 		t.Run(subject, func(t *testing.T) {
 			processor, messaging, storage := setupTestMessageProcessor()
 			handler := indexingHandler{useCase: processor}

@@ -13,7 +13,7 @@ import (
 
 // validateEnvelopeAdmission reserves the version/audit discriminator before any
 // legacy transaction construction. Version 2 must never reach current-only writes.
-func validateEnvelopeAdmission(message map[string]any, isV1 bool) error {
+func validateEnvelopeAdmission(message map[string]any) error {
 	for key := range message {
 		if (strings.EqualFold(key, "schema_version") && key != "schema_version") ||
 			(strings.EqualFold(key, "audit") && key != "audit") {
@@ -27,9 +27,6 @@ func validateEnvelopeAdmission(message map[string]any, isV1 bool) error {
 			return fmt.Errorf("audit requires schema_version 2")
 		}
 		return nil
-	}
-	if isV1 {
-		return fmt.Errorf("versioned audit envelopes are not supported on V1 subjects")
 	}
 	encoded, err := json.Marshal(raw)
 	if err != nil || raw == nil {
@@ -45,5 +42,5 @@ func validateEnvelopeAdmission(message map[string]any, isV1 bool) error {
 	if !hasAudit || message["audit"] == nil {
 		return fmt.Errorf("schema_version 2 requires audit")
 	}
-	return fmt.Errorf("schema_version 2 processing is not enabled: audit persistence and publisher authorization are not implemented")
+	return fmt.Errorf("schema_version 2 processing is not enabled on the current-only transaction path")
 }

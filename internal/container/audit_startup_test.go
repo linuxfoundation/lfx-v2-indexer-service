@@ -122,7 +122,7 @@ func TestAuditStartup_FailClosed(t *testing.T) {
 			require.NoError(t, err)
 			legacy := []byte(`{"action":"updated","data":{"uid":"fixture-resource"}}`)
 			require.ErrorContains(t, c.MessageProcessor.ProcessIndexingMessage(context.Background(), legacy, constants.IndexPrefix+"fixture_resource"), "requires schema_version 2")
-			require.ErrorContains(t, c.MessageProcessor.ProcessV1IndexingMessage(context.Background(), legacy, constants.FromV1Prefix+"fixture_resource"), "rejects platform V1")
+			require.ErrorContains(t, c.MessageProcessor.ProcessIndexingMessage(context.Background(), legacy, "unsupported.fixture_resource"), "invalid V2 subject")
 		})
 	}
 }

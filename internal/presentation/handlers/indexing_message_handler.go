@@ -8,22 +8,23 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 
-	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/application"
-	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
 )
 
-// IndexingMessageHandler handles both V2 and V1 indexing messages from NATS
+type indexingMessageProcessor interface {
+	ProcessIndexingMessage(ctx context.Context, data []byte, subject string) error
+}
+
+// IndexingMessageHandler handles platform V2 indexing messages from NATS.
 // Consolidated to eliminate code duplication and over-engineering
 // Following clean architecture: only handles presentation concerns (NATS protocol)
 type IndexingMessageHandler struct {
-	messageProcessor *application.MessageProcessor
+	messageProcessor indexingMessageProcessor
 }
 
 // NewIndexingMessageHandler creates a new unified indexing message handler
-func NewIndexingMessageHandler(messageProcessor *application.MessageProcessor) *IndexingMessageHandler {
+func NewIndexingMessageHandler(messageProcessor indexingMessageProcessor) *IndexingMessageHandler {
 	return &IndexingMessageHandler{
 		messageProcessor: messageProcessor,
 	}
@@ -31,25 +32,12 @@ func NewIndexingMessageHandler(messageProcessor *application.MessageProcessor) *
 
 // Handle processes indexing messages (legacy interface for backwards compatibility)
 func (h *IndexingMessageHandler) Handle(ctx context.Context, data []byte, subject string) error {
-	// Check for V1 messages
-	if strings.HasPrefix(subject, constants.FromV1Prefix) {
-		return h.messageProcessor.ProcessV1IndexingMessage(ctx, data, subject)
-	}
-	// Default to V2 message processing
 	return h.messageProcessor.ProcessIndexingMessage(ctx, data, subject)
 }
 
 // HandleWithReply processes indexing messages with NATS reply support
 func (h *IndexingMessageHandler) HandleWithReply(ctx context.Context, data []byte, subject string, reply func([]byte) error) error {
-	// Determine message type and process accordingly
-	var err error
-	if strings.HasPrefix(subject, constants.FromV1Prefix) {
-		// Process V1 message
-		err = h.messageProcessor.ProcessV1IndexingMessage(ctx, data, subject)
-	} else {
-		// Process V2 message
-		err = h.messageProcessor.ProcessIndexingMessage(ctx, data, subject)
-	}
+	err := h.messageProcessor.ProcessIndexingMessage(ctx, data, subject)
 
 	if err != nil {
 		// Handle error response using integrated error handling with context

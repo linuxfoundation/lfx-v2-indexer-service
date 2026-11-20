@@ -14,8 +14,6 @@ nats:
   connectionTimeout: "10s"
   # indexingSubject is the NATS subject for indexing messages
   indexingSubject: "lfx.index.>"
-  # v1IndexingSubject is the NATS subject for v1 indexing messages
-  v1IndexingSubject: "lfx.v1.index.>"
   # drainTimeout is the timeout for draining NATS connections. Must exceed
   # opensearch.timeout + opensearch.batchMaxWait plus a safety margin
   # (validated at startup) — a handler can be blocked in a BatchIndexer
@@ -50,8 +48,8 @@ nats:
 
   # stream_index_events persists indexing messages so the indexer-consumer
   # can replay and retry failed deliveries.
-  # Stream subjects are derived from nats.indexingSubject and
-  # nats.v1IndexingSubject to keep them in sync with the consumer filters.
+  # The stream subject is derived from nats.indexingSubject to keep it in
+  # sync with the consumer filter.
   # Stream name is hardcoded in the template (must match
   # constants.StreamNameIndexEvents = "index-events" in the application).
   stream_index_events:

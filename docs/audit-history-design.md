@@ -85,11 +85,12 @@ durable repair source. None of these components establish an audit history start
   fields. UID-only deletes still work, without invented scope or authorization.
   Fully parsed configs with mismatched IDs warn and fall back to a legacy
   tombstone; malformed config shapes or missing required config fields fail
-  before writing. Legacy envelope tags and V1 data remain unchanged on tombstones
+  before writing. Legacy envelope tags remain unchanged on tombstones
   and post-indexing events, but are not an approved audit-history payload.
 - Audited mutation deletes require complete matching config, scope, and approved before
   snapshots. They never use the legacy mismatch/UID-only fallback. Adopted types
-  reject both legacy envelope writes and platform-V1 writes.
+  reject unversioned current-resource writes. Unsupported protocol subjects are
+  rejected independently of audit adoption.
 - Audited cleanup requests retain a canonical-visibility requirement across
   up to 12 delayed visibility retries. An unrefreshed canonical tombstone cannot
   cause the janitor to declare a lone legacy live copy clean. If the canonical

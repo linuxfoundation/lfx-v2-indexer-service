@@ -7,9 +7,8 @@ This is the **owner document** for the indexer event envelope, the OpenSearch do
 shape, and the rules the indexer enforces on incoming messages. Other services link
 here rather than copy.
 
-The indexer consumes the configured indexing subjects (defaults: `lfx.index.>` for
-V2 and `lfx.v1.index.>` for V1; overridable via `nats.indexingSubject` and
-`nats.v1IndexingSubject` Helm values) from a durable JetStream consumer
+The indexer consumes the platform V2 indexing subject (default `lfx.index.>`,
+overridable via `nats.indexingSubject`) from a durable JetStream consumer
 (`index-events` stream), writes documents into
 OpenSearch, and emits domain events on `lfx.{object_type}.{action}`. It is fully
 generic; resource services tell it everything it needs via the message payload.
@@ -33,7 +32,7 @@ the audit contract for coordinated read-side rollout and outstanding cleanup.
 
 `schema_version` and `audit` are reserved, lowercase discriminator fields. A
 present audit block without a version (including null), unsupported/invalid
-versions, and versioned traffic on platform V1 subjects are rejected rather than
+versions, and unsupported subjects are rejected rather than
 silently treated as legacy. This protects only consumers containing this guard;
 do not publish audited messages to older replicas during a rolling deployment.
 Before deploying the new reservation guard, complete the source/staging checks
@@ -54,10 +53,11 @@ lfx.index.survey
 lfx.index.project_settings
 ```
 
-V1 publishers use `lfx.v1.index.{resource_type}` and present-tense actions
-(`create`/`update`/`delete`); V2 uses past-tense (`created`/`updated`/`deleted`).
-The service subscribes to `lfx.v1.index.>` for legacy traffic. Use the constants
-in `pkg/constants/` rather than string literals.
+Only past-tense actions (`created`/`updated`/`deleted`) are accepted. Use the
+constants in `pkg/constants/` rather than string literals. Unversioned current
+messages remain supported; retiring the old platform protocol does not require
+audit-envelope adoption. Legacy-backed resource types such as `v1_meeting` still
+publish on `lfx.index.v1_meeting` and are unaffected.
 
 ## Envelope: `IndexerMessageEnvelope`
 
@@ -117,11 +117,12 @@ Malformed or incomplete configs still reject the delete and can leave the prior
 live document indexed until the publisher corrects and republishes the message;
 the UID-only fallback applies only to a fully parsed config with a mismatched ID.
 
-Existing top-level envelope `Tags` and V1 `v1_data` handling is unchanged: those
-legacy fields still flow into tombstones and post-indexing events. The exclusions
-above apply to fields copied from `IndexingConfig`, not a new payload-scrubbing
-policy. This compatibility behavior is not permission to copy legacy payloads
-into the proposed separate audit-history store.
+Existing top-level envelope `Tags` still flow into tombstones and post-indexing
+events. The exclusions above apply to fields copied from `IndexingConfig`, not
+a new payload-scrubbing policy. This is not permission to copy arbitrary payloads
+into the separate audit-history store. The retired raw platform-record payload
+is no longer represented in transactions, emitted events or new mapping templates;
+existing mapped fields may remain unused without an index rebuild.
 
 UID-only deletes remain compatible, but have no history authorization or scope
 metadata. These fields do not by themselves preserve revisions or establish
@@ -265,13 +266,12 @@ document. The stored `object_ref` and resource ID remain unchanged.
 | `created_by_principals`, `updated_by_principals`, `deleted_by_principals` | parsed principals | Principal IDs for filtering/audit |
 | `created_by_emails`, `updated_by_emails`, `deleted_by_emails` | parsed principals | Principal email addresses |
 | `data` | `IndexerMessageEnvelope.Data` on create/update | Full resource data (schema-free `flat_object`) |
-| `v1_data` | V1 payload only | Legacy Platform DB data retained for V1 imports |
 
 ### Field-naming rules
 
 - All top-level field names are `snake_case`. No camelCase, no dashes, no spaces.
 - Reserve `object_*`, `access_check_*`, `history_check_*`, `parent_refs`, `latest`,
-  `sort_name`, `name_and_aliases`, `public`, `data`, `v1_data`, `tags`, `fulltext`,
+  `sort_name`, `name_and_aliases`, `public`, `data`, `tags`, `fulltext`,
   `contacts`, and the audit fields (`created_*`, `updated_*`, `deleted_*`) for this
   contract. Resource-specific data lives inside `data`.
 - Anything in `data` is dynamic. OpenSearch maps new keys via `flat_object`, but

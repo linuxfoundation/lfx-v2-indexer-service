@@ -32,7 +32,6 @@ spec:
     # Mirror the application subject settings so a single values override
     # keeps the stream and the consumer filter in sync.
     - {{ .Values.nats.indexingSubject }}
-    - {{ .Values.nats.v1IndexingSubject }}
   retention: {{ .Values.nats.stream_index_events.retention }}
   maxAge: {{ .Values.nats.stream_index_events.maxAge }}
   maxBytes: {{ .Values.nats.stream_index_events.maxBytes }}

@@ -12,18 +12,16 @@ events.
 ## indexer-service subscriptions
 
 The deployed consumer uses the shared `index-events` JetStream stream and
-`indexer-consumer` durable consumer, filtering both versioned subject patterns.
+`indexer-consumer` durable consumer, filtering only the platform V2 subject pattern.
 Core-NATS queue/reply helpers remain for compatibility, not the deployed audit path.
 
 | Subject pattern | Version | Legacy helper queue group | Auth |
 | --- | --- | --- | --- |
 | `lfx.index.>` | V2 | `lfx.indexer.queue` | JWT (`authorization` header key) |
-| `lfx.v1.index.>` | V1 (legacy) | `lfx.indexer.queue` | `x-username` / `x-email` headers |
 
-Subject prefix selects the message version. V2 messages use past-tense actions
-(`created`, `updated`, `deleted`); V1 messages use present-tense actions. Both
-subjects and the queue group are overridable via `NATS_INDEXING_SUBJECT`,
-`NATS_V1_INDEXING_SUBJECT`, and `NATS_QUEUE`.
+V2 messages use past-tense actions (`created`, `updated`, `deleted`). Audit
+envelope versioning is independent of this subject namespace. The subject and
+queue group are overridable via `NATS_INDEXING_SUBJECT` and `NATS_QUEUE`.
 
 ## Reply and outbound events
 
