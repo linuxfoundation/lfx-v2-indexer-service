@@ -127,6 +127,20 @@ func TestAuditChartHookSettings(t *testing.T) {
 			require.NoError(t, json.Unmarshal(decoded, &body))
 			require.Equal(t, 3, body.Settings.Index.Shards)
 			require.Zero(t, body.Settings.Index.Replicas)
+			if file == "job.yaml" {
+				var mapping struct {
+					Mappings struct {
+						Properties map[string]json.RawMessage `json:"properties"`
+					} `json:"mappings"`
+				}
+				require.NoError(t, json.Unmarshal(decoded, &mapping))
+				for _, action := range []string{"created", "updated", "deleted"} {
+					require.Contains(t, mapping.Mappings.Properties, action+"_at")
+					for _, suffix := range []string{"_by", "_by_principals", "_by_emails"} {
+						require.NotContains(t, mapping.Mappings.Properties, action+suffix)
+					}
+				}
+			}
 		})
 	}
 }

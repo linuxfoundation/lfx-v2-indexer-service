@@ -88,6 +88,12 @@ func TestAuditWorkflow_AttributionReplayAndCredentialStripping(t *testing.T) {
 		require.NotContains(t, string(notifier.Last), value)
 	}
 	require.NotContains(t, string(notifier.Last), email)
+	require.NotContains(t, string(notifier.Last), "user:testuser01")
+	for _, prefix := range []string{"created_by", "updated_by", "deleted_by"} {
+		for _, suffix := range []string{"", "_principals", "_emails"} {
+			require.NotContains(t, string(notifier.Last), `"`+prefix+suffix+`"`)
+		}
+	}
 	auth.AssertExpectations(t)
 	directory.AssertExpectations(t)
 }

@@ -41,17 +41,8 @@
       "audit_projection_order_time": { "type": "keyword", "index": false },
       "audit_projection_order_key": { "type": "keyword", "index": false },
       "created_at": { "type": "date" },
-      "created_by": { "type": "keyword" },
-      "created_by_principals": { "type": "keyword" },
-      "created_by_emails": { "type": "keyword" },
       "updated_at": { "type": "date" },
-      "updated_by": { "type": "keyword" },
-      "updated_by_principals": { "type": "keyword" },
-      "updated_by_emails": { "type": "keyword" },
       "deleted_at": { "type": "date" },
-      "deleted_by": { "type": "keyword" },
-      "deleted_by_principals": { "type": "keyword" },
-      "deleted_by_emails": { "type": "keyword" },
       "data": {
         "type": "flat_object"
       },
