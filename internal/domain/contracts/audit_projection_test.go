@@ -24,7 +24,6 @@ func TestAuditProjectionBody(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"first", "shared", "second"}, body.Tags)
 	require.Equal(t, update.Audit.OccurredAt, *body.UpdatedAt)
-	require.Equal(t, []string{"service:fixture"}, body.UpdatedByPrincipals)
 	require.Equal(t, "fixture_resource:fixture-resource", body.ObjectRef)
 	encoded, err := json.Marshal(body)
 	require.NoError(t, err)
@@ -46,9 +45,8 @@ func TestAuditProjectionBody(t *testing.T) {
 	require.Empty(t, tombstone.Fulltext)
 }
 
-// TestAuditProjectionBody_DelegatedAttribution retains both actor refs without
-// duplicate identities, shared mutable slices, or private profiles in events.
-func TestAuditProjectionBody_DelegatedAttribution(t *testing.T) {
+// Current documents and events contain no audit identity, even for delegation.
+func TestAuditProjectionBody_NoCurrentAttribution(t *testing.T) {
 	for _, action := range []constants.MessageAction{constants.ActionCreated, constants.ActionUpdated, constants.ActionDeleted} {
 		for _, delegated := range []bool{false, true} {
 			name := string(action) + "/same-actor"
@@ -63,33 +61,34 @@ func TestAuditProjectionBody_DelegatedAttribution(t *testing.T) {
 				}
 				e.Audit.Attribution.ActorRef = "service:fixture"
 				e.Audit.Attribution.EffectiveActorRef = "service:fixture"
-				want := []string{"service:fixture"}
 				if delegated {
 					e.Audit.Attribution.EffectiveActorRef = "user:delegated-fixture"
-					want = append(want, "user:delegated-fixture")
 				}
 				private := "private-profile-marker"
 				e.Audit.Attribution.ActorJWT = private
 				e.Audit.Attribution.EffectiveActorJWT = private
 				body, err := AuditProjectionBody(e, "fixture_resource")
 				require.NoError(t, err)
-				var by, principals []string
 				switch action {
 				case constants.ActionCreated:
-					by, principals = body.CreatedBy, body.CreatedByPrincipals
+					require.Equal(t, e.Audit.OccurredAt.UTC(), *body.CreatedAt)
+					require.Equal(t, body.CreatedAt, body.UpdatedAt)
 				case constants.ActionUpdated:
-					by, principals = body.UpdatedBy, body.UpdatedByPrincipals
+					require.Equal(t, e.Audit.OccurredAt.UTC(), *body.UpdatedAt)
 				case constants.ActionDeleted:
-					by, principals = body.DeletedBy, body.DeletedByPrincipals
+					require.Equal(t, e.Audit.OccurredAt.UTC(), *body.DeletedAt)
 				}
-				require.Equal(t, want, by)
-				require.Equal(t, want, principals)
 				encoded, err := json.Marshal(IndexingEvent{Action: action, Body: body})
 				require.NoError(t, err)
+				for _, prefix := range []string{"created_by", "updated_by", "deleted_by"} {
+					for _, suffix := range []string{"", "_principals", "_emails"} {
+						require.NotContains(t, string(encoded), `"`+prefix+suffix+`"`)
+					}
+				}
+				require.NotContains(t, string(encoded), "service:fixture")
+				require.NotContains(t, string(encoded), "user:delegated-fixture")
 				require.NotContains(t, string(encoded), private)
 				require.NotContains(t, string(encoded), "actor_profile")
-				by[0] = "changed"
-				require.Equal(t, "service:fixture", principals[0])
 				require.Equal(t, "service:fixture", e.Audit.Attribution.ActorRef)
 			})
 		}

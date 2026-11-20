@@ -22,7 +22,7 @@ A high-performance, indexer service for the LFX V2 platform that processes resou
 The LFX V2 Indexer Service is responsible for:
 
 - **Message Processing**: NATS stream processing with queue group load balancing across multiple instances
-- **Transaction Enrichment**: JWT authentication, data validation, and principal parsing with delegation support
+- **Transaction Enrichment**: JWT authentication and data validation; audited actor verification is separate from current documents
 - **Search Indexing**: OpenSearch document writes under the `object_ref` document ID
 - **Data Consistency**: Event-driven janitor service for conflict resolution
 - **Envelope Support**: Existing unversioned V2 messages and opt-in audit envelopes, both using past-tense actions
@@ -281,10 +281,10 @@ sequenceDiagram
     Note over IS: Consolidated processing:<br/>• EnrichTransaction() with action validation<br/>• GenerateTransactionBody()<br/>• Index document<br/>(Action helpers moved to service layer)
 
     %% Authentication & Authorization
-    IS->>AR: ParsePrincipals(ctx, headers)
+    IS->>AR: ValidateToken(ctx, authorization)
     AR->>JWT: ValidateToken(ctx, token)
     JWT-->>AR: Principal{Principal, Email}
-    AR-->>IS: []Principal with delegation support
+    AR-->>IS: Validated credential (identity not retained in current body)
 
     %% Validation & Body Generation
     IS->>IS: EnrichTransaction()<br/>ValidateObjectType()<br/>GenerateTransactionBody()
@@ -584,7 +584,7 @@ Quick example:
 **Key Benefits of `indexing_config`:**
 - ✅ Full control over indexing behavior and access control
 - ✅ No server-side resource knowledge required — any `object_type` is accepted
-- ✅ Server automatically sets timestamps and principal fields
+- ✅ Server automatically sets timestamps; attribution stays in private audit history
 
 See the **[Client Guide](docs/client-guide.md)** for complete documentation.
 
@@ -716,7 +716,7 @@ LOG_LEVEL=debug make run
 
 - **Heimdall Integration**: All messages validated against JWT service
 - **Multiple Audiences**: Configurable audience validation
-- **Principal Parsing**: `authorization` header and `x-on-behalf-of` delegation support
+- **Authentication**: Signed `authorization` JWT required before current writes; delegated actor verification belongs to the audit-history workflow
 - **Machine User Detection**: `@clients` suffix identification
 
 **Input Validation:**

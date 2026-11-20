@@ -143,7 +143,7 @@ central `/lfx-skills:lfx-platform-architecture` skill.
 **Authentication**:
 
 - V2: JWT tokens via the lower-case `authorization` header key in the NATS JSON envelope (validated against Heimdall)
-- Delegation: `x-on-behalf-of` support
+- Current writes do not collect `x-on-behalf-of` identities or populate attribution fields. Delegated actor evidence belongs in `audit.attribution` under the audited workflow's separate verification policy.
 
 **Configuration**: CLI flags > Environment variables > Defaults
 

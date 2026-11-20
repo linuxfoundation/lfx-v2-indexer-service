@@ -190,7 +190,7 @@ have stricter requirements in the version 2 contract.
 The server will:
 
 - Use the provided config directly
-- Set server-side fields: `latest`, timestamps, and principals
+- Set server-side fields: `latest` and action timestamps (not attribution)
 - Index the document with your exact specifications
 
 ### Literal Values in `indexing_config`
@@ -288,15 +288,6 @@ These fields are **always set by the server** and should **not** be included in 
 | `created_at` | Timestamp for create actions | Server (from message timestamp) |
 | `updated_at` | Timestamp for update actions | Server (from message timestamp) |
 | `deleted_at` | Timestamp for delete actions | Server (from message timestamp) |
-| `created_by` | Principal(s) who created the resource | Server (from auth headers) |
-| `updated_by` | Principal(s) who updated the resource | Server (from auth headers) |
-| `deleted_by` | Principal(s) who deleted the resource | Server (from auth headers) |
-| `created_by_principals` | Principal IDs only | Server (extracted from tokens) |
-| `updated_by_principals` | Principal IDs only | Server (extracted from tokens) |
-| `deleted_by_principals` | Principal IDs only | Server (extracted from tokens) |
-| `created_by_emails` | Email addresses only | Server (extracted from tokens) |
-| `updated_by_emails` | Email addresses only | Server (extracted from tokens) |
-| `deleted_by_emails` | Email addresses only | Server (extracted from tokens) |
 
 ## Examples
 
@@ -433,7 +424,9 @@ reuse those payloads as approved version 2 snapshots.
 2. **Token Requirements**:
    - Must be a valid JWT token
    - Validated against Heimdall service
-   - Used to extract principal information for audit fields
+   - Authenticates current writes; invalid or expired credentials reject processing
+   - Does not populate top-level current-document attribution; audit identity is
+     retained only in private history through the separate audit workflow
 
 ### Error Handling
 
@@ -598,12 +591,14 @@ consumer processing.
 
 ### Issue: Document missing server-side fields
 
-**Problem**: `latest`, timestamp, or principal fields are missing in OpenSearch.
+**Problem**: `latest` or timestamp fields are missing in OpenSearch.
 
 **Solution**: Confirm successful processing in the consumer's operational evidence
 and the indexed result; a publish acknowledgment is not processing confirmation.
 Create/update documents get `created_at` or `updated_at`; delete documents get
-`deleted_at`. Principal fields require a valid lower-case `authorization` header.
+`deleted_at`. Top-level attribution fields (`created_by*`, `updated_by*`, and
+`deleted_by*`) are intentionally absent from current documents and event bodies.
+The lower-case `authorization` credential is still validated before writing.
 Only the platform V2 protocol and past-tense actions are supported.
 
 ### Issue: "indexing_config is required" error

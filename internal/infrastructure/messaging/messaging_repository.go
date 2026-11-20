@@ -725,7 +725,7 @@ func (r *MessagingRepository) ValidateToken(ctx context.Context, token string) (
 		return nil, err
 	}
 
-	r.logger.Debug("Token validation delegation completed successfully", "principal", principal.Principal)
+	r.logger.Debug("Token validation delegation completed successfully")
 	return principal, nil
 }
 
