@@ -71,3 +71,26 @@ func TestContainer_InitializeDelivery_FGAWriterNotConfigured(t *testing.T) {
 	}
 	c.DeliveryDispatcher.Wait()
 }
+
+func TestContainer_InitializeDelivery_FGAWriterFromEnv(t *testing.T) {
+	t.Setenv("OPENFGA_API_URL", "http://127.0.0.1:1")
+	t.Setenv("OPENFGA_STORE_ID", "store-under-test")
+	repository := mocks.NewMockMessagingRepository()
+	processor := application.NewMessageProcessor(nil, repository, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	c := &Container{
+		Logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Config:              &config.AppConfig{NATS: config.NATSConfig{IndexerIndexSubject: constants.AllIndexerIndexSubjects, Queue: constants.DefaultQueue, WorkerCount: 1, RequestTimeout: time.Second}},
+		MessagingRepository: repository,
+		MessageProcessor:    processor,
+	}
+	c.initializeDelivery()
+	require.NotNil(t, c.fgaWriter)
+	require.Same(t, c.fgaWriter, c.FGAWriter)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err := c.FGAWriter.Apply(ctx, "fixture_resource", []byte(`{"object_type":"fixture_resource","operation":"delete_access","data":{"uid":"r1"}}`))
+	require.Error(t, err)
+	require.NotErrorIs(t, err, contracts.ErrFGANotConfigured)
+	c.fgaWriter.Close()
+}

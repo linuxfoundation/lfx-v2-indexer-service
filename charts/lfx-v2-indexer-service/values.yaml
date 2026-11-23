@@ -371,6 +371,18 @@ cache:
     # it to "" to authenticate as the default user with the password only
     usernameKey: username
 
+# openfga is the OpenFGA server the indexer writes tuples to for the fga half
+# of lfx.indexer.index.* requests. It is never required: with an empty apiUrl,
+# or while the server is unreachable, those requests reply transient and
+# index-only requests are unaffected.
+openfga:
+  # apiUrl is the OpenFGA HTTP API; empty turns the FGA half off
+  apiUrl: "http://lfx-platform-openfga.lfx.svc.cluster.local:8080"
+  # storeName is the store looked up by name when storeId is empty
+  storeName: lfx-core
+  # storeId skips the lookup by name when set
+  storeId: ""
+
 # messaging is the configuration for messaging
 messaging:
   # queue is the NATS queue name

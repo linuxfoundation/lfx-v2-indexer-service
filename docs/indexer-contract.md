@@ -435,9 +435,24 @@ missing `indexing_config.object_id`, an FGA-only request without
 from (for example an unknown action). Errors from storage, authentication or
 other dependencies of the index half are `transient`.
 
-Until the indexer has an OpenFGA connection, every request carrying `fga`
-replies `ERROR: transient: fga: fga writer is not configured`. Index-only
-requests are unaffected.
+The FGA half writes to the OpenFGA server at `OPENFGA_API_URL`, in the store
+named `OPENFGA_STORE_NAME` (default `lfx-core`, looked up in the background at
+startup) or `OPENFGA_STORE_ID`. Its write semantics are lfx-v2-fga-sync's:
+
+- The tuples are written on `fga.object_type`, which may differ from the
+  subject's object type (a `key_contact` request writes on
+  `project_membership`).
+- `relations` values are usernames; the indexer adds the `user:` prefix.
+- Tuples OpenFGA refuses with a validation error are dropped and the rest are
+  written, as fga-sync does.
+- The payloads fga-sync terminates as invalid reply `rejected`: an empty
+  `object_type`, an unknown `operation`, malformed `data`, a missing `uid` or
+  `username`, empty `relations` or an empty relation name on `member_put`,
+  and a reference with an empty type or id. Every other OpenFGA failure is
+  `transient`.
+
+Without `OPENFGA_API_URL`, or until the store is found, every request carrying
+`fga` replies `ERROR: transient: fga: ...`. Index-only requests are unaffected.
 
 ### Ordering
 
@@ -465,8 +480,9 @@ retried while it may yet succeed.
 
 ### Cache invalidation
 
-When the FGA half writes or deletes any tuple, the indexer records an
-invalidation on its FGA cache backend before replying, so no access check is
+When the FGA half writes or deletes any tuple, including when a later batch
+then fails, the indexer records an invalidation on its FGA cache backend
+before replying, so no access check is
 answered from a result cached before the change. If the invalidation cannot be
 recorded the reply is `ERROR: transient: fga: cache invalidation failed`. With
 `CACHE_BACKEND=none` there is no cache to invalidate.

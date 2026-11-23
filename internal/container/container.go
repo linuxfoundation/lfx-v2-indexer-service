@@ -27,6 +27,7 @@ import (
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/infrastructure/auth"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/infrastructure/cleanup"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/infrastructure/config"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/infrastructure/fga"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/infrastructure/fgacache"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/infrastructure/identity"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/infrastructure/messaging"
@@ -68,6 +69,9 @@ type Container struct {
 	MessageProcessor *application.MessageProcessor
 	// FGAWriter applies the FGA half of request/reply deliveries.
 	FGAWriter contracts.FGAWriter
+	// fgaWriter is the OpenFGA writer behind FGAWriter, when configured, kept
+	// to stop its background store lookup on shutdown.
+	fgaWriter *fga.Writer
 	// DeliveryDispatcher orders request/reply deliveries per object.
 	DeliveryDispatcher *application.OrderedDispatcher
 
@@ -442,7 +446,7 @@ func (c *Container) initializeApplication() error {
 // connection the FGA half replies transient, so index-only requests still work.
 func (c *Container) initializeDelivery() {
 	if c.FGAWriter == nil {
-		c.FGAWriter = notConfiguredFGAWriter{}
+		c.FGAWriter = c.newFGAWriter()
 	}
 	var cache contracts.FGACache
 	if c.FGACache != nil && c.FGACache.Backend != config.CacheBackendNone {
@@ -451,6 +455,19 @@ func (c *Container) initializeDelivery() {
 	handler := application.NewDeliveryHandler(c.MessageProcessor, c.FGAWriter, cache, c.Config.NATS.RequestTimeout, c.Logger)
 	c.DeliveryDispatcher = application.NewOrderedDispatcher(handler, c.Config.NATS.WorkerCount)
 	c.MessageProcessor.ConfigureDelivery(c.Config.NATS.IndexerIndexSubject, c.DeliveryDispatcher.Dispatch)
+}
+
+// newFGAWriter builds the OpenFGA writer when OPENFGA_API_URL is set.
+func (c *Container) newFGAWriter() contracts.FGAWriter {
+	logger := logging.WithComponent(c.Logger, constants.ComponentContainer)
+	cfg := fga.ConfigFromEnv()
+	if !cfg.Enabled() {
+		logger.Info("OPENFGA_API_URL is not set; FGA operations reply transient")
+		return notConfiguredFGAWriter{}
+	}
+	logger.Info("FGA writer enabled", "store_name", cfg.StoreName, "store_id_set", cfg.StoreID != "")
+	c.fgaWriter = fga.New(cfg, c.Logger)
+	return c.fgaWriter
 }
 
 // notConfiguredFGAWriter answers every FGA operation with ErrFGANotConfigured.
@@ -696,6 +713,10 @@ func (c *Container) Shutdown(ctx context.Context) error {
 		if err := c.MessagingRepository.Close(); err != nil {
 			logger.Error("Failed to close NATS connections during shutdown", "error", err.Error())
 		}
+	}
+
+	if c.fgaWriter != nil {
+		c.fgaWriter.Close()
 	}
 
 	return nil

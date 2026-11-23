@@ -335,6 +335,8 @@ JWKS_URL=http://localhost:4457/.well-known/jwks  # JWT validation endpoint
 
 # Message Processing
 NATS_INDEXING_SUBJECT=lfx.index.>           # V2 subject pattern
+NATS_INDEXER_INDEX_SUBJECT=lfx.indexer.index.>  # Request/reply subject; must not overlap NATS_INDEXING_SUBJECT
+INDEXER_REQUEST_TIMEOUT=                    # Unset derives 48.2s at defaults; lower values are rejected
 NATS_QUEUE=lfx.indexer.queue                # Queue group name
 OPENSEARCH_INDEX=resources                   # OpenSearch index name
 
@@ -375,6 +377,11 @@ LOG_FORMAT=text                              # Log format (text,json)
 
 # Cleanup Service (Background Cleanup)
 JANITOR_ENABLED=true                         # Enable cleanup service (default: true)
+
+# OpenFGA writes for the fga half of lfx.indexer.index.* (off when the URL is unset)
+OPENFGA_API_URL=                             # e.g. http://localhost:8080; unset makes FGA requests reply transient
+OPENFGA_STORE_NAME=lfx-core                  # Store looked up by name when OPENFGA_STORE_ID is unset
+OPENFGA_STORE_ID=                            # Optional; skips the lookup
 
 # FGA check cache (off by default; run.sh sets natskv, so set it yourself with make run)
 CACHE_BACKEND=none                           # natskv, valkey or none
@@ -452,6 +459,7 @@ for the formulas and first-type bootstrap sequence.
 | Subject Pattern | Purpose | Example | Load Balancing |
 |----------------|---------|---------|----------------|
 | `lfx.index.>` | V2 resource indexing | `lfx.index.project`, `lfx.index.organization` | Queue group distribution |
+| `lfx.indexer.index.>` | Combined index and FGA request/reply ([contract](docs/indexer-contract.md)) | `lfx.indexer.index.committee` | Queue group distribution |
 
 **Queue Group**: `lfx.indexer.queue`
 
