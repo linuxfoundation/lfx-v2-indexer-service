@@ -99,8 +99,15 @@ func TestQueueSubscribeDispatch_DrainWaitsForReply(t *testing.T) {
 	require.NoError(t, err)
 
 	publisher := startPublisher(t, nc)
-	require.NoError(t, publisher.Publish("lfx.indexer.index.fixture", []byte("x")))
-	require.NoError(t, publisher.Flush())
+	answered := make(chan string, 1)
+	go func() {
+		msg, err := publisher.Request("lfx.indexer.index.fixture", []byte("x"), 5*time.Second)
+		if err != nil {
+			answered <- "error: " + err.Error()
+			return
+		}
+		answered <- string(msg.Data)
+	}()
 	reply := <-received
 
 	drained := make(chan struct{})
@@ -113,7 +120,8 @@ func TestQueueSubscribeDispatch_DrainWaitsForReply(t *testing.T) {
 		t.Fatal("drain returned before the dispatched message replied")
 	case <-time.After(300 * time.Millisecond):
 	}
-	_ = reply(nil)
+	require.NoError(t, reply([]byte("OK")))
+	require.Equal(t, "OK", <-answered, "a reply sent during shutdown must reach the requester")
 	select {
 	case <-drained:
 	case <-time.After(5 * time.Second):
@@ -132,6 +140,8 @@ func TestQueueSubscribeDispatch_RefusedWhileShuttingDown(t *testing.T) {
 
 func startPublisher(t *testing.T, subscriber *natsgo.Conn) *natsgo.Conn {
 	t.Helper()
+	// The server must have the subscription before another connection publishes.
+	require.NoError(t, subscriber.Flush())
 	nc, err := natsgo.Connect(subscriber.ConnectedUrl())
 	require.NoError(t, err)
 	t.Cleanup(nc.Close)

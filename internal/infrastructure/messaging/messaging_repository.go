@@ -37,6 +37,8 @@ type MessagingRepository struct {
 	mu                sync.RWMutex
 	wg                sync.WaitGroup // tracks all in-flight handler goroutines (core NATS + JetStream)
 	jsWg              sync.WaitGroup // tracks JetStream-only goroutines; waited before conn.Drain()
+	dispatchSubs      []*nats.Subscription
+	dispatchWg        sync.WaitGroup // tracks dispatched requests until they reply; waited before conn.Drain()
 	drainTimeout      time.Duration
 	isShuttingDown    bool
 	pendingMsgLimit   int
@@ -374,7 +376,7 @@ func (r *MessagingRepository) QueueSubscribeDispatch(ctx context.Context, subjec
 	natsHandler := func(msg *nats.Msg) {
 		msgCtx := otel.GetTextMapPropagator().Extract(ctx, natsHeaderCarrier(msg.Header))
 		data := append([]byte(nil), msg.Data...)
-		r.wg.Add(1)
+		r.dispatchWg.Add(1)
 		spanCtx, reply := r.dispatchReply(msgCtx, msg.Subject, msg.Reply, len(data))
 		dispatch(spanCtx, data, msg.Subject, reply)
 	}
@@ -391,6 +393,7 @@ func (r *MessagingRepository) QueueSubscribeDispatch(ctx context.Context, subjec
 	}
 
 	r.subscriptions = append(r.subscriptions, sub)
+	r.dispatchSubs = append(r.dispatchSubs, sub)
 
 	r.logger.Info("NATS queue subscription with dispatch created successfully", "subject", subject, "queue", queue)
 	return nil
@@ -416,7 +419,7 @@ func (r *MessagingRepository) dispatchReply(msgCtx context.Context, msgSubject, 
 	return spanCtx, func(replyData []byte) error {
 		var err error
 		once.Do(func() {
-			defer r.wg.Done()
+			defer r.dispatchWg.Done()
 			defer span.End()
 			if replySubject != "" {
 				err = r.publishReply(spanCtx, logger, replySubject, replyData)
@@ -493,6 +496,35 @@ func (r *MessagingRepository) waitForHandlers(timeout time.Duration) bool {
 	}
 }
 
+// drainDispatch stops the dispatch subscriptions and waits, bounded by
+// deadline, for every dispatched request to reply. The wait starts only once
+// each subscription has stopped delivering, so no dispatchWg.Add can race it.
+func (r *MessagingRepository) drainDispatch(subs []*nats.Subscription, deadline time.Time) {
+	if len(subs) == 0 || r.conn == nil || r.conn.IsClosed() || r.conn.IsDraining() {
+		return
+	}
+	for _, sub := range subs {
+		if err := sub.Drain(); err != nil {
+			r.logger.Warn("Failed to drain dispatch subscription", "subject", sub.Subject, "error", err.Error())
+		}
+	}
+	for _, sub := range subs {
+		for sub.IsValid() && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	done := make(chan struct{})
+	go func() {
+		r.dispatchWg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Until(deadline)):
+		r.logger.Warn("Timed out waiting for dispatched requests to reply")
+	}
+}
+
 // waitForJetStreamWorkers waits for all goroutines tracked by r.jsWg to finish,
 // bounded by timeout. Returns true if it timed out.
 func (r *MessagingRepository) waitForJetStreamWorkers(timeout time.Duration) bool {
@@ -519,6 +551,7 @@ func (r *MessagingRepository) DrainWithTimeout() error {
 	r.mu.Lock()
 	r.isShuttingDown = true
 	totalSubscriptions := len(r.subscriptions)
+	dispatchSubs := r.dispatchSubs
 	consumeContexts := r.consumeContexts
 	r.consumeContexts = nil
 	r.mu.Unlock()
@@ -562,6 +595,10 @@ func (r *MessagingRepository) DrainWithTimeout() error {
 	// It is safe to call jsWg.Wait() here because all consumers are fully closed
 	// (cc.Closed() returned above) so no new jsWg.Add(1) calls can fire.
 	jsWorkersTimedOut := r.waitForJetStreamWorkers(time.Until(deadline))
+
+	// Dispatched requests reply and publish post-indexing events after their
+	// NATS callback returns, so they too must finish before conn.Drain().
+	r.drainDispatch(dispatchSubs, deadline)
 
 	r.logger.Info("Starting NATS graceful drain sequence", "timeout", r.drainTimeout, "subscriptions", totalSubscriptions)
 
@@ -710,6 +747,7 @@ func (r *MessagingRepository) Close() error {
 
 	// Clear subscriptions array
 	r.subscriptions = nil
+	r.dispatchSubs = nil
 
 	logger.Info("Subscription cleanup completed",
 		"total_subscriptions", totalSubscriptions,

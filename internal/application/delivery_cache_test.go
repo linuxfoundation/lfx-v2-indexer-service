@@ -91,13 +91,26 @@ func TestDeliveryCache_InvalidatesBeforeReplyingOK(t *testing.T) {
 	require.Equal(t, map[string]bool{writer.result.SeedKeys[0]: true}, got, "positive keys are seeded after the invalidation")
 }
 
-func TestDeliveryCache_UnchangedTuplesSkipInvalidation(t *testing.T) {
+// The replay of a request whose tuples landed but whose invalidation failed
+// changes nothing, and must still advance the marker before replying OK.
+func TestDeliveryCache_UnchangedReplayStillInvalidates(t *testing.T) {
 	cache, kv, _ := natsKVCache(t)
 	before := invRevision(t, kv)
 	h := newTestDeliveryHandler(&fakeIndex{}, &fakeFGAWriter{result: contracts.FGAWriteResult{Changed: false}}, cache)
 
 	reply, atReply := deliverObservingInv(t, h, kv)
 	require.Equal(t, "OK", reply)
+	require.Greater(t, atReply, before, "the inv marker must advance before the reply")
+}
+
+func TestDeliveryCache_FailedWriteThatChangedNothingSkipsInvalidation(t *testing.T) {
+	cache, kv, _ := natsKVCache(t)
+	before := invRevision(t, kv)
+	writer := &fakeFGAWriter{result: contracts.FGAWriteResult{Changed: false}, err: errors.New("openfga unavailable")}
+	h := newTestDeliveryHandler(&fakeIndex{}, writer, cache)
+
+	reply, atReply := deliverObservingInv(t, h, kv)
+	require.Equal(t, "ERROR: transient: fga: openfga unavailable", reply)
 	require.Equal(t, before, atReply)
 }
 

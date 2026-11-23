@@ -440,30 +440,30 @@ func (s *IndexerService) EnrichTransaction(ctx context.Context, transaction *con
 
 	// Validate transaction action
 	if err := s.ValidateTransactionAction(transaction); err != nil {
-		return fmt.Errorf("%s: %w", constants.ErrInvalidAction, err)
+		return invalidTransaction(fmt.Errorf("%s: %w", constants.ErrInvalidAction, err))
 	}
 	logger.Debug("Action validation completed", "transaction_id", transactionID)
 
 	if err := s.ValidateObjectType(transaction); err != nil {
-		return err
+		return invalidTransaction(err)
 	}
 	logger.Debug("Object type validation completed", "transaction_id", transactionID)
 
 	// Validate transaction data
 	if err := s.ValidateTransactionData(transaction); err != nil {
-		return fmt.Errorf("invalid transaction data: %w", err)
+		return invalidTransaction(fmt.Errorf("invalid transaction data: %w", err))
 	}
 	logger.Debug("Data validation completed", "transaction_id", transactionID)
 
 	// Validate transaction headers
 	if err := s.ValidateTransactionHeaders(transaction); err != nil {
-		return fmt.Errorf("invalid transaction headers: %w", err)
+		return invalidTransaction(fmt.Errorf("invalid transaction headers: %w", err))
 	}
 	logger.Debug("Header validation completed", "transaction_id", transactionID)
 
 	// Parse data based on action
 	if err := s.parseTransactionData(transaction); err != nil {
-		return fmt.Errorf("%s: %w", constants.ErrParseTransaction, err)
+		return invalidTransaction(fmt.Errorf("%s: %w", constants.ErrParseTransaction, err))
 	}
 	logger.Debug("Data parsing completed", "transaction_id", transactionID)
 
@@ -471,7 +471,7 @@ func (s *IndexerService) EnrichTransaction(ctx context.Context, transaction *con
 	canonicalAction := transaction.Action
 	if canonicalAction == constants.ActionCreated || canonicalAction == constants.ActionUpdated {
 		if transaction.IndexingConfig == nil {
-			return fmt.Errorf("indexing_config is required for object_type %q", transaction.ObjectType)
+			return invalidTransaction(fmt.Errorf("indexing_config is required for object_type %q", transaction.ObjectType))
 		}
 	}
 
@@ -490,6 +490,10 @@ func (s *IndexerService) EnrichTransaction(ctx context.Context, transaction *con
 		"principal_count", len(principals))
 
 	return nil
+}
+
+func invalidTransaction(err error) error {
+	return &contracts.InvalidTransactionError{Err: err}
 }
 
 // isValidObjectID returns true if id is a non-empty string containing only
@@ -557,7 +561,7 @@ func (s *IndexerService) GenerateTransactionBody(ctx context.Context, transactio
 				"transaction_id", transactionID,
 				"object_type", transaction.ObjectType,
 				"action", canonicalAction)
-			return nil, err
+			return nil, invalidTransaction(err)
 		}
 		body.ObjectID = transaction.ParsedObjectID
 		body.ObjectRef = transaction.ObjectType + ":" + transaction.ParsedObjectID
@@ -611,7 +615,7 @@ func (s *IndexerService) GenerateTransactionBody(ctx context.Context, transactio
 			"transaction_id", transactionID,
 			"object_type", transaction.ObjectType,
 			"action", canonicalAction)
-		return nil, err
+		return nil, invalidTransaction(err)
 	}
 
 	// Set object reference

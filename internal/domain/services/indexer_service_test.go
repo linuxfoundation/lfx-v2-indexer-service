@@ -184,6 +184,7 @@ func TestIndexerService_ProcessTransaction_InvalidAction(t *testing.T) {
 	assert.NotNil(t, result)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "invalid transaction action")
+	assert.ErrorAs(t, err, new(*contracts.InvalidTransactionError))
 	assert.Len(t, mockStorageRepo.IndexCalls, 0) // Should not have indexed
 }
 

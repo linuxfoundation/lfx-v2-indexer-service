@@ -22,6 +22,7 @@ func TestClassifyIndexError(t *testing.T) {
 		{"unknown error is transient", errors.New("opensearch unavailable"), "ERROR: transient: index: opensearch unavailable"},
 		{"rejected index error", &rejectedError{errors.New("invalid indexing message JSON")}, "ERROR: rejected: index: invalid indexing message JSON"},
 		{"wrapped rejected index error", fmt.Errorf("outer: %w", &rejectedError{errors.New("bad")}), "ERROR: rejected: index: outer: bad"},
+		{"invalid transaction from validation", fmt.Errorf("failed to process transaction: %w", &contracts.InvalidTransactionError{Err: errors.New("invalid transaction action: bogus")}), "ERROR: rejected: index: failed to process transaction: invalid transaction action: bogus"},
 		{"audit store error", &auditError{errors.New("append audit history: down")}, "ERROR: transient: audit: append audit history: down"},
 		{"transient audit error keeps its class once", &auditError{&contracts.IdentityLookupError{}}, "ERROR: transient: audit: identity lookup unavailable"},
 	}

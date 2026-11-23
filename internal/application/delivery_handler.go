@@ -4,12 +4,14 @@
 package application
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
 	"time"
 
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
 )
 
@@ -33,6 +35,9 @@ type deliveryRequest struct {
 	indexBody []byte
 	fga       json.RawMessage
 	sync      bool
+	// arrived starts the request timeout, so time spent queued behind
+	// earlier requests counts against the producer's wait.
+	arrived time.Time
 }
 
 // DeliveryHandler applies the index and FGA halves of one request and
@@ -61,11 +66,24 @@ func NewDeliveryHandler(index indexProcessor, fga contracts.FGAWriter, cache con
 
 // Handle runs the request's halves concurrently, replies, and returns only
 // after both halves have stopped, so the next request for the same object
-// never overlaps this one even after a timeout reply.
+// never overlaps this one even after a timeout reply. A request whose
+// timeout ran out while queued replies transient without writing: its
+// producer has already given up and may have sent a newer request.
 func (h *DeliveryHandler) Handle(ctx context.Context, req *deliveryRequest, reply func([]byte) error) {
-	start := time.Now()
-	ctx, cancel := context.WithTimeout(ctx, h.timeout)
+	start := req.arrived
+	if start.IsZero() {
+		start = time.Now()
+	}
+	ctx, cancel := context.WithDeadline(ctx, start.Add(h.timeout))
 	defer cancel()
+	if ctx.Err() != nil {
+		slot := halfFGA
+		if req.indexBody != nil {
+			slot = halfIndex
+		}
+		h.respond(ctx, req.subject, transient(slot, "timeout"), reply)
+		return
+	}
 
 	failure, wait := h.run(ctx, req)
 	h.respond(ctx, req.subject, failure, reply)
@@ -140,9 +158,12 @@ func (h *DeliveryHandler) runFGA(ctx context.Context, req *deliveryRequest) *del
 	if err != nil {
 		failure = classifyFGAError(err)
 	}
-	// A failed Apply can still report Changed: an earlier batch may have
-	// landed, so the cache is invalidated either way. Only a clean write seeds.
-	if !result.Changed || h.cache == nil {
+	// A successful Apply invalidates even when it changed nothing: it may be
+	// the replay of a request whose tuples landed but whose invalidation
+	// failed, and that replay must not reply OK over a stale cache. A failed
+	// Apply invalidates only if an earlier batch landed. Only a clean write
+	// seeds.
+	if h.cache == nil || (err != nil && !result.Changed) {
 		return failure
 	}
 	seedKeys := result.SeedKeys
@@ -156,7 +177,7 @@ func (h *DeliveryHandler) runFGA(ctx context.Context, req *deliveryRequest) *del
 }
 
 // invalidate advances the shared cache marker before the reply, so no check
-// answered from an entry cached before this tuple change is served again.
+// answered from an entry cached before this request is served again.
 // Seeding only adds entries newer than the marker; a failed seed costs a
 // cache miss, never a wrong answer.
 func (h *DeliveryHandler) invalidate(ctx context.Context, req *deliveryRequest, seedKeys []string) *deliveryFailure {
@@ -167,7 +188,7 @@ func (h *DeliveryHandler) invalidate(ctx context.Context, req *deliveryRequest, 
 	defer cancel()
 	marker, err := h.cache.Invalidate(ctx)
 	if err != nil {
-		logger.Error("FGA cache invalidation failed after a tuple change", "object_type", req.objectType, "error", err.Error())
+		logger.Error("FGA cache invalidation failed after an FGA write", "object_type", req.objectType, "error", err.Error())
 		return transient(halfFGA, "cache invalidation failed")
 	}
 	if len(seedKeys) == 0 {
@@ -199,11 +220,26 @@ func (h *DeliveryHandler) respond(ctx context.Context, subject string, failure *
 // The rest of the envelope is left to the index half, which keeps its own
 // tolerance for loosely typed fields such as headers.
 type deliveryFields struct {
+	Action         string          `json:"action"`
+	Data           json.RawMessage `json:"data"`
 	IndexingConfig *struct {
 		ObjectID string `json:"object_id"`
 	} `json:"indexing_config"`
 	FGA  json.RawMessage `json:"fga"`
 	Sync bool            `json:"sync"`
+}
+
+// deletedUID returns the UID of a delete whose data is the bare UID string,
+// the form producers send without indexing_config.
+func (f deliveryFields) deletedUID() string {
+	if f.IndexingConfig != nil || f.Action != string(constants.ActionDeleted) {
+		return ""
+	}
+	var uid string
+	if err := json.Unmarshal(f.Data, &uid); err != nil {
+		return ""
+	}
+	return uid
 }
 
 // parseDeliveryRequest decodes a request and derives its ordering key. The
@@ -218,6 +254,11 @@ func parseDeliveryRequest(data []byte, subject string) (*deliveryRequest, *deliv
 	if err := json.Unmarshal(data, &fields); err != nil || fields == nil {
 		return nil, rejected(halfIndex, "invalid request JSON")
 	}
+	// The index body is re-encoded from fields, which keeps only the last of
+	// a repeated key; the audit decoder must still see that ambiguity.
+	if hasDuplicateTopLevelKey(data) {
+		return nil, rejected(halfIndex, "invalid request JSON: duplicate key")
+	}
 	var envelope deliveryFields
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		return nil, rejected(halfIndex, "invalid request: "+err.Error())
@@ -231,7 +272,7 @@ func parseDeliveryRequest(data []byte, subject string) (*deliveryRequest, *deliv
 		return nil, failure
 	}
 	req.objectRef = objectType + ":" + id
-	if envelope.IndexingConfig != nil {
+	if envelope.IndexingConfig != nil || envelope.deletedUID() != "" {
 		delete(fields, "fga")
 		delete(fields, "sync")
 		body, err := json.Marshal(fields)
@@ -243,8 +284,8 @@ func parseDeliveryRequest(data []byte, subject string) (*deliveryRequest, *deliv
 	return req, nil
 }
 
-// objectID returns indexing_config.object_id, or fga.data.uid when the
-// request has no indexing_config.
+// objectID returns indexing_config.object_id, the UID of a UID-only delete,
+// or fga.data.uid when the request has no index half.
 func objectID(envelope deliveryFields, fga json.RawMessage) (string, *deliveryFailure) {
 	switch {
 	case envelope.IndexingConfig != nil:
@@ -252,6 +293,8 @@ func objectID(envelope deliveryFields, fga json.RawMessage) (string, *deliveryFa
 			return "", rejected(halfIndex, "indexing_config.object_id is required")
 		}
 		return envelope.IndexingConfig.ObjectID, nil
+	case envelope.deletedUID() != "":
+		return envelope.deletedUID(), nil
 	case fga != nil:
 		var operation struct {
 			Data struct {
@@ -265,6 +308,30 @@ func objectID(envelope deliveryFields, fga json.RawMessage) (string, *deliveryFa
 	default:
 		return "", rejected(halfIndex, "neither indexing_config nor fga is present")
 	}
+}
+
+func hasDuplicateTopLevelKey(data []byte) bool {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
+		return false
+	}
+	seen := make(map[string]bool)
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return false
+		}
+		key, _ := token.(string)
+		if seen[key] {
+			return true
+		}
+		seen[key] = true
+		var skip json.RawMessage
+		if err := decoder.Decode(&skip); err != nil {
+			return false
+		}
+	}
+	return false
 }
 
 func present(raw json.RawMessage) bool {
