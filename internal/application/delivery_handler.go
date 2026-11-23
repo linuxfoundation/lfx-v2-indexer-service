@@ -267,7 +267,7 @@ func parseDeliveryRequest(data []byte, subject string) (*deliveryRequest, *deliv
 	// under that folding are repeats too. The index half reads indexing_config
 	// by exact key while the ordering key comes from that folding, so it must
 	// not hold repeats either.
-	if hasDuplicateKey(data) || hasDuplicateKey(fields["indexing_config"]) {
+	if hasDuplicateKey(data) || hasDuplicateKey(foldedField(fields, "indexing_config")) {
 		return nil, rejected(halfIndex, "invalid request JSON: duplicate key")
 	}
 	var envelope deliveryFields
@@ -349,6 +349,17 @@ func hasDuplicateKey(data []byte) bool {
 		}
 	}
 	return false
+}
+
+// foldedField returns the value of the key equal to name under
+// strings.EqualFold; the duplicate check leaves at most one.
+func foldedField(fields map[string]json.RawMessage, name string) json.RawMessage {
+	for key, value := range fields {
+		if strings.EqualFold(key, name) {
+			return value
+		}
+	}
+	return nil
 }
 
 // foldKey maps each rune to the lowest rune of its simple case-folding orbit,

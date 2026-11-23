@@ -351,6 +351,7 @@ func TestDeliveryHandler_RejectsInvalidRequests(t *testing.T) {
 		{"top-level keys differing by case", deliverySubject, []byte(`{"indexing_config":{"object_id":"a"},"Indexing_Config":{"object_id":"b"}}`), "ERROR: rejected: index: invalid request JSON: duplicate key"},
 		{"top-level keys equal under Unicode folding", deliverySubject, []byte(`{"action":"updated","sync":false,"ſync":true,"indexing_config":{"object_id":"a"}}`), "ERROR: rejected: index: invalid request JSON: duplicate key"},
 		{"indexing_config keys differing by case", deliverySubject, []byte(`{"action":"updated","indexing_config":{"object_id":"a","Object_ID":"b"}}`), "ERROR: rejected: index: invalid request JSON: duplicate key"},
+		{"case-variant indexing_config with keys differing by case", deliverySubject, []byte(`{"action":"updated","Indexing_Config":{"object_id":"a","Object_ID":"b"}}`), "ERROR: rejected: index: invalid request JSON: duplicate key"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
