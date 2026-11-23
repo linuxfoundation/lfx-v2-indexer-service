@@ -9,9 +9,12 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"maps"
+	"slices"
 	"sync"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -347,6 +350,7 @@ func TestDeliveryHandler_RejectsInvalidRequests(t *testing.T) {
 		{"duplicate top-level key", deliverySubject, []byte(`{"action":"updated","action":"deleted","indexing_config":{"object_id":"fixture-1"}}`), "ERROR: rejected: index: invalid request JSON: duplicate key"},
 		{"top-level keys differing by case", deliverySubject, []byte(`{"indexing_config":{"object_id":"a"},"Indexing_Config":{"object_id":"b"}}`), "ERROR: rejected: index: invalid request JSON: duplicate key"},
 		{"top-level keys equal under Unicode folding", deliverySubject, []byte(`{"action":"updated","sync":false,"ſync":true,"indexing_config":{"object_id":"a"}}`), "ERROR: rejected: index: invalid request JSON: duplicate key"},
+		{"indexing_config keys differing by case", deliverySubject, []byte(`{"action":"updated","indexing_config":{"object_id":"a","Object_ID":"b"}}`), "ERROR: rejected: index: invalid request JSON: duplicate key"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -405,6 +409,28 @@ func TestDeliveryHandler_JSONFieldMatchingFoldsCase(t *testing.T) {
 	var envelope deliveryFields
 	require.NoError(t, json.Unmarshal([]byte(`{"ſync":true}`), &envelope))
 	require.True(t, envelope.Sync)
+}
+
+func TestDeliveryHandler_IndexBodyDropsFGAAndSyncInAnyCase(t *testing.T) {
+	payload := []byte(`{"action":"updated","indexing_config":{"object_id":"fixture-1"},` +
+		`"FGA":{"object_type":"fixture_resource","operation":"update_access","data":{"uid":"fixture-1"}},"Sync":true}`)
+	req, failure := parseDeliveryRequest(payload, deliverySubject)
+	require.Nil(t, failure)
+	require.NotNil(t, req.fga)
+
+	var body map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(req.indexBody, &body))
+	require.ElementsMatch(t, []string{"action", "indexing_config"}, slices.Collect(maps.Keys(body)))
+}
+
+func TestFoldKeyMatchesEqualFold(t *testing.T) {
+	for r := rune(0); r <= unicode.MaxRune; r++ {
+		if f := unicode.SimpleFold(r); foldKey(string(r)) != foldKey(string(f)) {
+			t.Fatalf("foldKey(%q) != foldKey(%q)", r, f)
+		}
+	}
+	require.NotEqual(t, foldKey("sync"), foldKey("synd"))
+	require.Equal(t, foldKey("Object_ID"), foldKey("object_id"))
 }
 
 // A request whose timeout ran out while it was queued replies without

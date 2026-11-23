@@ -433,8 +433,9 @@ reports a `rejected` error before a `transient` one, then `index`, `audit`,
 `fga` in that order.
 
 Requests the indexer rejects before applying anything include malformed JSON
-(`ERROR: rejected: index: invalid request JSON`), a repeated top-level key
-(compared case-insensitively, as the JSON decoder matches field names), a
+(`ERROR: rejected: index: invalid request JSON`), a repeated key at the top
+level or inside `indexing_config` (compared case-insensitively, as the JSON
+decoder matches field names), a
 request with neither block
 (`ERROR: rejected: index: neither indexing_config nor fga is present`), a
 missing `indexing_config.object_id`, an FGA-only request without

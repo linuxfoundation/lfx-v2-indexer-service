@@ -8,9 +8,9 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
-	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
@@ -264,8 +264,10 @@ func parseDeliveryRequest(data []byte, subject string) (*deliveryRequest, *deliv
 	// The index body is re-encoded from fields, which keeps only the last of
 	// a repeated key; the audit decoder must still see that ambiguity.
 	// encoding/json matches field names with strings.EqualFold, so keys equal
-	// under that folding are repeats too.
-	if hasDuplicateTopLevelKey(data) {
+	// under that folding are repeats too. The index half reads indexing_config
+	// by exact key while the ordering key comes from that folding, so it must
+	// not hold repeats either.
+	if hasDuplicateKey(data) || hasDuplicateKey(fields["indexing_config"]) {
 		return nil, rejected(halfIndex, "invalid request JSON: duplicate key")
 	}
 	var envelope deliveryFields
@@ -284,8 +286,11 @@ func parseDeliveryRequest(data []byte, subject string) (*deliveryRequest, *deliv
 	// Every delete is index work, so the index half rejects a malformed one
 	// instead of the request replying OK after only the FGA half.
 	if envelope.IndexingConfig != nil || envelope.isDelete() {
-		delete(fields, "fga")
-		delete(fields, "sync")
+		for key := range fields {
+			if strings.EqualFold(key, "fga") || strings.EqualFold(key, "sync") {
+				delete(fields, key)
+			}
+		}
 		body, err := json.Marshal(fields)
 		if err != nil {
 			return nil, rejected(halfIndex, "invalid request JSON")
@@ -321,28 +326,41 @@ func objectID(envelope deliveryFields, fga json.RawMessage) (string, *deliveryFa
 	}
 }
 
-func hasDuplicateTopLevelKey(data []byte) bool {
+func hasDuplicateKey(data []byte) bool {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
 		return false
 	}
-	var seen []string
+	seen := make(map[string]bool)
 	for decoder.More() {
 		token, err := decoder.Token()
 		if err != nil {
 			return false
 		}
 		key, _ := token.(string)
-		if slices.ContainsFunc(seen, func(s string) bool { return strings.EqualFold(s, key) }) {
+		folded := foldKey(key)
+		if seen[folded] {
 			return true
 		}
-		seen = append(seen, key)
+		seen[folded] = true
 		var skip json.RawMessage
 		if err := decoder.Decode(&skip); err != nil {
 			return false
 		}
 	}
 	return false
+}
+
+// foldKey maps each rune to the lowest rune of its simple case-folding orbit,
+// so two keys have the same foldKey exactly when strings.EqualFold holds.
+func foldKey(s string) string {
+	return strings.Map(func(r rune) rune {
+		lowest := r
+		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+			lowest = min(lowest, f)
+		}
+		return lowest
+	}, s)
 }
 
 func present(raw json.RawMessage) bool {
