@@ -376,6 +376,9 @@ networkPolicy:
     - 9200
   # heimdallJWKSPort is the port of heimdall.jwksUrl
   heimdallJWKSPort: 4457
+  # openfgaPort is the OpenFGA HTTP API port, for the FGA half of
+  # lfx.indexer.index.* requests
+  openfgaPort: 8080
   # otelGRPCPort and otelHTTPPort are the OpenTelemetry collector ports
   otelGRPCPort: 4317
   otelHTTPPort: 4318
