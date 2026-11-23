@@ -700,10 +700,6 @@ func (c *Container) Shutdown(ctx context.Context) error {
 		c.CleanupRepository.Shutdown()
 	}
 
-	if c.FGACache != nil {
-		c.FGACache.Close()
-	}
-
 	// Drain and close NATS connections
 	if c.MessagingRepository != nil {
 		if err := c.MessagingRepository.DrainWithTimeout(); err != nil {
@@ -717,6 +713,12 @@ func (c *Container) Shutdown(ctx context.Context) error {
 
 	if c.fgaWriter != nil {
 		c.fgaWriter.Close()
+	}
+
+	// The drain waits for in-flight requests, whose cache invalidation must
+	// finish before the cache closes.
+	if c.FGACache != nil {
+		c.FGACache.Close()
 	}
 
 	return nil

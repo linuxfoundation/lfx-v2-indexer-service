@@ -531,7 +531,7 @@ func (m *MockMessagingRepository) SimulateDispatch(ctx context.Context, subject,
 	if !ok {
 		return fmt.Errorf("no dispatcher registered for subject %s and queue %s", subject, queue)
 	}
-	dispatch(ctx, data, msgSubject, reply)
+	dispatch(ctx, data, msgSubject, reply, func() {})
 	return nil
 }
 

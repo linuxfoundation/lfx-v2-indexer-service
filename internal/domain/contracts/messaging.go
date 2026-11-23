@@ -21,8 +21,10 @@ type MessageHandlerWithReply interface {
 // DispatchFunc receives each message of a QueueSubscribeDispatch
 // subscription inside the NATS callback, in delivery order. It must call
 // reply exactly once per message, even when the request carried no reply
-// subject (reply then publishes nothing): drain waits for that call.
-type DispatchFunc func(ctx context.Context, data []byte, subject string, reply func([]byte) error)
+// subject (reply then publishes nothing), and then done exactly once when
+// all work for the message has stopped. Work can outlive a timeout reply and
+// still publish events or invalidate the cache, so drain waits for done.
+type DispatchFunc func(ctx context.Context, data []byte, subject string, reply func([]byte) error, done func())
 
 // MessagePublisher publishes a post-index event without coupling callers to
 // subscription management or transport authentication.

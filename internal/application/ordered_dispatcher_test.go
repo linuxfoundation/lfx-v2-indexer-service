@@ -67,11 +67,13 @@ func dispatchRequest(id string, seq int) []byte {
 
 func noReply([]byte) error { return nil }
 
+func noDone() {}
+
 func TestOrderedDispatcher_SameObjectInArrivalOrder(t *testing.T) {
 	runner := newRecordingRunner()
 	d := newOrderedDispatcher(runner, 100)
 	for seq := range 50 {
-		d.Dispatch(context.Background(), dispatchRequest("fixture-1", seq), deliverySubject, noReply)
+		d.Dispatch(context.Background(), dispatchRequest("fixture-1", seq), deliverySubject, noReply, noDone)
 	}
 	d.Wait()
 
@@ -88,10 +90,10 @@ func TestOrderedDispatcher_SlowObjectDoesNotDelayOthers(t *testing.T) {
 	runner.hold["fixture_resource:slow"] = gate
 	d := newOrderedDispatcher(runner, 100)
 
-	d.Dispatch(context.Background(), dispatchRequest("slow", 1), deliverySubject, noReply)
-	d.Dispatch(context.Background(), dispatchRequest("slow", 2), deliverySubject, noReply)
+	d.Dispatch(context.Background(), dispatchRequest("slow", 1), deliverySubject, noReply, noDone)
+	d.Dispatch(context.Background(), dispatchRequest("slow", 2), deliverySubject, noReply, noDone)
 	start := time.Now()
-	d.Dispatch(context.Background(), dispatchRequest("fast", 1), deliverySubject, noReply)
+	d.Dispatch(context.Background(), dispatchRequest("fast", 1), deliverySubject, noReply, noDone)
 
 	require.Eventually(t, func() bool {
 		return len(runner.order()) == 1
@@ -124,11 +126,11 @@ func TestOrderedDispatcher_BoundBlocksDispatchWhenFull(t *testing.T) {
 	runner.hold["fixture_resource:b"] = gate
 	d := newOrderedDispatcher(runner, 2)
 
-	d.Dispatch(context.Background(), dispatchRequest("a", 1), deliverySubject, noReply)
-	d.Dispatch(context.Background(), dispatchRequest("b", 1), deliverySubject, noReply)
+	d.Dispatch(context.Background(), dispatchRequest("a", 1), deliverySubject, noReply, noDone)
+	d.Dispatch(context.Background(), dispatchRequest("b", 1), deliverySubject, noReply, noDone)
 	third := make(chan struct{})
 	go func() {
-		d.Dispatch(context.Background(), dispatchRequest("c", 1), deliverySubject, noReply)
+		d.Dispatch(context.Background(), dispatchRequest("c", 1), deliverySubject, noReply, noDone)
 		close(third)
 	}()
 	select {
@@ -153,10 +155,37 @@ func TestOrderedDispatcher_RejectsWithoutQueueing(t *testing.T) {
 	d.Dispatch(context.Background(), []byte(`not json`), deliverySubject, func(body []byte) error {
 		reply = string(body)
 		return nil
-	})
+	}, noDone)
 	require.Equal(t, "ERROR: rejected: index: invalid request JSON", reply)
 	d.Wait()
 	require.Empty(t, runner.order())
+}
+
+// done marks the end of a request's work, which can outlive its reply: the
+// shutdown drain waits for it before closing the connection.
+func TestOrderedDispatcher_DoneFollowsHandleNotReply(t *testing.T) {
+	release := make(chan struct{})
+	h := NewDeliveryHandler(&blockingIndex{release: release}, &fakeFGAWriter{}, nil, 50*time.Millisecond, discardLogger())
+	d := NewOrderedDispatcher(h, 1)
+	replied, done := make(chan string, 1), make(chan struct{})
+	d.Dispatch(context.Background(), indexRequest(t, nil), deliverySubject, func(body []byte) error {
+		replied <- string(body)
+		return nil
+	}, func() { close(done) })
+
+	require.Equal(t, "ERROR: transient: index: timeout", <-replied)
+	select {
+	case <-done:
+		t.Fatal("done was called while the index half was still running")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("done was not called after the request finished")
+	}
+	d.Wait()
 }
 
 func TestOrderedDispatcher_WaitDrainsQueuedObjects(t *testing.T) {
@@ -165,7 +194,7 @@ func TestOrderedDispatcher_WaitDrainsQueuedObjects(t *testing.T) {
 	runner.hold["fixture_resource:a"] = gate
 	d := newOrderedDispatcher(runner, 100)
 	for seq := range 5 {
-		d.Dispatch(context.Background(), dispatchRequest("a", seq), deliverySubject, noReply)
+		d.Dispatch(context.Background(), dispatchRequest("a", seq), deliverySubject, noReply, noDone)
 	}
 	<-runner.started
 
@@ -207,7 +236,7 @@ func TestOrderedDispatcher_DelayedFGAWriteDoesNotDelayOtherResources(t *testing.
 		d.Dispatch(context.Background(), payload, deliverySubject, func(body []byte) error {
 			replies <- uid + " " + string(body)
 			return nil
-		})
+		}, noDone)
 	}
 	start := time.Now()
 	send("slow")

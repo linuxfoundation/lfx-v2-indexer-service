@@ -408,8 +408,9 @@ plus two optional fields.
   before the earlier write is searchable; it becomes searchable within the
   normal refresh interval.
 - At least one of `indexing_config` and `fga` must be present, except that a
-  delete whose `data` is the bare UID string is index work without
-  `indexing_config`. A request with only one half applies only that half.
+  delete is always index work, with or without `indexing_config`; its `data`
+  must be the bare UID string. A request with only one half applies only that
+  half.
 - `fga` and `sync` are accepted only on this subject. On `lfx.index.*` an audit
   version 2 envelope carrying them is rejected as an unknown field.
 
@@ -432,7 +433,9 @@ reports a `rejected` error before a `transient` one, then `index`, `audit`,
 `fga` in that order.
 
 Requests the indexer rejects before applying anything include malformed JSON
-(`ERROR: rejected: index: invalid request JSON`), a repeated top-level key, a
+(`ERROR: rejected: index: invalid request JSON`), a repeated key at the top
+level or inside `indexing_config` (compared case-insensitively, as the JSON
+decoder matches field names), a
 request with neither block
 (`ERROR: rejected: index: neither indexing_config nor fga is present`), a
 missing `indexing_config.object_id`, an FGA-only request without
@@ -440,7 +443,10 @@ missing `indexing_config.object_id`, an FGA-only request without
 from. The index half also rejects an envelope that fails validation: an
 unknown action, a missing object type, invalid `data` or `headers`, a missing
 `indexing_config` on a create or update, an invalid object id, and an audit
-version 2 envelope that fails strict decoding. Errors from storage,
+version 2 envelope that fails strict decoding. An audited request whose
+publisher and event id were erased from history replies
+`ERROR: rejected: audit: ...`, because a replay meets the same erasure.
+Errors from storage,
 authentication or other dependencies of the index half are `transient`.
 
 The FGA half writes to the OpenFGA server at `OPENFGA_API_URL`, in the store
@@ -468,9 +474,10 @@ Without `OPENFGA_API_URL`, or until the store is found, every request carrying
 ### Ordering
 
 - Requests for the same `object_ref` that reach the same replica are applied in
-  arrival order. `object_ref` is `{object_type}:{indexing_config.object_id}`,
-  `{object_type}:{data}` for a UID-only delete, or `{object_type}:{fga.data.uid}` when the
-  request has no index half. A combined request is ordered by its index id even
+  arrival order. `object_ref` is `{object_type}:{data}` for a delete (the
+  tombstone is written under that UID), `{object_type}:{indexing_config.object_id}`
+  otherwise, or `{object_type}:{fga.data.uid}` when the request has no index
+  half. A combined request is ordered by its index id even
   when `fga.data.uid` differs, as it does for resources whose access object is
   a parent. Requests for different resources run concurrently, so a slow FGA
   write for one resource does not delay another.
