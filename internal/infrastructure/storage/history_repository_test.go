@@ -22,11 +22,18 @@ import (
 // TestHistoryRepository_CreateOrVerify requires immutable read-back evidence
 // for duplicate appends rather than treating every HTTP 409 as success.
 func TestHistoryRepository_CreateOrVerify(t *testing.T) {
+	for _, origin := range []types.AuditOrigin{types.AuditOriginMutation, types.AuditOriginHistoricalImport} {
+		t.Run(string(origin), func(t *testing.T) { testHistoryCreateOrVerify(t, origin) })
+	}
+}
+
+func testHistoryCreateOrVerify(t *testing.T, origin types.AuditOrigin) {
+	t.Helper()
 	original := &contracts.HistoryRecord{
 		Publisher: "test-publisher", EventID: "fixture-event-1", ObjectType: "fixture_resource",
 		ObjectID: "fixture-resource", Fingerprint: strings.Repeat("a", 64),
 		IngestedAt: time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC),
-		Audit:      contracts.HistoryAudit{Origin: types.AuditOriginMutation},
+		Audit:      contracts.HistoryAudit{Origin: origin},
 	}
 	for _, tt := range []struct {
 		name       string

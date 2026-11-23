@@ -120,9 +120,12 @@ or the task needs additional peer repos.
 NATS → MessagingRepository → IndexingMessageHandler → MessageProcessor
   ├─ legacy → IndexerService → current-resource bulk writes → best-effort event
   └─ audit v2 (opt-in) → AuditWorkflow
-       → admission → private delivery receipt → mutation history (mutations only)
-       → guarded current projection → audited cleanup
-       → best-effort event only after an actual current-body replacement
+       → admission → private delivery receipt
+       ├─ historical_import → append/verify history → return (no projection, cleanup or event)
+       └─ mutation/reindex/backfill/sync_echo
+            → append/verify history (mutation only)
+            → guarded current projection → audited cleanup
+            → best-effort event only after an actual current-body replacement
 ```
 
 ### Domain Events (Outbound)

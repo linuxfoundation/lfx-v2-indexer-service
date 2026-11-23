@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/types"
 )
 
 const testPolicyManifest = `{
@@ -60,6 +62,25 @@ func TestDecodeAuditPolicies_ClosedSnapshotSchemas(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDecodeAuditPolicies_HistoricalImport(t *testing.T) {
+	manifest := strings.Replace(testPolicyManifest, `"mutation", "reindex"`, `"historical_import"`, 1)
+	policies, err := DecodeAuditPolicies([]byte(manifest))
+	require.NoError(t, err)
+	resource := policies[0].Resources["fixture_resource"]
+	require.True(t, resource.Origins[types.AuditOriginHistoricalImport])
+	require.False(t, resource.Origins[types.AuditOriginMutation])
+
+	var withoutSchemas AuditPolicyManifest
+	require.NoError(t, json.Unmarshal([]byte(manifest), &withoutSchemas))
+	entry := withoutSchemas.Publishers[0].Resources["fixture_resource"]
+	entry.Schemas = nil
+	withoutSchemas.Publishers[0].Resources["fixture_resource"] = entry
+	data, err := json.Marshal(withoutSchemas)
+	require.NoError(t, err)
+	_, err = DecodeAuditPolicies(data)
+	require.ErrorContains(t, err, "requires approved schemas")
 }
 
 // TestDecodeAuditPolicies_SnapshotDepthBoundary keeps startup and runtime depth

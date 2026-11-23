@@ -178,6 +178,7 @@ func workflowFixture(t *testing.T) (*AuditWorkflow, *mocks.MockAuditHistoryRepos
 			Origins: map[types.AuditOrigin]bool{
 				types.AuditOriginMutation: true, types.AuditOriginReindex: true,
 				types.AuditOriginBackfill: true, types.AuditOriginSyncEcho: true,
+				types.AuditOriginHistoricalImport: true,
 			},
 			Schemas: map[string]func(before, after json.RawMessage) error{"fixture.audit.v1": func(_, _ json.RawMessage) error { return nil }},
 		}},

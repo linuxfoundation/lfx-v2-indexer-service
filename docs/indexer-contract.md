@@ -30,6 +30,15 @@ append. Name/avatar are a query-service live-enrichment responsibility. Retained
 identity is private history metadata, not current-resource document data. See
 the audit contract for coordinated read-side rollout and outstanding cleanup.
 
+Historical audit ingestion uses the separately policy-authorized
+`audit.origin: "historical_import"`. It appends/verifies approved history only;
+it never writes current resources/tombstones, advances their revision guards,
+schedules cleanup or emits resource-change events. It is not `backfill`, which
+remains projection-only. Existing policies do not grant the new origin. No
+envelope/config fields or OpenSearch mapping fields are added. See
+[historical imports](audit-v2-contract.md#historical-imports) for the contract and
+[operational prerequisites](audit-rollout.md#historical-imports).
+
 `schema_version` and `audit` are reserved, lowercase discriminator fields. A
 present audit block without a version (including null), unsupported/invalid
 versions, and unsupported subjects are rejected rather than

@@ -26,6 +26,17 @@ func TestValidateAuditPolicyCoverage(t *testing.T) {
 	require.ErrorContains(t, validateAuditPolicyCoverage([]services.AuditPublisherPolicy{policy}, []string{"fixture_resource", "projection_only"}), "lacks an approved mutation schema")
 }
 
+func TestValidateAuditPolicyCoverage_HistoryOnlyDoesNotAdoptCurrent(t *testing.T) {
+	policy := services.AuditPublisherPolicy{Resources: map[string]services.AuditResourcePolicy{
+		"fixture_resource": {
+			Origins: map[types.AuditOrigin]bool{types.AuditOriginHistoricalImport: true},
+			Schemas: map[string]func(before, after json.RawMessage) error{"fixture.audit.v1": func(_, _ json.RawMessage) error { return nil }},
+		},
+	}}
+	require.NoError(t, validateAuditPolicyCoverage([]services.AuditPublisherPolicy{policy}, nil))
+	require.ErrorContains(t, validateAuditPolicyCoverage([]services.AuditPublisherPolicy{policy}, []string{"fixture_resource"}), "lacks an approved mutation schema")
+}
+
 // TestValidateAuditPolicyCoverage_ProjectionFences permits only backfill to
 // prepare an unfenced type; ongoing rebuild/sync origins need legacy exclusion.
 func TestValidateAuditPolicyCoverage_ProjectionFences(t *testing.T) {

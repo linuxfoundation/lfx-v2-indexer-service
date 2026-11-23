@@ -70,7 +70,7 @@ func NewHistoryRecord(envelope *types.IndexerMessageEnvelope, objectType string,
 	if err := envelope.ValidateV2Source(objectType, validate); err != nil {
 		return nil, err
 	}
-	if envelope.Audit.Origin != types.AuditOriginMutation {
+	if !envelope.Audit.Origin.RequiresHistory() {
 		return nil, fmt.Errorf("projection-only origins must not create history")
 	}
 	if ingestedAt.IsZero() {
