@@ -19,6 +19,7 @@ type queuedDelivery struct {
 	ctx   context.Context
 	req   *deliveryRequest
 	reply func([]byte) error
+	done  func()
 }
 
 // OrderedDispatcher applies requests for the same object_ref in arrival order
@@ -53,11 +54,13 @@ func newOrderedDispatcher(runner deliveryRunner, maxInFlight int) *OrderedDispat
 
 // Dispatch parses one request and queues it behind earlier requests for the
 // same object. A request that cannot be parsed or keyed is rejected at once.
-func (d *OrderedDispatcher) Dispatch(ctx context.Context, data []byte, subject string, reply func([]byte) error) {
+// done is called once the request's work has stopped.
+func (d *OrderedDispatcher) Dispatch(ctx context.Context, data []byte, subject string, reply func([]byte) error, done func()) {
 	arrived := time.Now()
 	req, failure := parseDeliveryRequest(data, subject)
 	if failure != nil {
 		d.runner.Reject(ctx, subject, failure, reply)
+		done()
 		return
 	}
 	req.arrived = arrived
@@ -66,7 +69,7 @@ func (d *OrderedDispatcher) Dispatch(ctx context.Context, data []byte, subject s
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	pending, busy := d.queues[req.objectRef]
-	d.queues[req.objectRef] = append(pending, queuedDelivery{ctx: ctx, req: req, reply: reply})
+	d.queues[req.objectRef] = append(pending, queuedDelivery{ctx: ctx, req: req, reply: reply, done: done})
 	if !busy {
 		d.wg.Add(1)
 		go d.drain(req.objectRef)
@@ -86,6 +89,7 @@ func (d *OrderedDispatcher) drain(key string) {
 			return
 		}
 		d.runner.Handle(next.ctx, next.req, next.reply)
+		next.done()
 		<-d.slots
 	}
 }

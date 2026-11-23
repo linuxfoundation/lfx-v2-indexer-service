@@ -683,10 +683,6 @@ func (c *Container) Shutdown(ctx context.Context) error {
 		c.CleanupRepository.Shutdown()
 	}
 
-	if c.FGACache != nil {
-		c.FGACache.Close()
-	}
-
 	// Drain and close NATS connections
 	if c.MessagingRepository != nil {
 		if err := c.MessagingRepository.DrainWithTimeout(); err != nil {
@@ -696,6 +692,12 @@ func (c *Container) Shutdown(ctx context.Context) error {
 		if err := c.MessagingRepository.Close(); err != nil {
 			logger.Error("Failed to close NATS connections during shutdown", "error", err.Error())
 		}
+	}
+
+	// The drain waits for in-flight requests, whose cache invalidation must
+	// finish before the cache closes.
+	if c.FGACache != nil {
+		c.FGACache.Close()
 	}
 
 	return nil

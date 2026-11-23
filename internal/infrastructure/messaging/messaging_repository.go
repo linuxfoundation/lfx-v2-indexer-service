@@ -38,7 +38,7 @@ type MessagingRepository struct {
 	wg                sync.WaitGroup // tracks all in-flight handler goroutines (core NATS + JetStream)
 	jsWg              sync.WaitGroup // tracks JetStream-only goroutines; waited before conn.Drain()
 	dispatchSubs      []*nats.Subscription
-	dispatchWg        sync.WaitGroup // tracks dispatched requests until they reply; waited before conn.Drain()
+	dispatchWg        sync.WaitGroup // tracks dispatched requests until they finish; waited before conn.Drain()
 	drainTimeout      time.Duration
 	isShuttingDown    bool
 	pendingMsgLimit   int
@@ -357,8 +357,8 @@ func (r *MessagingRepository) publishReply(ctx context.Context, logger *slog.Log
 
 // QueueSubscribeDispatch subscribes with a queue group and hands each message
 // to dispatch inside the NATS callback, without a goroutine, so delivery
-// order survives until the dispatcher. The processing span and the drain wait
-// end when dispatch calls the reply function.
+// order survives until the dispatcher. The processing span ends when
+// dispatch calls reply; the drain wait ends when it calls done.
 func (r *MessagingRepository) QueueSubscribeDispatch(ctx context.Context, subject string, queue string, dispatch contracts.DispatchFunc) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -378,7 +378,8 @@ func (r *MessagingRepository) QueueSubscribeDispatch(ctx context.Context, subjec
 		data := append([]byte(nil), msg.Data...)
 		r.dispatchWg.Add(1)
 		spanCtx, reply := r.dispatchReply(msgCtx, msg.Subject, msg.Reply, len(data))
-		dispatch(spanCtx, data, msg.Subject, reply)
+		var once sync.Once
+		dispatch(spanCtx, data, msg.Subject, reply, func() { once.Do(r.dispatchWg.Done) })
 	}
 
 	sub, err := r.conn.QueueSubscribe(subject, queue, natsHandler)
@@ -400,8 +401,7 @@ func (r *MessagingRepository) QueueSubscribeDispatch(ctx context.Context, subjec
 }
 
 // dispatchReply starts the processing span for one dispatched message and
-// returns a reply function that publishes at most once, then ends the span
-// and releases the drain wait taken by the caller.
+// returns a reply function that publishes at most once, then ends the span.
 func (r *MessagingRepository) dispatchReply(msgCtx context.Context, msgSubject, replySubject string, size int) (context.Context, func([]byte) error) {
 	spanCtx, span := tracer.Start(msgCtx, "nats.process",
 		trace.WithSpanKind(trace.SpanKindConsumer),
@@ -419,7 +419,6 @@ func (r *MessagingRepository) dispatchReply(msgCtx context.Context, msgSubject, 
 	return spanCtx, func(replyData []byte) error {
 		var err error
 		once.Do(func() {
-			defer r.dispatchWg.Done()
 			defer span.End()
 			if replySubject != "" {
 				err = r.publishReply(spanCtx, logger, replySubject, replyData)
@@ -497,7 +496,7 @@ func (r *MessagingRepository) waitForHandlers(timeout time.Duration) bool {
 }
 
 // drainDispatch stops the dispatch subscriptions and waits, bounded by
-// deadline, for every dispatched request to reply. The wait starts only once
+// deadline, for every dispatched request to finish. The wait starts only once
 // each subscription has stopped delivering, so no dispatchWg.Add can race it.
 func (r *MessagingRepository) drainDispatch(subs []*nats.Subscription, deadline time.Time) {
 	if len(subs) == 0 || r.conn == nil || r.conn.IsClosed() || r.conn.IsDraining() {
@@ -521,7 +520,7 @@ func (r *MessagingRepository) drainDispatch(subs []*nats.Subscription, deadline 
 	select {
 	case <-done:
 	case <-time.After(time.Until(deadline)):
-		r.logger.Warn("Timed out waiting for dispatched requests to reply")
+		r.logger.Warn("Timed out waiting for dispatched requests to finish")
 	}
 }
 

@@ -44,11 +44,12 @@ func TestQueueSubscribeDispatch_CallsDispatchInDeliveryOrder(t *testing.T) {
 
 	var mu sync.Mutex
 	var seen []string
-	err := repo.QueueSubscribeDispatch(context.Background(), "lfx.indexer.index.>", "q", func(_ context.Context, data []byte, subject string, reply func([]byte) error) {
+	err := repo.QueueSubscribeDispatch(context.Background(), "lfx.indexer.index.>", "q", func(_ context.Context, data []byte, subject string, reply func([]byte) error, done func()) {
 		mu.Lock()
 		seen = append(seen, subject+"="+string(data))
 		mu.Unlock()
 		_ = reply([]byte("OK"))
+		done()
 	})
 	require.NoError(t, err)
 
@@ -73,10 +74,11 @@ func TestQueueSubscribeDispatch_ReplyReachesRequesterOnce(t *testing.T) {
 	repo := newDispatchRepo(t, nc)
 
 	errs := make(chan error, 2)
-	err := repo.QueueSubscribeDispatch(context.Background(), "lfx.indexer.index.>", "q", func(_ context.Context, data []byte, _ string, reply func([]byte) error) {
+	err := repo.QueueSubscribeDispatch(context.Background(), "lfx.indexer.index.>", "q", func(_ context.Context, data []byte, _ string, reply func([]byte) error, done func()) {
 		go func() {
 			errs <- reply(append([]byte("echo:"), data...))
 			errs <- reply([]byte("second"))
+			done()
 		}()
 	})
 	require.NoError(t, err)
@@ -88,13 +90,17 @@ func TestQueueSubscribeDispatch_ReplyReachesRequesterOnce(t *testing.T) {
 	require.NoError(t, <-errs)
 }
 
-func TestQueueSubscribeDispatch_DrainWaitsForReply(t *testing.T) {
+// Work can continue after the reply (a timed-out half still publishing its
+// post-indexing event), so drain keeps the connection open until done.
+func TestQueueSubscribeDispatch_DrainWaitsForDone(t *testing.T) {
 	nc := startCoreNATS(t)
 	repo := newDispatchRepo(t, nc)
 
 	received := make(chan func([]byte) error, 1)
-	err := repo.QueueSubscribeDispatch(context.Background(), "lfx.indexer.index.>", "q", func(_ context.Context, _ []byte, _ string, reply func([]byte) error) {
+	finished := make(chan func(), 1)
+	err := repo.QueueSubscribeDispatch(context.Background(), "lfx.indexer.index.>", "q", func(_ context.Context, _ []byte, _ string, reply func([]byte) error, done func()) {
 		received <- reply
+		finished <- done
 	})
 	require.NoError(t, err)
 
@@ -124,8 +130,15 @@ func TestQueueSubscribeDispatch_DrainWaitsForReply(t *testing.T) {
 	require.Equal(t, "OK", <-answered, "a reply sent during shutdown must reach the requester")
 	select {
 	case <-drained:
+		t.Fatal("drain returned before the dispatched message finished")
+	case <-time.After(300 * time.Millisecond):
+	}
+	require.NoError(t, repo.Publish(context.Background(), "lfx.fixture.event", []byte("e")), "work after the reply can still publish")
+	(<-finished)()
+	select {
+	case <-drained:
 	case <-time.After(5 * time.Second):
-		t.Fatal("drain did not return after the reply")
+		t.Fatal("drain did not return after the message finished")
 	}
 }
 
@@ -134,7 +147,7 @@ func TestQueueSubscribeDispatch_RefusedWhileShuttingDown(t *testing.T) {
 	repo := newDispatchRepo(t, nc)
 	require.NoError(t, repo.DrainWithTimeout())
 
-	err := repo.QueueSubscribeDispatch(context.Background(), "lfx.indexer.index.>", "q", func(context.Context, []byte, string, func([]byte) error) {})
+	err := repo.QueueSubscribeDispatch(context.Background(), "lfx.indexer.index.>", "q", func(context.Context, []byte, string, func([]byte) error, func()) {})
 	require.ErrorContains(t, err, "shutting down")
 }
 

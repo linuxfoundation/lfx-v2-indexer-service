@@ -8,6 +8,8 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
@@ -229,10 +231,15 @@ type deliveryFields struct {
 	Sync bool            `json:"sync"`
 }
 
-// deletedUID returns the UID of a delete whose data is the bare UID string,
-// the form producers send without indexing_config.
+func (f deliveryFields) isDelete() bool {
+	return f.Action == string(constants.ActionDeleted)
+}
+
+// deletedUID returns the UID of a delete whose data is the bare UID string.
+// The tombstone is written under that UID even when indexing_config names
+// another id, so a delete is ordered by it.
 func (f deliveryFields) deletedUID() string {
-	if f.IndexingConfig != nil || f.Action != string(constants.ActionDeleted) {
+	if !f.isDelete() {
 		return ""
 	}
 	var uid string
@@ -256,6 +263,8 @@ func parseDeliveryRequest(data []byte, subject string) (*deliveryRequest, *deliv
 	}
 	// The index body is re-encoded from fields, which keeps only the last of
 	// a repeated key; the audit decoder must still see that ambiguity.
+	// encoding/json matches field names with strings.EqualFold, so keys equal
+	// under that folding are repeats too.
 	if hasDuplicateTopLevelKey(data) {
 		return nil, rejected(halfIndex, "invalid request JSON: duplicate key")
 	}
@@ -272,7 +281,9 @@ func parseDeliveryRequest(data []byte, subject string) (*deliveryRequest, *deliv
 		return nil, failure
 	}
 	req.objectRef = objectType + ":" + id
-	if envelope.IndexingConfig != nil || envelope.deletedUID() != "" {
+	// Every delete is index work, so the index half rejects a malformed one
+	// instead of the request replying OK after only the FGA half.
+	if envelope.IndexingConfig != nil || envelope.isDelete() {
 		delete(fields, "fga")
 		delete(fields, "sync")
 		body, err := json.Marshal(fields)
@@ -284,17 +295,17 @@ func parseDeliveryRequest(data []byte, subject string) (*deliveryRequest, *deliv
 	return req, nil
 }
 
-// objectID returns indexing_config.object_id, the UID of a UID-only delete,
-// or fga.data.uid when the request has no index half.
+// objectID returns the UID of a delete, indexing_config.object_id, or
+// fga.data.uid when neither is present.
 func objectID(envelope deliveryFields, fga json.RawMessage) (string, *deliveryFailure) {
 	switch {
+	case envelope.deletedUID() != "":
+		return envelope.deletedUID(), nil
 	case envelope.IndexingConfig != nil:
 		if envelope.IndexingConfig.ObjectID == "" {
 			return "", rejected(halfIndex, "indexing_config.object_id is required")
 		}
 		return envelope.IndexingConfig.ObjectID, nil
-	case envelope.deletedUID() != "":
-		return envelope.deletedUID(), nil
 	case fga != nil:
 		var operation struct {
 			Data struct {
@@ -315,17 +326,17 @@ func hasDuplicateTopLevelKey(data []byte) bool {
 	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
 		return false
 	}
-	seen := make(map[string]bool)
+	var seen []string
 	for decoder.More() {
 		token, err := decoder.Token()
 		if err != nil {
 			return false
 		}
 		key, _ := token.(string)
-		if seen[key] {
+		if slices.ContainsFunc(seen, func(s string) bool { return strings.EqualFold(s, key) }) {
 			return true
 		}
-		seen[key] = true
+		seen = append(seen, key)
 		var skip json.RawMessage
 		if err := decoder.Decode(&skip); err != nil {
 			return false

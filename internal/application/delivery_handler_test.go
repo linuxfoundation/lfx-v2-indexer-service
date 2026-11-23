@@ -345,6 +345,8 @@ func TestDeliveryHandler_RejectsInvalidRequests(t *testing.T) {
 		{"invalid action", deliverySubject, indexRequest(t, func(r map[string]any) { r["action"] = "" }), "ERROR: rejected: index: failed to create transaction: failed to create V2 transaction: missing or invalid action in message data"},
 		{"unknown action", deliverySubject, indexRequest(t, func(r map[string]any) { r["action"] = "archived" }), "ERROR: rejected: index: failed to process transaction: invalid transaction action: invalid V2 transaction action: archived"},
 		{"duplicate top-level key", deliverySubject, []byte(`{"action":"updated","action":"deleted","indexing_config":{"object_id":"fixture-1"}}`), "ERROR: rejected: index: invalid request JSON: duplicate key"},
+		{"top-level keys differing by case", deliverySubject, []byte(`{"indexing_config":{"object_id":"a"},"Indexing_Config":{"object_id":"b"}}`), "ERROR: rejected: index: invalid request JSON: duplicate key"},
+		{"top-level keys equal under Unicode folding", deliverySubject, []byte(`{"action":"updated","sync":false,"ſync":true,"indexing_config":{"object_id":"a"}}`), "ERROR: rejected: index: invalid request JSON: duplicate key"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -373,6 +375,36 @@ func TestDeliveryHandler_UIDOnlyDeleteIsIndexWork(t *testing.T) {
 	require.Len(t, index.bodies, 1)
 	require.NotContains(t, index.bodies[0], "delete_access")
 	require.Len(t, writer.calls(), 1)
+}
+
+// The tombstone is written under data's UID even when indexing_config names
+// another id, so the delete is ordered with other requests for that UID.
+func TestDeliveryHandler_DeleteOrderedByDataUID(t *testing.T) {
+	payload := []byte(`{"action":"deleted","data":"fixture-a","indexing_config":{"object_id":"fixture-b"}}`)
+	req, failure := parseDeliveryRequest(payload, deliverySubject)
+	require.Nil(t, failure)
+	require.Equal(t, "fixture_resource:fixture-a", req.objectRef)
+	require.NotNil(t, req.indexBody)
+}
+
+// A delete whose data is not the bare UID still runs the index half, which
+// rejects it, so the reply is never OK after only the FGA half.
+func TestDeliveryHandler_DeleteWithObjectDataIsRejected(t *testing.T) {
+	mp, _, _ := setupTestMessageProcessor()
+	h := newTestDeliveryHandler(mp, &fakeFGAWriter{}, nil)
+	payload := []byte(`{"action":"deleted","headers":{"authorization":"Bearer fixture-token"},"data":{"uid":"fixture-1"},` +
+		`"fga":{"object_type":"fixture_resource","operation":"delete_access","data":{"uid":"fixture-1"}}}`)
+
+	require.Equal(t, "ERROR: rejected: index: failed to process transaction: invalid transaction data: data must be a string (object ID) for deleted actions",
+		deliver(t, h, deliverySubject, payload))
+}
+
+// encoding/json matches field names with Unicode case folding, which is why
+// the duplicate check folds keys the same way.
+func TestDeliveryHandler_JSONFieldMatchingFoldsCase(t *testing.T) {
+	var envelope deliveryFields
+	require.NoError(t, json.Unmarshal([]byte(`{"ſync":true}`), &envelope))
+	require.True(t, envelope.Sync)
 }
 
 // A request whose timeout ran out while it was queued replies without
