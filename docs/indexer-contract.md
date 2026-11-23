@@ -12,6 +12,9 @@ overridable via `nats.indexingSubject`) from a durable JetStream consumer
 (`index-events` stream), writes documents into
 OpenSearch, and emits domain events on `lfx.{object_type}.{action}`. It is fully
 generic; resource services tell it everything it needs via the message payload.
+It also answers core-NATS requests on `lfx.indexer.index.{object_type}`, which
+apply an index write and an FGA operation together and reply only once both have
+landed; see [Request/reply delivery](#requestreply-delivery-lfxindexerindexobject_type).
 
 ## Envelope versions and availability
 
@@ -350,6 +353,154 @@ Disjoint resources may have different publishers. Overlapping publishers are
 approved only when they coordinate that shared source authority; startup does
 not infer coordination or enforce one publisher per type.
 
+## Request/reply delivery: `lfx.indexer.index.{object_type}`
+
+A producer that must know its write has landed, for example before it lets a
+client upload to a resource it just created, sends one request carrying the
+resource's index projection and its access change, and treats the reply as the
+result.
+
+### Transport
+
+- Core NATS request/reply on `lfx.indexer.index.{object_type}` (env
+  `NATS_INDEXER_INDEX_SUBJECT`, default `lfx.indexer.index.>`), queue group
+  `lfx.indexer.queue`. The object type rules are the same as for
+  `lfx.index.{object_type}`.
+- No JetStream stream or consumer captures the subject. The `index-events`
+  stream binds `lfx.index.>`, which does not match it, and the indexer refuses
+  to start if the two subjects overlap.
+- A request without a reply subject is still processed, but nobody learns the
+  result. Use request/reply.
+
+### Request body
+
+The body is `types.IndexRequest`: the `IndexerMessageEnvelope` above, unchanged,
+plus two optional fields.
+
+```json
+{
+  "action": "updated",
+  "headers": {"authorization": "Bearer ..."},
+  "data": {"uid": "...", "name": "..."},
+  "indexing_config": {"object_id": "...", "access_check_object": "committee:...", "...": "..."},
+  "fga": {
+    "object_type": "committee",
+    "operation": "update_access",
+    "data": {"uid": "...", "public": false, "relations": {"writer": ["<username>"]}, "references": {"project": ["..."]}}
+  },
+  "sync": true
+}
+```
+
+- `indexing_config`, `data`, `headers`, `tags`, `schema_version` and `audit`
+  follow every rule in the sections above. The index half is the same
+  processing as `lfx.index.*`: the same validation, the same audit workflow and
+  audit-required-types fence (only an audited `mutation` adds a history
+  revision), and the same post-indexing domain events.
+- `fga` is one lfx-v2-fga-sync generic access operation (`object_type`,
+  `operation`, `data`) with the same four operations: `update_access`,
+  `delete_access`, `member_put` and `member_remove`. See
+  `lfx-v2-fga-sync/docs/fga-sync-contract.md` for their fields.
+- `sync: true` makes the index write wait for an OpenSearch refresh, so the
+  document is searchable as soon as the reply is `OK`. Without it the document
+  becomes searchable within the normal refresh interval.
+- At least one of `indexing_config` and `fga` must be present. A request with
+  only one applies only that half.
+- `fga` and `sync` are accepted only on this subject. On `lfx.index.*` an audit
+  version 2 envelope carrying them is rejected as an unknown field.
+
+### Reply body
+
+| Reply | Meaning | Producer action |
+|---|---|---|
+| `OK` | Every half present in the request has landed | Clear the durable marker |
+| `ERROR: transient: <half>: <text>` | Retrying can succeed | Retry the same request with backoff |
+| `ERROR: rejected: <half>: <text>` | The request is invalid; a retry fails the same way | Drop and alert |
+| no reply before the producer's timeout | Unknown | Retry the same request; replays converge |
+
+`<half>` is `index`, `audit` or `fga`. `audit` names a failure of the audit
+delivery receipt or history store; `index` names everything else on the index
+side. A reply carries exactly one error and never reports partial success.
+
+The two halves run concurrently, and neither cancels the other when it fails,
+so a replay finds both as far along as possible. When both fail, the reply
+reports a `rejected` error before a `transient` one, then `index`, `audit`,
+`fga` in that order.
+
+Requests the indexer rejects before applying anything include malformed JSON
+(`ERROR: rejected: index: invalid request JSON`), a request with neither block
+(`ERROR: rejected: index: neither indexing_config nor fga is present`), a
+missing `indexing_config.object_id`, an FGA-only request without
+`fga.data.uid`, and an envelope the index path refuses to build a transaction
+from (for example an unknown action). Errors from storage, authentication or
+other dependencies of the index half are `transient`.
+
+Until the indexer has an OpenFGA connection, every request carrying `fga`
+replies `ERROR: transient: fga: fga writer is not configured`. Index-only
+requests are unaffected.
+
+### Ordering
+
+- Requests for the same `object_ref` that reach the same replica are applied in
+  arrival order. `object_ref` is `{object_type}:{indexing_config.object_id}`, or
+  `{object_type}:{fga.data.uid}` when the request has no `indexing_config`.
+  Requests for different resources run concurrently, so a slow FGA write for
+  one resource does not delay another.
+- The queue group spreads one resource's requests across replicas, so across
+  replicas ordering relies on the producer: wait for the reply to one request
+  before sending the next request for the same resource.
+- Each replica runs at most `NATS_WORKER_COUNT` requests at a time; beyond that
+  it stops taking new requests until one finishes.
+
+### Timeouts
+
+The indexer gives up on a request after `INDEXER_REQUEST_TIMEOUT` and replies
+`ERROR: transient: <half>: timeout`, naming the half still running. The default
+is the JetStream ack-wait derivation (OpenSearch timeout plus batch max wait
+plus a 10 s margin, or the larger audited budget when audit is enabled) plus the
+8 s FGA call timeout: 48.2 s with the default settings. A shorter explicit value
+is refused at startup. Producers must wait longer than this before treating a
+missing reply as lost; otherwise a request that is still being applied is
+retried while it may yet succeed.
+
+### Cache invalidation
+
+When the FGA half writes or deletes any tuple, the indexer records an
+invalidation on its FGA cache backend before replying, so no access check is
+answered from a result cached before the change. If the invalidation cannot be
+recorded the reply is `ERROR: transient: fga: cache invalidation failed`. With
+`CACHE_BACKEND=none` there is no cache to invalidate.
+
+### Idempotence and retry
+
+Replaying an identical request converges: OpenSearch overwrites by document id,
+an FGA full sync diffs against the current tuples, and the audit append keeps
+its delivery-receipt and fingerprint guards. Retry `transient` replies and
+missing replies with backoff; never retry `rejected`.
+
+### Reference helper
+
+`types.SendIndexRequest(ctx, nc, objectType, req, timeout)` sends the request,
+waits up to `timeout` for the reply, and returns `types.Success`, `types.Retry`
+or `types.Drop`. `types.ClassifyIndexReply` applies the same classification to a
+reply body received some other way.
+
+```go
+outcome, err := types.SendIndexRequest(ctx, nc, "committee", types.IndexRequest{
+    IndexerMessageEnvelope: envelope,
+    FGA:                    fgaOperation,
+    Sync:                   true,
+}, 60*time.Second)
+switch outcome {
+case types.Success:
+    // clear the outbox row
+case types.Retry:
+    // keep the row; retry with backoff
+case types.Drop:
+    // drop the row and alert; err carries the reply
+}
+```
+
 ## Schema Evolution Policy
 
 - **Adding fields inside `data`**: free. `flat_object` accepts new keys without a
@@ -378,8 +529,9 @@ Before merging a change to publisher code in a resource service, verify:
 3. The subject matches the resource type that other services already use; check
    `pkg/constants/` for the canonical constant.
 4. Legacy publishers may retain `conn.Publish()`; use acknowledged JetStream
-   publishing for durable outbox delivery. Neither persistence acknowledgment
-   nor core request/reply reports successful indexer processing.
+   publishing for durable outbox delivery. On `lfx.index.*`, neither persistence
+   acknowledgment nor core request/reply reports successful indexer processing;
+   only an `OK` reply on `lfx.indexer.index.*` does.
 5. Headers carry lower-case `authorization` and `x-on-behalf-of` keys so audit principals are
    recorded on the indexed document.
 6. Existing traffic omits both new discriminator fields. Do not enable audited

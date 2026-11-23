@@ -20,14 +20,20 @@ type FGARejectedError struct {
 	Cause error
 }
 
-func (e *FGARejectedError) Error() string { return "rejected: " + e.Cause.Error() }
+func (e *FGARejectedError) Error() string {
+	if e.Cause == nil {
+		return "rejected: invalid fga operation"
+	}
+	return "rejected: " + e.Cause.Error()
+}
 
 func (e *FGARejectedError) Unwrap() error { return e.Cause }
 
 // FGAWriteResult reports what an FGA operation changed.
 type FGAWriteResult struct {
-	// Changed is true when any tuple was written or deleted. The caller must
-	// then invalidate the shared FGA cache before replying.
+	// Changed is true when any tuple was written or deleted, also alongside an
+	// error when an earlier batch landed. The caller must then invalidate the
+	// shared FGA cache before replying.
 	Changed bool
 	// SeedKeys are relation keys known to be allowed after the write, for
 	// seeding the cache once it has been invalidated.
@@ -35,7 +41,9 @@ type FGAWriteResult struct {
 }
 
 // FGAWriter applies one fga-sync generic access operation (update_access,
-// delete_access, member_put or member_remove) to OpenFGA.
+// delete_access, member_put or member_remove) to OpenFGA. The tuple object
+// type comes from the operation, not from objectType (the request subject's
+// type): a key_contact request writes its tuple on project_membership.
 type FGAWriter interface {
 	Apply(ctx context.Context, objectType string, operation json.RawMessage) (FGAWriteResult, error)
 }

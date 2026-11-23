@@ -6,6 +6,7 @@ package container
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -65,6 +66,10 @@ type Container struct {
 
 	// Application Layer (consolidated)
 	MessageProcessor *application.MessageProcessor
+	// FGAWriter applies the FGA half of request/reply deliveries.
+	FGAWriter contracts.FGAWriter
+	// DeliveryDispatcher orders request/reply deliveries per object.
+	DeliveryDispatcher *application.OrderedDispatcher
 
 	// Handlers (consolidated)
 	HealthHandler          *handlers.HealthHandler
@@ -429,7 +434,30 @@ func (c *Container) initializeApplication() error {
 		}
 	}
 
+	c.initializeDelivery()
 	return nil
+}
+
+// initializeDelivery wires the lfx.indexer.index.* handler. Without an OpenFGA
+// connection the FGA half replies transient, so index-only requests still work.
+func (c *Container) initializeDelivery() {
+	if c.FGAWriter == nil {
+		c.FGAWriter = notConfiguredFGAWriter{}
+	}
+	var cache contracts.FGACache
+	if c.FGACache != nil && c.FGACache.Backend != config.CacheBackendNone {
+		cache = c.FGACache
+	}
+	handler := application.NewDeliveryHandler(c.MessageProcessor, c.FGAWriter, cache, c.Config.NATS.RequestTimeout, c.Logger)
+	c.DeliveryDispatcher = application.NewOrderedDispatcher(handler, c.Config.NATS.WorkerCount)
+	c.MessageProcessor.ConfigureDelivery(c.Config.NATS.IndexerIndexSubject, c.DeliveryDispatcher.Dispatch)
+}
+
+// notConfiguredFGAWriter answers every FGA operation with ErrFGANotConfigured.
+type notConfiguredFGAWriter struct{}
+
+func (notConfiguredFGAWriter) Apply(context.Context, string, json.RawMessage) (contracts.FGAWriteResult, error) {
+	return contracts.FGAWriteResult{}, contracts.ErrFGANotConfigured
 }
 
 // validateAuditPolicyCoverage fences all revision-dependent origins and requires
@@ -583,6 +611,10 @@ func (c *Container) SetupNATSSubscriptions(ctx context.Context) error {
 		c.IndexingMessageHandler.Handle,
 	); err != nil {
 		return fmt.Errorf("failed to start JetStream index consumer: %w", err)
+	}
+
+	if err := c.MessageProcessor.StartDeliverySubscription(ctx); err != nil {
+		return fmt.Errorf("failed to start request/reply index subscription: %w", err)
 	}
 
 	return nil

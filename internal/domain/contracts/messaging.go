@@ -18,6 +18,12 @@ type MessageHandlerWithReply interface {
 	HandleWithReply(ctx context.Context, data []byte, subject string, reply func([]byte) error) error
 }
 
+// DispatchFunc receives each message of a QueueSubscribeDispatch
+// subscription inside the NATS callback, in delivery order. It must call
+// reply exactly once per message, even when the request carried no reply
+// subject (reply then publishes nothing): drain waits for that call.
+type DispatchFunc func(ctx context.Context, data []byte, subject string, reply func([]byte) error)
+
 // MessagePublisher publishes a post-index event without coupling callers to
 // subscription management or transport authentication.
 type MessagePublisher interface {
@@ -38,6 +44,11 @@ type MessagingRepository interface {
 
 	// QueueSubscribeWithReply subscribes to NATS messages with queue group and reply support
 	QueueSubscribeWithReply(ctx context.Context, subject string, queue string, handler MessageHandlerWithReply) error
+
+	// QueueSubscribeDispatch subscribes with a queue group and calls dispatch
+	// synchronously for each message, so the dispatcher sees messages in the
+	// order NATS delivered them and decides its own concurrency.
+	QueueSubscribeDispatch(ctx context.Context, subject string, queue string, dispatch DispatchFunc) error
 
 	// Close closes the NATS connection
 	Close() error

@@ -292,31 +292,7 @@ func (r *MessagingRepository) QueueSubscribeWithReply(ctx context.Context, subje
 			var replyFunc func([]byte) error
 			if replySubject != "" {
 				replyFunc = func(replyData []byte) error {
-					logger.Debug("Sending reply to NATS message", "reply_subject", replySubject, "reply_size", len(replyData))
-					// Create a Producer span for the reply and inject trace context into headers
-					replyCtx, replySpan := tracer.Start(spanCtx, "nats.reply.publish",
-						trace.WithSpanKind(trace.SpanKindProducer),
-						trace.WithAttributes(
-							attribute.String("messaging.system", "nats"),
-							attribute.String("messaging.destination.name", replySubject),
-							attribute.Int("messaging.message.body.size", len(replyData)),
-						),
-					)
-					defer replySpan.End()
-
-					replyMsg := nats.NewMsg(replySubject)
-					replyMsg.Header = make(nats.Header)
-					replyMsg.Data = replyData
-					otel.GetTextMapPropagator().Inject(replyCtx, natsHeaderCarrier(replyMsg.Header))
-
-					if err := r.conn.PublishMsg(replyMsg); err != nil {
-						replySpan.RecordError(err)
-						replySpan.SetStatus(codes.Error, err.Error())
-						logger.Error("Failed to send reply", "reply_subject", replySubject, "error", err.Error())
-						return err
-					}
-					replySpan.SetStatus(codes.Ok, "")
-					return nil
+					return r.publishReply(spanCtx, logger, replySubject, replyData)
 				}
 			}
 
@@ -347,6 +323,113 @@ func (r *MessagingRepository) QueueSubscribeWithReply(ctx context.Context, subje
 
 	r.logger.Info("NATS queue subscription with reply created successfully", "subject", subject, "queue", queue)
 	return nil
+}
+
+// publishReply sends a reply in a Producer span and injects its trace context.
+func (r *MessagingRepository) publishReply(ctx context.Context, logger *slog.Logger, replySubject string, replyData []byte) error {
+	logger.Debug("Sending reply to NATS message", "reply_subject", replySubject, "reply_size", len(replyData))
+	replyCtx, replySpan := tracer.Start(ctx, "nats.reply.publish",
+		trace.WithSpanKind(trace.SpanKindProducer),
+		trace.WithAttributes(
+			attribute.String("messaging.system", "nats"),
+			attribute.String("messaging.destination.name", replySubject),
+			attribute.Int("messaging.message.body.size", len(replyData)),
+		),
+	)
+	defer replySpan.End()
+
+	replyMsg := nats.NewMsg(replySubject)
+	replyMsg.Header = make(nats.Header)
+	replyMsg.Data = replyData
+	otel.GetTextMapPropagator().Inject(replyCtx, natsHeaderCarrier(replyMsg.Header))
+
+	if err := r.conn.PublishMsg(replyMsg); err != nil {
+		replySpan.RecordError(err)
+		replySpan.SetStatus(codes.Error, err.Error())
+		logger.Error("Failed to send reply", "reply_subject", replySubject, "error", err.Error())
+		return err
+	}
+	replySpan.SetStatus(codes.Ok, "")
+	return nil
+}
+
+// QueueSubscribeDispatch subscribes with a queue group and hands each message
+// to dispatch inside the NATS callback, without a goroutine, so delivery
+// order survives until the dispatcher. The processing span and the drain wait
+// end when dispatch calls the reply function.
+func (r *MessagingRepository) QueueSubscribeDispatch(ctx context.Context, subject string, queue string, dispatch contracts.DispatchFunc) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.isShuttingDown {
+		return fmt.Errorf("cannot queue subscribe with dispatch to %s: repository is shutting down", subject)
+	}
+
+	if !r.IsConnected() {
+		return fmt.Errorf("cannot queue subscribe with dispatch to %s: NATS connection not available", subject)
+	}
+
+	r.logger.InfoContext(ctx, "Creating NATS queue subscription with dispatch", "subject", subject, "queue", queue)
+
+	natsHandler := func(msg *nats.Msg) {
+		msgCtx := otel.GetTextMapPropagator().Extract(ctx, natsHeaderCarrier(msg.Header))
+		data := append([]byte(nil), msg.Data...)
+		r.wg.Add(1)
+		spanCtx, reply := r.dispatchReply(msgCtx, msg.Subject, msg.Reply, len(data))
+		dispatch(spanCtx, data, msg.Subject, reply)
+	}
+
+	sub, err := r.conn.QueueSubscribe(subject, queue, natsHandler)
+	if err != nil {
+		r.logger.Error("Failed to queue subscribe with dispatch to NATS", "subject", subject, "queue", queue, "error", err.Error())
+		return fmt.Errorf("failed to queue subscribe with dispatch to subject %s with queue %s: %w", subject, queue, err)
+	}
+
+	if err := sub.SetPendingLimits(r.pendingMsgLimit, r.pendingBytesLimit); err != nil {
+		_ = sub.Unsubscribe()
+		return fmt.Errorf("failed to set pending limits on subscription %s: %w", subject, err)
+	}
+
+	r.subscriptions = append(r.subscriptions, sub)
+
+	r.logger.Info("NATS queue subscription with dispatch created successfully", "subject", subject, "queue", queue)
+	return nil
+}
+
+// dispatchReply starts the processing span for one dispatched message and
+// returns a reply function that publishes at most once, then ends the span
+// and releases the drain wait taken by the caller.
+func (r *MessagingRepository) dispatchReply(msgCtx context.Context, msgSubject, replySubject string, size int) (context.Context, func([]byte) error) {
+	spanCtx, span := tracer.Start(msgCtx, "nats.process",
+		trace.WithSpanKind(trace.SpanKindConsumer),
+		trace.WithAttributes(
+			attribute.String("messaging.system", "nats"),
+			attribute.String("messaging.destination.name", msgSubject),
+			attribute.String("messaging.operation.type", "process"),
+			attribute.Int("messaging.message.body.size", size),
+		),
+	)
+	spanCtx, logger := logging.WithRequestID(spanCtx, r.logger)
+	logger.Debug("NATS queue message with dispatch received", "subject", msgSubject, "has_reply", replySubject != "")
+
+	var once sync.Once
+	return spanCtx, func(replyData []byte) error {
+		var err error
+		once.Do(func() {
+			defer r.wg.Done()
+			defer span.End()
+			if replySubject != "" {
+				err = r.publishReply(spanCtx, logger, replySubject, replyData)
+			}
+			if err != nil {
+				span.RecordError(err)
+				span.SetStatus(codes.Error, err.Error())
+				return
+			}
+			span.SetStatus(codes.Ok, "")
+		})
+		return err
+	}
 }
 
 // Publish publishes a message to NATS

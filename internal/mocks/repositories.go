@@ -383,6 +383,7 @@ type MockMessagingRepository struct {
 	Subscriptions      map[string]contracts.MessageHandler
 	QueueSubs          map[string]map[string]contracts.MessageHandler
 	QueueSubsWithReply map[string]map[string]contracts.MessageHandlerWithReply
+	QueueDispatchers   map[string]map[string]contracts.DispatchFunc
 
 	// Mock responses
 	PublishError          error
@@ -498,6 +499,39 @@ func (m *MockMessagingRepository) QueueSubscribeWithReply(_ context.Context, sub
 		m.QueueSubsWithReply[subject] = make(map[string]contracts.MessageHandlerWithReply)
 	}
 	m.QueueSubsWithReply[subject][queue] = handler
+	return nil
+}
+
+// QueueSubscribeDispatch mocks a queue subscription that dispatches each
+// message synchronously; deliver messages with SimulateDispatch.
+func (m *MockMessagingRepository) QueueSubscribeDispatch(_ context.Context, subject string, queue string, dispatch contracts.DispatchFunc) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.SubscribeError != nil {
+		return m.SubscribeError
+	}
+
+	if m.QueueDispatchers == nil {
+		m.QueueDispatchers = make(map[string]map[string]contracts.DispatchFunc)
+	}
+	if m.QueueDispatchers[subject] == nil {
+		m.QueueDispatchers[subject] = make(map[string]contracts.DispatchFunc)
+	}
+	m.QueueDispatchers[subject][queue] = dispatch
+	return nil
+}
+
+// SimulateDispatch delivers one message to the dispatcher registered for
+// subject and queue, passing reply through unchanged.
+func (m *MockMessagingRepository) SimulateDispatch(ctx context.Context, subject, queue, msgSubject string, data []byte, reply func([]byte) error) error {
+	m.mu.RLock()
+	dispatch, ok := m.QueueDispatchers[subject][queue]
+	m.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("no dispatcher registered for subject %s and queue %s", subject, queue)
+	}
+	dispatch(ctx, data, msgSubject, reply)
 	return nil
 }
 

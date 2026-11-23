@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
@@ -50,7 +49,7 @@ func NewAuditWorkflow(admission *services.AuditAdmission, history contracts.Hist
 // Projection-only operations never append to history but still require trusted
 // admission and the same revision guard.
 func (w *AuditWorkflow) Process(ctx context.Context, payload []byte, subject string) error {
-	objectType, ok := strings.CutPrefix(subject, constants.IndexPrefix)
+	objectType, ok := ObjectTypeFromSubject(subject)
 	if !ok {
 		return fmt.Errorf("invalid audited subject")
 	}
@@ -76,7 +75,7 @@ func (w *AuditWorkflow) Process(ctx context.Context, payload []byte, subject str
 		Publisher: envelope.Audit.Publisher, EventID: envelope.Audit.EventID,
 		Origin: envelope.Audit.Origin, Fingerprint: fingerprint,
 	}); err != nil {
-		return fmt.Errorf("reserve audited delivery identity: %w", err)
+		return &auditError{fmt.Errorf("reserve audited delivery identity: %w", err)}
 	}
 	if envelope.Audit.Origin == types.AuditOriginMutation {
 		record, err := w.admission.NewRecord(envelope, objectType, w.now())
@@ -85,19 +84,19 @@ func (w *AuditWorkflow) Process(ctx context.Context, payload []byte, subject str
 		}
 		exists, err := w.history.VerifyExisting(ctx, record)
 		if err != nil {
-			return fmt.Errorf("verify audit history: %w", err)
+			return &auditError{fmt.Errorf("verify audit history: %w", err)}
 		}
 		if !exists {
 			attribution, err := w.attribution.Resolve(ctx, evidence)
 			if err != nil {
-				return err
+				return &auditError{err}
 			}
 			record.Audit.Attribution = attribution
 			record.ActorVerified, record.EffectiveActorVerified = attribution.ActorVerified, attribution.EffectiveActorVerified
 			if _, err := w.history.CreateOrVerify(ctx, record); err != nil {
 				// An erased ID contains no trustworthy action/resource proof.
 				// Never allow it to drive a current write, even if it claims delete.
-				return fmt.Errorf("append audit history: %w", err)
+				return &auditError{fmt.Errorf("append audit history: %w", err)}
 			}
 		}
 	}
