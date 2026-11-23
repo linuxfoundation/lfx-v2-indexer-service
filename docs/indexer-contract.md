@@ -456,8 +456,11 @@ startup) or `OPENFGA_STORE_ID`. Its write semantics are lfx-v2-fga-sync's:
 - The payloads fga-sync terminates as invalid reply `rejected`: an empty
   `object_type`, an unknown `operation`, malformed `data`, a missing `uid` or
   `username`, empty `relations` or an empty relation name on `member_put`,
-  and a reference with an empty type or id. Every other OpenFGA failure is
-  `transient`.
+  and a `type:id` reference with an empty type or id. A reference value
+  without `:` is taken as an id of the reference type, unvalidated, as
+  fga-sync does. Every other OpenFGA failure is `transient` and replies
+  `ERROR: transient: fga: openfga request failed`; the detail is logged, not
+  returned, because it can carry the store id, the API URL or usernames.
 
 Without `OPENFGA_API_URL`, or until the store is found, every request carrying
 `fga` replies `ERROR: transient: fga: ...`. Index-only requests are unaffected.
@@ -502,7 +505,9 @@ cached before the change. A successful operation that changed nothing still
 invalidates: it may be the replay of a request whose invalidation failed. If
 the invalidation cannot be recorded the reply is
 `ERROR: transient: fga: cache invalidation failed`, and the replay records it.
-With `CACHE_BACKEND=none` there is no cache to invalidate.
+With `CACHE_BACKEND=none` there is no cache to invalidate, so lfx-v2-fga-sync's
+cache never learns of these writes. Set `CACHE_BACKEND` to the backend
+fga-sync uses before any producer sends `fga` on this subject.
 
 ### Idempotence and retry
 

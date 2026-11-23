@@ -189,6 +189,7 @@ func TestApplyWriteErrorIsTransientAndReportsChanged(t *testing.T) {
 
 	require.Error(t, err)
 	assert.False(t, isRejected(err))
+	assert.EqualError(t, err, "openfga request failed", "OpenFGA error text must not reach the reply")
 	assert.True(t, result.Changed, "an earlier batch may have been applied")
 }
 
@@ -373,7 +374,7 @@ func TestNewWithInvalidAPIURLIsNotConfigured(t *testing.T) {
 
 	_, err := apply(w, `{"object_type":"committee","operation":"delete_access","data":{"uid":"resource-1"}}`)
 
-	assert.ErrorIs(t, err, contracts.ErrFGANotConfigured)
+	assert.EqualError(t, err, contracts.ErrFGANotConfigured.Error(), "the URL must not reach the reply")
 	assert.False(t, isRejected(err))
 }
 

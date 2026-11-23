@@ -90,7 +90,7 @@ func (w *Writer) resolveStore(ctx context.Context, c *sdkClient, name string, in
 // error is transient.
 func (w *Writer) Apply(ctx context.Context, objectType string, operation json.RawMessage) (contracts.FGAWriteResult, error) {
 	if w.disabled != nil {
-		return contracts.FGAWriteResult{}, w.disabled
+		return contracts.FGAWriteResult{}, contracts.ErrFGANotConfigured
 	}
 	op, err := decodeOperation(operation)
 	if err != nil {
@@ -113,8 +113,22 @@ func (w *Writer) Apply(ctx context.Context, objectType string, operation json.Ra
 	if err != nil {
 		w.logger.ErrorContext(ctx, "FGA operation failed", "subject_object_type", objectType,
 			"object_type", op.ObjectType, "operation", op.Operation, "changed", result.Changed, "error", err.Error())
+		return result, replyError(err)
 	}
-	return result, err
+	return result, nil
+}
+
+// errOpenFGAFailed replaces OpenFGA and transport errors in the reply: they
+// can echo the store id, the API URL or tuple users to the producer.
+var errOpenFGAFailed = errors.New("openfga request failed")
+
+// replyError keeps the errors whose text is fixed by this package and
+// replaces every other one with errOpenFGAFailed. The full error is logged.
+func replyError(err error) error {
+	if errors.As(err, new(*contracts.FGARejectedError)) || errors.Is(err, ErrStoreNotResolved) {
+		return err
+	}
+	return errOpenFGAFailed
 }
 
 func rejected(err error) error {
