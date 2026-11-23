@@ -150,6 +150,16 @@ Name/avatar are not stored; query-service's live-enrichment rollout is separate.
 Retention/erasure and index permissions must cover both retained identity copies
 and all replay/repair sources. The indexer never fetches avatar bytes.
 
+Historical imports can retain unresolved source actors as
+`legacy:<source>/<opaque-id>`. These are provenance refs, never LFX usernames:
+preflight restricts them to historical imports without actor JWTs, verification
+remains false, and identity resolution produces explicit null username/email
+without token, cache or directory I/O. Known user and service behavior is
+unchanged. This adds actor-reference vocabulary inside existing fields, not a
+mapping change. Roll out the compatible query-service reader before import;
+older readers reject the unknown kind. Replay preserves the original reference
+even if a matching current account is discovered later.
+
 The committee PostgreSQL migration should commit the mutation and an immutable
 outbox event in one database transaction. A relay attaches fresh service
 authentication and waits for JetStream persistence acknowledgment. Optional actor

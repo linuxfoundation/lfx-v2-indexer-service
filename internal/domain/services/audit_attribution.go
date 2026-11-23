@@ -62,6 +62,12 @@ func (s *AuditAttributionService) Verify(ctx context.Context, input types.AuditA
 }
 
 func (s *AuditAttributionService) verifyActor(ctx context.Context, role, ref, token string) (bool, *string) {
+	if strings.HasPrefix(ref, "legacy:") {
+		// Even a currently valid token cannot prove the identity of an unresolved
+		// historical actor. Preflight rejects evidence on this kind; remain safe
+		// if this service is used directly, without invoking token validation.
+		return false, nil
+	}
 	reason := "missing_token"
 	if token != "" {
 		principal, err := s.auth.ValidateActorToken(ctx, token)

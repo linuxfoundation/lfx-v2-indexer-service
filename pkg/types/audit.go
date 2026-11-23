@@ -69,8 +69,9 @@ type AuditAttribution struct {
 	EffectiveActorJWT string `json:"effective_actor_jwt,omitempty"`
 }
 
-// AuditActorIdentity is the indexer-owned retained user identity. The username
+// AuditActorIdentity is the indexer-owned retained identity. For users, username
 // comes from the actor ref and email from matched token evidence or auth-service.
+// Unresolved legacy actors retain explicit nulls, never a fabricated username.
 // Display names, avatar URLs and credentials never belong in this record.
 type AuditActorIdentity struct {
 	Username *string `json:"username"`
@@ -223,6 +224,14 @@ func (e *IndexerMessageEnvelope) validateV2(objectType string, validateContent A
 	if !auditActorRef(audit.Attribution.ActorRef) || !auditActorRef(audit.Attribution.EffectiveActorRef) {
 		return fmt.Errorf("explicit audit actor and effective actor references are required")
 	}
+	for _, actor := range []AuditActor{
+		{Ref: audit.Attribution.ActorRef, JWT: audit.Attribution.ActorJWT},
+		{Ref: audit.Attribution.EffectiveActorRef, JWT: audit.Attribution.EffectiveActorJWT},
+	} {
+		if ValidLegacyAuditActorRef(actor.Ref) && (audit.Origin != AuditOriginHistoricalImport || actor.JWT != "") {
+			return fmt.Errorf("legacy actors require historical_import origin and no actor JWT evidence")
+		}
+	}
 	for _, refs := range [][]string{audit.Scope.Before, audit.Scope.After} {
 		for _, ref := range refs {
 			if !auditRef(ref) {
@@ -333,11 +342,24 @@ func auditRef(value string) bool {
 
 func auditActorRef(value string) bool {
 	kind, _, _ := strings.Cut(value, ":")
-	return (kind == "user" || kind == "service") && auditRef(value)
+	return ((kind == "user" || kind == "service") && auditRef(value)) || ValidLegacyAuditActorRef(value)
 }
 
-// ValidAuditActorRef validates a user:<principal> or service:<client name> ref.
-// It checks syntax only, never actor authentication or delegation authority.
+// ValidAuditActorRef validates user, service and source-qualified legacy refs.
+// It checks syntax only, never authentication, origin or delegation authority.
 func ValidAuditActorRef(value string) bool {
 	return auditActorRef(value)
+}
+
+// ValidLegacyAuditActorRef validates legacy:<source>/<opaque-id>. Source uses
+// the publisher namespace grammar; the complete source/id is bounded to 256
+// characters. This is provenance, not a Heimdall principal or an access grant.
+// Only historical imports may use it, and it can never carry actor JWT evidence.
+func ValidLegacyAuditActorRef(value string) bool {
+	kind, id, ok := strings.Cut(value, ":")
+	if !ok || kind != "legacy" || !auditID(id) {
+		return false
+	}
+	source, sourceID, ok := strings.Cut(id, "/")
+	return ok && ValidAuditPublisherName(source) && auditID(sourceID)
 }

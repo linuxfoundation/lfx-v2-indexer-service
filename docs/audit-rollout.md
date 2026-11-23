@@ -84,10 +84,14 @@ endpoint or direct-OpenSearch script path. Before granting an import policy:
    snapshot schemas. Do not reuse the broad live publisher grant by default.
    Agree on source occurrence timestamps, stable environment/table/source-row IDs,
    missing mappings, revision semantics, scope/authorization and erasure handling.
-4. Approve historical attribution before importing V1 records. Existing input
-   accepts refs and optional JWT evidence, **not captured legacy profiles**;
-   current email resolution is not historical evidence. This mechanism alone is
-   not sufficient to satisfy the V1 backfill's attribution requirements.
+4. Deploy the companion query-service reader for unresolved `legacy:` actors
+   before dispatch. The agreed [historical attribution mapping](audit-v2-contract.md#historical-attribution-mapping)
+   uses current display enrichment for known usernames, service refs for known
+   M2M clients, and source-qualified legacy refs with null identity for unresolved
+   actors. Do not mint actor JWTs, substitute the importer for an unknown actor,
+   or persist display defaults as identity. Current email resolution is not
+   historical evidence. Freeze trustworthy identity mappings before building
+   immutable events; retain unresolved source IDs and report mapping gaps.
 5. Rehearse a bounded dry run in the source tool, then import into an isolated
    test environment. Verify history action/time/snapshots/authorization and
    immutable identity, absence of duplicate appends, byte-unchanged current
