@@ -54,7 +54,7 @@ func (r *HistoryRepository) CreateOrVerify(ctx context.Context, record *contract
 		!historyEventPattern.MatchString(record.EventID) || record.Fingerprint == "" {
 		return false, fmt.Errorf("history repository or record is not configured")
 	}
-	if record.Audit.Origin != types.AuditOriginMutation {
+	if !record.Audit.Origin.RequiresHistory() {
 		return false, fmt.Errorf("projection-only origins must not create history")
 	}
 	// Publisher and event ID are contract-validated tokens. The separator is

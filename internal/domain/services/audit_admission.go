@@ -55,8 +55,8 @@ func (a *AuditAdmission) validateContent(publisher, resource string, content typ
 		return fmt.Errorf("unregistered audit publisher")
 	}
 	resourcePolicy, ok := policy.Resources[resource]
-	if !ok || !resourcePolicy.Origins[types.AuditOriginMutation] {
-		return fmt.Errorf("audit publisher cannot mutate resource type")
+	if !ok || (!resourcePolicy.Origins[types.AuditOriginMutation] && !resourcePolicy.Origins[types.AuditOriginHistoricalImport]) {
+		return fmt.Errorf("audit publisher cannot append resource history")
 	}
 	validate, ok := resourcePolicy.Schemas[content.Schema]
 	if !ok || validate == nil {

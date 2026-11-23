@@ -122,10 +122,10 @@ inside the audit block.
 | `event_id` | Immutable publisher-wide delivery identity for any origin; `[A-Za-z0-9][A-Za-z0-9._-]{0,127}` |
 | `occurred_at` | Required nonzero RFC3339 source occurrence time, independent of ingestion time |
 | `resource_revision` | JSON integer from 1 through 9223372036854775807; monotonic for the resource |
-| `origin` | `mutation`, `reindex`, `backfill`, or `sync_echo` |
+| `origin` | `mutation`, `historical_import`, `reindex`, `backfill`, or `sync_echo` |
 | `attribution` | Required initiating/effective refs and optional JWT evidence; verification and retained identity are indexer-owned output |
 | `scope` | Required before/after ownership references according to the action |
-| `content` | Approved before/after snapshots for mutations; absent for projection-only origins |
+| `content` | Approved before/after snapshots for mutations and historical imports; absent for projection-only origins |
 
 For mutation origins, the publisher assigns event identity, occurrence time,
 revision, and payload once in the same PostgreSQL transaction as the committed
@@ -352,6 +352,56 @@ Never retain credentials, tokens, raw headers, arbitrary request bodies, or
 unapproved profiles. Snapshot schema versions are immutable once adopted;
 changing permitted fields/semantics requires an explicitly supported schema
 version and coordinated retention/privacy review.
+
+## Historical imports
+
+`origin: "historical_import"` represents an available historical source change,
+not a new live mutation or a current-resource bootstrap. It uses the existing
+version-2 shape with **no additional fields**. Earlier consumers reject this
+unknown origin; upgrade every consumer before granting an import policy. Do not
+change the origin on a frozen event or reuse its identity under another origin.
+
+- The authenticated publisher must have explicit `historical_import` permission
+  for the subject resource type and approved closed snapshot schemas. Mutation
+  permission does not imply import permission, nor does import permission grant
+  mutation, reindex or backfill. `backfill` continues to omit content and never
+  appends history.
+- Import content obeys the same action-specific before/after snapshot rules as
+  mutations. Identity, occurrence time, positive bounded source revision,
+  actor refs, scope and complete concrete authorization config remain required.
+  Source revisions must have an approved source-owned meaning and be frozen
+  across retries; import revisions never establish, advance or reset the live
+  current-resource revision lineage. Do not invent missing historical values to
+  fit a live resource schema. Approve an appropriate versioned historical schema.
+- The workflow reserves the publisher/event ID, verifies retained history or its
+  erasure fence, and appends missing history through the same create-only adapter.
+  Success/ACK requires completed history persistence or verification, **not just
+  a receipt or PubAck**. Identical replay preserves the first ingestion time and
+  attribution; changed immutable content/origin conflicts. A receipt can exist
+  after a failed append and does not prove history was imported.
+- There is **no current-resource stage**: imports never create an absent resource,
+  overwrite a live resource/tombstone, modify current revision metadata, schedule
+  cleanup or emit `lfx.{object_type}.{action}`. This holds even if the imported
+  revision is higher than the live revision. The projection adapter also rejects
+  this origin defensively. No current-resource lookup is used for admission.
+- A history-only policy does not need a legacy projection fence for its resource
+  type and does not establish live audit adoption/completeness. The existing
+  global audited startup/provisioning gates remain unchanged. Live mutations,
+  reindex and sync-echo still require fenced required types.
+- Existing history authorization and erasure/replay fences remain mandatory.
+  Use stable source-derived IDs and never re-ID an erased event to bypass a
+  fence. Importing history creates no FGA grants. Missing or deleted anchors fail
+  closed under the history-query authorization policy; do not guess a project
+  grant to make deleted-committee history readable.
+
+This adds the history-only mechanism, **not** legacy-source approval. In
+particular, attribution still follows the existing refs/JWT contract: supplied
+profiles/retained identities/verification flags are rejected, and an uncached
+user email may be resolved at first append. That is not historical email
+evidence. Preserving legacy captured actor details and explicitly unavailable
+identities requires separately approved contract work before the V1 importer can
+dispatch. Do not manufacture JWTs, replace a missing actor with the importer's
+service identity, or copy raw legacy rows into an approved live schema.
 
 ## Non-mutation operations
 

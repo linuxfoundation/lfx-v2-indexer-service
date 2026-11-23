@@ -27,13 +27,16 @@ const AuditSchemaVersion = 2
 // A broker may impose a smaller transport limit including headers.
 const MaxAuditEnvelopeBytes = 1 << 20
 
-// AuditOrigin identifies whether a message represents a committed mutation or
-// a projection operation. Only an authorized producer may assert these values.
+// AuditOrigin identifies a live mutation, historical import, or projection
+// operation. Only an authorized producer may assert these values.
 type AuditOrigin string
 
 const (
 	// AuditOriginMutation is a committed domain change, including system changes.
 	AuditOriginMutation AuditOrigin = "mutation"
+	// AuditOriginHistoricalImport appends a historical change without touching
+	// current resources, revision guards, cleanup, or downstream resource events.
+	AuditOriginHistoricalImport AuditOrigin = "historical_import"
 	// AuditOriginReindex rebuilds a projection without inventing a domain change.
 	AuditOriginReindex AuditOrigin = "reindex"
 	// AuditOriginBackfill loads a projection without fabricating historical changes.
@@ -114,8 +117,16 @@ func ValidAuditObjectType(name string) bool {
 // RequiresLegacyFence identifies audited origins that depend on retained
 // revision guards. Only explicitly authorized backfill may bootstrap an
 // unfenced type, without claiming history coverage or ongoing guard stability.
+// Historical imports never touch current state and need no projection fence.
 func (origin AuditOrigin) RequiresLegacyFence() bool {
 	return origin == AuditOriginMutation || origin == AuditOriginReindex || origin == AuditOriginSyncEcho
+}
+
+// RequiresHistory identifies origins that must append or verify approved history.
+// Historical imports have no current-projection stage and do not require a
+// legacy write fence; they still require explicit publisher/origin/schema policy.
+func (origin AuditOrigin) RequiresHistory() bool {
+	return origin == AuditOriginMutation || origin == AuditOriginHistoricalImport
 }
 
 // AuditContentValidator must reject unregistered schemas, schemas not owned by
@@ -223,7 +234,7 @@ func (e *IndexerMessageEnvelope) validateV2(objectType string, validateContent A
 		return err
 	}
 	switch audit.Origin {
-	case AuditOriginMutation:
+	case AuditOriginMutation, AuditOriginHistoricalImport:
 		if err := e.validateAuditContent(validateContent, objectType); err != nil {
 			return err
 		}

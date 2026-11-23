@@ -21,12 +21,12 @@ func builderOptions(e *IndexerMessageEnvelope) MessageV2Options {
 
 func TestNewMessageV2(t *testing.T) {
 	for _, action := range []constants.MessageAction{constants.ActionCreated, constants.ActionUpdated, constants.ActionDeleted} {
-		for _, origin := range []AuditOrigin{AuditOriginMutation, AuditOriginReindex, AuditOriginBackfill, AuditOriginSyncEcho} {
+		for _, origin := range []AuditOrigin{AuditOriginMutation, AuditOriginHistoricalImport, AuditOriginReindex, AuditOriginBackfill, AuditOriginSyncEcho} {
 			t.Run(string(action)+"/"+string(origin), func(t *testing.T) {
 				e := fixtureAuditEnvelope(action)
 				e.Audit.Origin = origin
 				var validate AuditContentValidator = fixtureAuditValidator
-				if origin != AuditOriginMutation {
+				if !origin.RequiresHistory() {
 					e.Audit.Content = nil
 					validate = nil
 				}

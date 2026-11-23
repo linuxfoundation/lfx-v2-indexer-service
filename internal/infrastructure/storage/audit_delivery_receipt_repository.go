@@ -39,7 +39,7 @@ func NewAuditDeliveryReceiptRepository(client *opensearch.Client, timeout time.D
 func (r *AuditDeliveryReceiptRepository) CreateOrVerify(ctx context.Context, receipt contracts.AuditDeliveryReceipt) error {
 	if r == nil || r.client == nil || r.timeout <= 0 || !types.ValidAuditPublisherName(receipt.Publisher) ||
 		!historyEventPattern.MatchString(receipt.EventID) || len(receipt.Fingerprint) != 64 ||
-		(receipt.Origin != types.AuditOriginMutation && receipt.Origin != types.AuditOriginReindex &&
+		(receipt.Origin != types.AuditOriginMutation && receipt.Origin != types.AuditOriginHistoricalImport && receipt.Origin != types.AuditOriginReindex &&
 			receipt.Origin != types.AuditOriginBackfill && receipt.Origin != types.AuditOriginSyncEcho) {
 		return fmt.Errorf("projection receipt is not configured")
 	}

@@ -55,4 +55,9 @@ func TestAuditDeliveryReceiptRepository_CreateOrVerify(t *testing.T) {
 	receipt.Fingerprint = stored.Fingerprint
 	receipt.Origin = types.AuditOriginMutation
 	require.ErrorContains(t, repository.CreateOrVerify(context.Background(), receipt), "identity reused")
+	receipt.Origin = types.AuditOriginHistoricalImport
+	require.ErrorContains(t, repository.CreateOrVerify(context.Background(), receipt), "identity reused")
+	present = false
+	require.NoError(t, repository.CreateOrVerify(context.Background(), receipt))
+	require.NoError(t, repository.CreateOrVerify(context.Background(), receipt))
 }

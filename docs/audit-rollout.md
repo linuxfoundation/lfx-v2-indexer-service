@@ -59,9 +59,53 @@ publisher can address the same resource identity, all must use one coordinated
 authoritative source revision sequence; projection workers copy it unchanged.
 Do not register independent revision counters on overlapping resources. Startup
 does not infer this coordination. Reindex/sync-echo policies, like mutations,
-must target legacy-fenced required types. Only a backfill-only policy may prepare
+must target legacy-fenced required types. A backfill-only policy may prepare
 an unfenced type, without claiming history coverage; legacy writes may erase
 that preparatory guard until the type is fenced and rechecked/rebootstrapped.
+Historical-import-only policies also need no current projection fence: they
+cannot touch current state and do not establish live audit coverage.
+
+## Historical imports
+
+The [historical import contract](audit-v2-contract.md#historical-imports) is opt-in
+under the existing audited runtime. There is no separate unauthenticated import
+endpoint or direct-OpenSearch script path. Before granting an import policy:
+
+1. Upgrade every consumer sharing the indexing subjects to understand
+   `historical_import`; older consumers reject the origin. Keep dispatch paused
+   during rollout and preserve the immutable import manifest/events.
+2. Satisfy the existing private-index/mapping/credential/startup requirements
+   below. This change does not relax the global nonempty `AUDIT_REQUIRED_TYPES`
+   requirement or its approved live-mutation schema coverage; an additional
+   historical-only type need not be in that list. Do not list a type as adopted
+   merely to import its history.
+3. Bind a dedicated import publisher principal/namespace to only the approved
+   resource types, `origins: ["historical_import"]`, and reviewed versioned
+   snapshot schemas. Do not reuse the broad live publisher grant by default.
+   Agree on source occurrence timestamps, stable environment/table/source-row IDs,
+   missing mappings, revision semantics, scope/authorization and erasure handling.
+4. Approve historical attribution before importing V1 records. Existing input
+   accepts refs and optional JWT evidence, **not captured legacy profiles**;
+   current email resolution is not historical evidence. This mechanism alone is
+   not sufficient to satisfy the V1 backfill's attribution requirements.
+5. Rehearse a bounded dry run in the source tool, then import into an isolated
+   test environment. Verify history action/time/snapshots/authorization and
+   immutable identity, absence of duplicate appends, byte-unchanged current
+   documents/tombstones/revision metadata, and no cleanup or downstream events.
+6. Reconcile each source-derived ID/fingerprint against private history using a
+   separately approved verification role/tool. A delivery receipt proves identity
+   reservation, not completion; PubAck proves broker persistence only. An erased
+   ID is a disposition to report, never a reason to mint a replacement event ID.
+   No new reconciliation API or import CLI is provided here.
+
+On errors or a safe stop, pause the importer and revoke/pause its origin grant
+if necessary. Preserve original bytes, checkpoints and failed-event ownership;
+resume with the same IDs/content after repair. Existing handler failures retain
+the deployed JetStream retry/NAK behavior. Do not switch failed imports to
+`mutation`/`backfill`, truncate snapshots or alter identities to force acceptance.
+Rollback pauses dispatch and preserves valid history/receipts/fences; it does not
+bulk-delete imported history. Erasure remains a separately authorized operation
+coordinated with source exports, manifests, outboxes and backups.
 
 ## Provisioning and rollout
 
