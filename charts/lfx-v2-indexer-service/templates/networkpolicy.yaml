@@ -7,7 +7,7 @@
 {{- range $i, $port := $policy.opensearchPorts }}
 {{- $ports = append $ports (list (printf "networkPolicy.opensearchPorts[%d]" $i) $port) }}
 {{- end }}
-{{- range $key := list "natsPort" "heimdallJWKSPort" "openfgaPort" "otelGRPCPort" "otelHTTPPort" "valkeyPort" }}
+{{- range $key := list "natsPort" "heimdallJWKSPort" "otelGRPCPort" "otelHTTPPort" "valkeyPort" }}
 {{- $ports = append $ports (list (printf "networkPolicy.%s" $key) (index $policy $key)) }}
 {{- end }}
 {{- /* A blank or null-like port ("", null, "~") renders as an unspecified port,
@@ -50,10 +50,6 @@ spec:
     # Heimdall JWKS endpoint for JWT verification
     - ports:
         - port: {{ .Values.networkPolicy.heimdallJWKSPort }}
-          protocol: TCP
-    # OpenFGA API
-    - ports:
-        - port: {{ .Values.networkPolicy.openfgaPort }}
           protocol: TCP
     # OpenTelemetry collector (gRPC and HTTP)
     - ports:

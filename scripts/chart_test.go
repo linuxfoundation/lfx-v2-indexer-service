@@ -186,7 +186,7 @@ func TestCacheChartSettings(t *testing.T) {
 // TestNetworkPolicyChartPorts rejects ports that are not 1-65535, because a
 // blank or null-like port renders as unspecified and allows all TCP egress.
 func TestNetworkPolicyChartPorts(t *testing.T) {
-	defaults := []string{"53/UDP 53/TCP", "4222/TCP", "443/TCP 9200/TCP", "4457/TCP", "8080/TCP", "4317/TCP 4318/TCP", "6379/TCP"}
+	defaults := []string{"53/UDP 53/TCP", "4222/TCP", "443/TCP 9200/TCP", "4457/TCP", "4317/TCP 4318/TCP", "6379/TCP"}
 	for _, tt := range []struct {
 		name      string
 		flags     []string
@@ -194,8 +194,8 @@ func TestNetworkPolicyChartPorts(t *testing.T) {
 		want      []string
 	}{
 		{"defaults", nil, "", defaults},
-		{"valid overrides", []string{"--set", "networkPolicy.opensearchPorts={9201}", "--set", "networkPolicy.natsPort=4223", "--set-string", "networkPolicy.valkeyPort=65535", "--set", "networkPolicy.openfgaPort=8081"}, "",
-			[]string{"53/UDP 53/TCP", "4223/TCP", "9201/TCP", "4457/TCP", "8081/TCP", "4317/TCP 4318/TCP", "65535/TCP"}},
+		{"valid overrides", []string{"--set", "networkPolicy.opensearchPorts={9201}", "--set", "networkPolicy.natsPort=4223", "--set-string", "networkPolicy.valkeyPort=65535"}, "",
+			[]string{"53/UDP 53/TCP", "4223/TCP", "9201/TCP", "4457/TCP", "4317/TCP 4318/TCP", "65535/TCP"}},
 		{"empty list", []string{"--set-json", "networkPolicy.opensearchPorts=[]"}, "networkPolicy.opensearchPorts must not be empty", nil},
 		{"blank list entry", []string{"--set-json", `networkPolicy.opensearchPorts=[443,""]`}, "networkPolicy.opensearchPorts[1] must be a port", nil},
 		{"whitespace list entry", []string{"--set-json", `networkPolicy.opensearchPorts=[" "]`}, "networkPolicy.opensearchPorts[0] must be a port", nil},
@@ -204,7 +204,6 @@ func TestNetworkPolicyChartPorts(t *testing.T) {
 		{"blank nats port", []string{"--set-string", "networkPolicy.natsPort="}, "networkPolicy.natsPort must be a port", nil},
 		{"null string nats port", []string{"--set-string", "networkPolicy.natsPort=null"}, "networkPolicy.natsPort must be a port", nil},
 		{"blank heimdall port", []string{"--set-string", "networkPolicy.heimdallJWKSPort="}, "networkPolicy.heimdallJWKSPort must be a port", nil},
-		{"blank openfga port", []string{"--set-string", "networkPolicy.openfgaPort="}, "networkPolicy.openfgaPort must be a port", nil},
 		{"blank otel grpc port", []string{"--set-string", "networkPolicy.otelGRPCPort="}, "networkPolicy.otelGRPCPort must be a port", nil},
 		{"blank otel http port", []string{"--set-string", "networkPolicy.otelHTTPPort="}, "networkPolicy.otelHTTPPort must be a port", nil},
 		{"null valkey port", []string{"--set", "networkPolicy.valkeyPort=null"}, "networkPolicy.valkeyPort must be a port", nil},
