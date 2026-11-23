@@ -97,7 +97,7 @@ func (r *AuditDeliveryReceiptRepository) verify(ctx context.Context, id string, 
 	if found.Source.Erased || found.Source.Publisher != receipt.Publisher || found.Source.EventID != receipt.EventID ||
 		found.Source.Origin != receipt.Origin ||
 		found.Source.Fingerprint != receipt.Fingerprint {
-		return fmt.Errorf("projection event identity reused or erased")
+		return &contracts.InvalidTransactionError{Err: fmt.Errorf("projection event identity reused or erased")}
 	}
 	return nil
 }

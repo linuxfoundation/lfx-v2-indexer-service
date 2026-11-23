@@ -25,6 +25,7 @@ func TestClassifyIndexError(t *testing.T) {
 		{"invalid transaction from validation", fmt.Errorf("failed to process transaction: %w", &contracts.InvalidTransactionError{Err: errors.New("invalid transaction action: bogus")}), "ERROR: rejected: index: failed to process transaction: invalid transaction action: bogus"},
 		{"audit store error", &auditError{errors.New("append audit history: down")}, "ERROR: transient: audit: append audit history: down"},
 		{"erased audit identity", &auditError{fmt.Errorf("append audit history: %w", &contracts.HistoryErasedError{})}, "ERROR: rejected: audit: append audit history: history event has been explicitly erased"},
+		{"reused audit identity", &auditError{fmt.Errorf("reserve audited delivery identity: %w", &contracts.InvalidTransactionError{Err: errors.New("projection event identity reused or erased")})}, "ERROR: rejected: audit: reserve audited delivery identity: projection event identity reused or erased"},
 		{"transient audit error keeps its class once", &auditError{&contracts.IdentityLookupError{}}, "ERROR: transient: audit: identity lookup unavailable"},
 	}
 	for _, tt := range tests {
