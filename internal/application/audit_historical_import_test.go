@@ -118,6 +118,37 @@ func TestAuditWorkflow_HistoricalImportRetainsFirstAttribution(t *testing.T) {
 	auth.AssertExpectations(t)
 }
 
+func TestAuditWorkflow_HistoricalImportLegacyAttribution(t *testing.T) {
+	w, history, current, notifier := workflowFixture(t)
+	current.Failure = true
+	var envelope types.IndexerMessageEnvelope
+	require.NoError(t, json.Unmarshal(historicalEnvelope(t, constants.ActionDeleted, "legacy-attribution", 42), &envelope))
+	envelope.Audit.Attribution = types.AuditAttribution{
+		ActorRef: "legacy:v1-platform/actor-001", EffectiveActorRef: "legacy:v1-platform/actor-001",
+	}
+	payload, err := json.Marshal(envelope)
+	require.NoError(t, err)
+	for range 2 {
+		require.NoError(t, w.Process(context.Background(), payload, constants.IndexPrefix+"fixture_resource"))
+	}
+	first := history.LastRecord
+	require.Len(t, history.Records, 1)
+	require.False(t, first.ActorVerified)
+	require.False(t, first.EffectiveActorVerified)
+	require.Equal(t, envelope.Audit.Attribution.ActorRef, first.ActorRef)
+	require.Equal(t, &types.AuditActorIdentity{}, first.Audit.Attribution.ActorIdentity)
+	require.Equal(t, first.Audit.Attribution.ActorIdentity, first.Audit.Attribution.EffectiveActorIdentity)
+	// Resolving this actor later is not permission to rewrite a frozen event.
+	envelope.Audit.Attribution.ActorRef, envelope.Audit.Attribution.EffectiveActorRef = "user:first-last", "user:first-last"
+	changed, err := json.Marshal(envelope)
+	require.NoError(t, err)
+	require.ErrorContains(t, w.Process(context.Background(), changed, constants.IndexPrefix+"fixture_resource"), "identity conflict")
+	require.Same(t, first, history.LastRecord)
+	require.Zero(t, current.Writes)
+	require.Zero(t, notifier.Events)
+	require.Empty(t, w.cleanup.(*mocks.MockAuditCleanup).Refs)
+}
+
 func TestAuditWorkflow_HistoricalImportConflictsAndErasure(t *testing.T) {
 	for _, scenario := range []string{"changed snapshot", "changed action", "changed origin", "erased history"} {
 		t.Run(scenario, func(t *testing.T) {

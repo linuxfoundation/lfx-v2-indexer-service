@@ -28,6 +28,8 @@ func TestAuditAttributionService_Verify(t *testing.T) {
 		wantCalls                                                 int
 	}{
 		{name: "missing evidence", actor: "user:testuser01", effective: "user:testuser01"},
+		{name: "legacy actor remains unresolved", actor: "legacy:v1-platform/actor-001", effective: "legacy:v1-platform/actor-001"},
+		{name: "legacy actor cannot be verified", actor: "legacy:v1-platform/actor-001", effective: "legacy:v1-platform/actor-001", actorJWT: "actor-private-token", claims: &contracts.Principal{Principal: "v1-platform/actor-001"}},
 		{name: "valid user", actor: "user:testuser01", effective: "user:testuser01", actorJWT: "actor-private-token", claims: &contracts.Principal{Principal: "testuser01", Email: "user-1@example.com"}, wantActor: true, wantEffective: true, wantCalls: 1},
 		{name: "invalid signature or expired", actor: "user:testuser01", effective: "user:testuser01", actorJWT: "actor-private-token", validationErr: fmt.Errorf("signature/expiry failure: actor-private-token"), wantCalls: 1},
 		{name: "mismatch", actor: "user:testuser01", effective: "user:testuser01", actorJWT: "actor-private-token", claims: &contracts.Principal{Principal: "testuser02", Email: "mismatch@example.com"}, wantCalls: 1},
