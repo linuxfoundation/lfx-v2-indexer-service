@@ -11,6 +11,10 @@ import "time"
 const (
 	IndexPrefix        = "lfx.index." // V2 message prefix
 	EventSubjectPrefix = "lfx."       // Post-indexing domain event prefix: lfx.{object_type}.{action}
+	// IndexerIndexPrefix is the core-NATS request/reply prefix:
+	// lfx.indexer.index.{object_type}. It is not matched by IndexPrefix + ">",
+	// so the index-events stream never captures it.
+	IndexerIndexPrefix = "lfx.indexer.index."
 )
 
 // BuildEventSubject constructs the NATS subject for a post-indexing domain event.
@@ -25,6 +29,8 @@ const (
 	MeetingSubject  = IndexPrefix + "meeting" // V2 meeting messages
 	SubjectIndexing = IndexPrefix + "index"   // V2 indexing messages
 	AllSubjects     = IndexPrefix + ">"       // All V2 subjects
+	// AllIndexerIndexSubjects is every request/reply indexing subject.
+	AllIndexerIndexSubjects = IndexerIndexPrefix + ">"
 )
 
 // MessageAction represents the type of indexing operation to perform.
