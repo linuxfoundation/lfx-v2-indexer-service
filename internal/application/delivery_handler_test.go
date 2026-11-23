@@ -343,6 +343,8 @@ func TestDeliveryHandler_RejectsInvalidRequests(t *testing.T) {
 		{"sync is not a boolean", deliverySubject, indexRequest(t, func(r map[string]any) { r["sync"] = "yes" }), "ERROR: rejected: index: invalid request: json: cannot unmarshal string into Go struct field deliveryFields.sync of type bool"},
 		{"no object type", constants.IndexerIndexPrefix, indexRequest(t, nil), "ERROR: rejected: index: invalid subject"},
 		{"invalid action", deliverySubject, indexRequest(t, func(r map[string]any) { r["action"] = "" }), "ERROR: rejected: index: failed to create transaction: failed to create V2 transaction: missing or invalid action in message data"},
+		{"unknown action", deliverySubject, indexRequest(t, func(r map[string]any) { r["action"] = "archived" }), "ERROR: rejected: index: failed to process transaction: invalid transaction action: invalid V2 transaction action: archived"},
+		{"duplicate top-level key", deliverySubject, []byte(`{"action":"updated","action":"deleted","indexing_config":{"object_id":"fixture-1"}}`), "ERROR: rejected: index: invalid request JSON: duplicate key"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -353,6 +355,43 @@ func TestDeliveryHandler_RejectsInvalidRequests(t *testing.T) {
 			require.Empty(t, writer.calls())
 		})
 	}
+}
+
+// Producers send deletes with the bare UID as data and no indexing_config;
+// the document delete must still run alongside delete_access.
+func TestDeliveryHandler_UIDOnlyDeleteIsIndexWork(t *testing.T) {
+	index, writer := &fakeIndex{}, &fakeFGAWriter{}
+	h := newTestDeliveryHandler(index, writer, nil)
+	payload := []byte(`{"action":"deleted","headers":{"authorization":"Bearer fixture-token"},"data":"fixture-1",` +
+		`"fga":{"object_type":"fixture_resource","operation":"delete_access","data":{"uid":"fixture-1"}}}`)
+
+	req, failure := parseDeliveryRequest(payload, deliverySubject)
+	require.Nil(t, failure)
+	require.Equal(t, "fixture_resource:fixture-1", req.objectRef)
+
+	require.Equal(t, "OK", deliver(t, h, deliverySubject, payload))
+	require.Len(t, index.bodies, 1)
+	require.NotContains(t, index.bodies[0], "delete_access")
+	require.Len(t, writer.calls(), 1)
+}
+
+// A request whose timeout ran out while it was queued replies without
+// writing: its producer has already given up on it.
+func TestDeliveryHandler_ExpiredWhileQueuedDoesNotWrite(t *testing.T) {
+	index, writer := &fakeIndex{}, &fakeFGAWriter{}
+	h := NewDeliveryHandler(index, writer, nil, 100*time.Millisecond, discardLogger())
+	req, failure := parseDeliveryRequest(indexRequest(t, withFGA), deliverySubject)
+	require.Nil(t, failure)
+	req.arrived = time.Now().Add(-time.Second)
+
+	var reply string
+	h.Handle(context.Background(), req, func(body []byte) error {
+		reply = string(body)
+		return nil
+	})
+	require.Equal(t, "ERROR: transient: index: timeout", reply)
+	require.Empty(t, index.bodies)
+	require.Empty(t, writer.calls())
 }
 
 func TestDeliveryHandler_TimeoutNamesRunningHalf(t *testing.T) {

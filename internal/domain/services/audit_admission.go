@@ -119,7 +119,7 @@ func (a *AuditAdmission) Admit(ctx context.Context, payload []byte, objectType s
 	}
 	envelope, err := types.DecodeV2Envelope(payload, objectType, a.validateContent)
 	if err != nil {
-		return nil, err
+		return nil, &contracts.InvalidTransactionError{Err: err}
 	}
 	policy, ok := a.policies[envelope.Audit.Publisher]
 	if !ok || !policy.CanAttestActors {

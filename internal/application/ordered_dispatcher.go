@@ -6,6 +6,7 @@ package application
 import (
 	"context"
 	"sync"
+	"time"
 )
 
 // deliveryRunner is the part of DeliveryHandler the dispatcher drives.
@@ -53,11 +54,13 @@ func newOrderedDispatcher(runner deliveryRunner, maxInFlight int) *OrderedDispat
 // Dispatch parses one request and queues it behind earlier requests for the
 // same object. A request that cannot be parsed or keyed is rejected at once.
 func (d *OrderedDispatcher) Dispatch(ctx context.Context, data []byte, subject string, reply func([]byte) error) {
+	arrived := time.Now()
 	req, failure := parseDeliveryRequest(data, subject)
 	if failure != nil {
 		d.runner.Reject(ctx, subject, failure, reply)
 		return
 	}
+	req.arrived = arrived
 	d.slots <- struct{}{}
 
 	d.mu.Lock()

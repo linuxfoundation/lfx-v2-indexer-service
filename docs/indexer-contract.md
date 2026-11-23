@@ -403,9 +403,13 @@ plus two optional fields.
   `lfx-v2-fga-sync/docs/fga-sync-contract.md` for their fields.
 - `sync: true` makes the index write wait for an OpenSearch refresh, so the
   document is searchable as soon as the reply is `OK`. Without it the document
-  becomes searchable within the normal refresh interval.
-- At least one of `indexing_config` and `fga` must be present. A request with
-  only one applies only that half.
+  becomes searchable within the normal refresh interval. A replay of an audited
+  write that was already applied is a no-op update, which may reply `OK`
+  before the earlier write is searchable; it becomes searchable within the
+  normal refresh interval.
+- At least one of `indexing_config` and `fga` must be present, except that a
+  delete whose `data` is the bare UID string is index work without
+  `indexing_config`. A request with only one half applies only that half.
 - `fga` and `sync` are accepted only on this subject. On `lfx.index.*` an audit
   version 2 envelope carrying them is rejected as an unknown field.
 
@@ -428,12 +432,16 @@ reports a `rejected` error before a `transient` one, then `index`, `audit`,
 `fga` in that order.
 
 Requests the indexer rejects before applying anything include malformed JSON
-(`ERROR: rejected: index: invalid request JSON`), a request with neither block
+(`ERROR: rejected: index: invalid request JSON`), a repeated top-level key, a
+request with neither block
 (`ERROR: rejected: index: neither indexing_config nor fga is present`), a
 missing `indexing_config.object_id`, an FGA-only request without
 `fga.data.uid`, and an envelope the index path refuses to build a transaction
-from (for example an unknown action). Errors from storage, authentication or
-other dependencies of the index half are `transient`.
+from. The index half also rejects an envelope that fails validation: an
+unknown action, a missing object type, invalid `data` or `headers`, a missing
+`indexing_config` on a create or update, an invalid object id, and an audit
+version 2 envelope that fails strict decoding. Errors from storage,
+authentication or other dependencies of the index half are `transient`.
 
 Until the indexer has an OpenFGA connection, every request carrying `fga`
 replies `ERROR: transient: fga: fga writer is not configured`. Index-only
@@ -442,10 +450,12 @@ requests are unaffected.
 ### Ordering
 
 - Requests for the same `object_ref` that reach the same replica are applied in
-  arrival order. `object_ref` is `{object_type}:{indexing_config.object_id}`, or
-  `{object_type}:{fga.data.uid}` when the request has no `indexing_config`.
-  Requests for different resources run concurrently, so a slow FGA write for
-  one resource does not delay another.
+  arrival order. `object_ref` is `{object_type}:{indexing_config.object_id}`,
+  `{object_type}:{data}` for a UID-only delete, or `{object_type}:{fga.data.uid}` when the
+  request has no index half. A combined request is ordered by its index id even
+  when `fga.data.uid` differs, as it does for resources whose access object is
+  a parent. Requests for different resources run concurrently, so a slow FGA
+  write for one resource does not delay another.
 - The queue group spreads one resource's requests across replicas, so across
   replicas ordering relies on the producer: wait for the reply to one request
   before sending the next request for the same resource.
@@ -463,13 +473,21 @@ is refused at startup. Producers must wait longer than this before treating a
 missing reply as lost; otherwise a request that is still being applied is
 retried while it may yet succeed.
 
+The timeout runs from when the request arrives, so time spent queued behind
+earlier requests for the same resource counts against it. A request whose
+timeout runs out while queued replies `ERROR: transient: <half>: timeout`
+without writing anything.
+
 ### Cache invalidation
 
-When the FGA half writes or deletes any tuple, the indexer records an
-invalidation on its FGA cache backend before replying, so no access check is
-answered from a result cached before the change. If the invalidation cannot be
-recorded the reply is `ERROR: transient: fga: cache invalidation failed`. With
-`CACHE_BACKEND=none` there is no cache to invalidate.
+After every successful FGA operation, and after a failed one that had already
+written or deleted a tuple, the indexer records an invalidation on its FGA
+cache backend before replying, so no access check is answered from a result
+cached before the change. A successful operation that changed nothing still
+invalidates: it may be the replay of a request whose invalidation failed. If
+the invalidation cannot be recorded the reply is
+`ERROR: transient: fga: cache invalidation failed`, and the replay records it.
+With `CACHE_BACKEND=none` there is no cache to invalidate.
 
 ### Idempotence and retry
 

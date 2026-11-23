@@ -71,7 +71,7 @@ func classifyIndexError(err error) *deliveryFailure {
 		half = halfAudit
 	}
 	text := err.Error()
-	if errors.As(err, new(*rejectedError)) {
+	if errors.As(err, new(*rejectedError)) || errors.As(err, new(*contracts.InvalidTransactionError)) {
 		return rejected(half, text)
 	}
 	return transient(half, strings.TrimPrefix(text, transientPrefix))
