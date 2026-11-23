@@ -445,7 +445,10 @@ unknown action, a missing object type, invalid `data` or `headers`, a missing
 `indexing_config` on a create or update, an invalid object id, and an audit
 version 2 envelope that fails strict decoding. An audited request whose
 publisher and event id were erased from history replies
-`ERROR: rejected: audit: ...`, because a replay meets the same erasure.
+`ERROR: rejected: audit: ...`, because a replay meets the same erasure. An
+audited request whose publisher and event id were already used with different
+content also replies `ERROR: rejected: audit: ...`, because a replay meets the
+same conflict.
 Errors from storage,
 authentication or other dependencies of the index half are `transient`.
 
