@@ -409,8 +409,11 @@ plus two optional fields.
   normal refresh interval.
 - At least one of `indexing_config` and `fga` must be present, except that a
   delete is always index work, with or without `indexing_config`; its `data`
-  must be the bare UID string. A request with only one half applies only that
-  half.
+  must be the bare UID string. A request that carries `data` is also always
+  index work, so a create or update with `data` and `fga` but no
+  `indexing_config` is rejected rather than applied as FGA-only. A request
+  with only one half applies only that half; an FGA-only request carries no
+  `indexing_config` and no `data`.
 - `fga` and `sync` are accepted only on this subject. On `lfx.index.*` an audit
   version 2 envelope carrying them is rejected as an unknown field.
 

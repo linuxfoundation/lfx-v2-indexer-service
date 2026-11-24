@@ -404,6 +404,18 @@ func TestDeliveryHandler_DeleteWithObjectDataIsRejected(t *testing.T) {
 		deliver(t, h, deliverySubject, payload))
 }
 
+func TestDeliveryHandler_UpdateWithDataMissingConfigIsRejected(t *testing.T) {
+	mp, _, _ := setupTestMessageProcessor()
+	h := newTestDeliveryHandler(mp, &fakeFGAWriter{}, nil)
+	payload := indexRequest(t, func(request map[string]any) {
+		delete(request, "indexing_config")
+		request["fga"] = fgaOperation("fixture-1")
+	})
+
+	require.Equal(t, `ERROR: rejected: index: failed to process transaction: indexing_config is required for object_type "fixture_resource"`,
+		deliver(t, h, deliverySubject, payload))
+}
+
 // encoding/json matches field names with Unicode case folding, which is why
 // the duplicate check folds keys the same way.
 func TestDeliveryHandler_JSONFieldMatchingFoldsCase(t *testing.T) {

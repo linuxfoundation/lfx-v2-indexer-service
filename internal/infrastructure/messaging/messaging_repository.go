@@ -496,23 +496,26 @@ func (r *MessagingRepository) waitForHandlers(timeout time.Duration) bool {
 }
 
 // stopDispatch stops the dispatch subscriptions from accepting new requests.
-// It reports whether waitDispatch has work to wait for.
-func (r *MessagingRepository) stopDispatch(subs []*nats.Subscription) bool {
-	if len(subs) == 0 || r.conn == nil || r.conn.IsClosed() || r.conn.IsDraining() {
-		return false
+// A closed or draining connection has already stopped them.
+func (r *MessagingRepository) stopDispatch(subs []*nats.Subscription) {
+	if r.conn == nil || r.conn.IsClosed() || r.conn.IsDraining() {
+		return
 	}
 	for _, sub := range subs {
 		if err := sub.Drain(); err != nil {
 			r.logger.Warn("Failed to drain dispatch subscription", "subject", sub.Subject, "error", err.Error())
 		}
 	}
-	return true
 }
 
 // waitDispatch waits, bounded by deadline, for every dispatched request to
-// finish. The wait starts only once each subscription has stopped delivering,
-// so no dispatchWg.Add can race it.
+// finish, whatever the connection state, because accepted work outlives it.
+// The wait starts only once each subscription has stopped delivering, so no
+// dispatchWg.Add can race it.
 func (r *MessagingRepository) waitDispatch(subs []*nats.Subscription, deadline time.Time) {
+	if len(subs) == 0 {
+		return
+	}
 	for _, sub := range subs {
 		for sub.IsValid() && time.Now().Before(deadline) {
 			time.Sleep(10 * time.Millisecond)
@@ -568,7 +571,7 @@ func (r *MessagingRepository) DrainWithTimeout() error {
 
 	// Stop accepting dispatch requests before any wait, so a request cannot
 	// arrive late and find the shared deadline already spent.
-	dispatchStopped := r.stopDispatch(dispatchSubs)
+	r.stopDispatch(dispatchSubs)
 
 	// Phase 1: Stop JetStream consumers and wait for each one to fully close.
 	//
@@ -607,9 +610,7 @@ func (r *MessagingRepository) DrainWithTimeout() error {
 
 	// Dispatched requests reply and publish post-indexing events after their
 	// NATS callback returns, so they too must finish before conn.Drain().
-	if dispatchStopped {
-		r.waitDispatch(dispatchSubs, deadline)
-	}
+	r.waitDispatch(dispatchSubs, deadline)
 
 	r.logger.Info("Starting NATS graceful drain sequence", "timeout", r.drainTimeout, "subscriptions", totalSubscriptions)
 

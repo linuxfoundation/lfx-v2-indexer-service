@@ -178,6 +178,38 @@ func TestQueueSubscribeDispatch_StopsBeforeJetStreamWait(t *testing.T) {
 	}
 }
 
+// Accepted work outlives the connection, so drain still waits for it.
+func TestQueueSubscribeDispatch_DrainWaitsForDoneAfterConnectionClosed(t *testing.T) {
+	nc := startCoreNATS(t)
+	repo := newDispatchRepo(t, nc)
+
+	finished := make(chan func(), 1)
+	err := repo.QueueSubscribeDispatch(context.Background(), "lfx.indexer.index.>", "q", func(_ context.Context, _ []byte, _ string, _ func([]byte) error, done func()) {
+		finished <- done
+	})
+	require.NoError(t, err)
+	require.NoError(t, startPublisher(t, nc).Publish("lfx.indexer.index.fixture", []byte("x")))
+	done := <-finished
+	nc.Close()
+
+	drained := make(chan struct{})
+	go func() {
+		_ = repo.DrainWithTimeout()
+		close(drained)
+	}()
+	select {
+	case <-drained:
+		t.Fatal("drain returned before the dispatched message finished")
+	case <-time.After(300 * time.Millisecond):
+	}
+	done()
+	select {
+	case <-drained:
+	case <-time.After(5 * time.Second):
+		t.Fatal("drain did not return after the message finished")
+	}
+}
+
 func TestQueueSubscribeDispatch_RefusedWhileShuttingDown(t *testing.T) {
 	nc := startCoreNATS(t)
 	repo := newDispatchRepo(t, nc)
