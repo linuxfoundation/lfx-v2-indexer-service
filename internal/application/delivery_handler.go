@@ -33,7 +33,7 @@ type deliveryRequest struct {
 	// objectRef is the ordering key: <object_type>:<id>.
 	objectRef string
 	// indexBody is the envelope without fga and sync, or nil when the
-	// request has no indexing_config.
+	// request is FGA-only: no indexing_config, no data, and not a delete.
 	indexBody []byte
 	fga       json.RawMessage
 	sync      bool
