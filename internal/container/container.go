@@ -461,8 +461,8 @@ func (notConfiguredFGAWriter) Apply(context.Context, string, json.RawMessage) (c
 }
 
 // validateAuditPolicyCoverage fences all revision-dependent origins and requires
-// an approved mutation schema for adopted types. Backfill-only preparation is
-// the sole unfenced exception; publisher coordination remains source-owned.
+// an approved mutation schema for adopted types. Backfill-only preparation and
+// history-only imports do not adopt current state or establish live coverage.
 func validateAuditPolicyCoverage(policies []services.AuditPublisherPolicy, requiredTypes []string) error {
 	required := make(map[string]bool, len(requiredTypes))
 	for _, resource := range requiredTypes {

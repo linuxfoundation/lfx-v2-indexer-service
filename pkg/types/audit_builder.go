@@ -27,6 +27,9 @@ func NewAuditAttribution(actor AuditActor, effective *AuditActor) (AuditAttribut
 	if !auditActorRef(actor.Ref) || !auditActorRef(effective.Ref) {
 		return AuditAttribution{}, fmt.Errorf("explicit audit actor and effective actor references are required")
 	}
+	if (ValidLegacyAuditActorRef(actor.Ref) && actor.JWT != "") || (ValidLegacyAuditActorRef(effective.Ref) && effective.JWT != "") {
+		return AuditAttribution{}, fmt.Errorf("legacy actors must not carry actor JWT evidence")
+	}
 	attribution := AuditAttribution{
 		ActorRef: actor.Ref, EffectiveActorRef: effective.Ref,
 		ActorJWT: actor.JWT, EffectiveActorJWT: effective.JWT,

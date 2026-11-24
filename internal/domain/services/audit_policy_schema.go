@@ -85,14 +85,14 @@ func DecodeAuditPolicies(data []byte) ([]AuditPublisherPolicy, error) {
 			approved := AuditResourcePolicy{Origins: make(map[types.AuditOrigin]bool), Schemas: make(map[string]func(before, after json.RawMessage) error)}
 			for _, origin := range resource.Origins {
 				switch origin {
-				case types.AuditOriginMutation, types.AuditOriginReindex, types.AuditOriginBackfill, types.AuditOriginSyncEcho:
+				case types.AuditOriginMutation, types.AuditOriginHistoricalImport, types.AuditOriginReindex, types.AuditOriginBackfill, types.AuditOriginSyncEcho:
 					approved.Origins[origin] = true
 				default:
 					return nil, fmt.Errorf("invalid audit policy origin")
 				}
 			}
-			if approved.Origins[types.AuditOriginMutation] && len(resource.Schemas) == 0 {
-				return nil, fmt.Errorf("mutation policy requires approved schemas")
+			if (approved.Origins[types.AuditOriginMutation] || approved.Origins[types.AuditOriginHistoricalImport]) && len(resource.Schemas) == 0 {
+				return nil, fmt.Errorf("mutation or historical import policy requires approved schemas")
 			}
 			for schema, rule := range resource.Schemas {
 				if !types.ValidAuditSchemaName(schema) || len(rule.Fields) == 0 {

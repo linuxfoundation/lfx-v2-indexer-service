@@ -33,6 +33,24 @@ append. Name/avatar are a query-service live-enrichment responsibility. Retained
 identity is private history metadata, not current-resource document data. See
 the audit contract for coordinated read-side rollout and outstanding cleanup.
 
+Historical audit ingestion uses the separately policy-authorized
+`audit.origin: "historical_import"`. It appends/verifies approved history only;
+it never writes current resources/tombstones, advances their revision guards,
+schedules cleanup or emits resource-change events. It is not `backfill`, which
+remains projection-only. Existing policies do not grant the new origin. No
+envelope/config fields or OpenSearch mapping fields are added. See
+[historical imports](audit-v2-contract.md#historical-imports) for the contract and
+[operational prerequisites](audit-rollout.md#historical-imports).
+
+Unresolved historical actors may use `legacy:<source>/<opaque-id>` instead of
+pretending a legacy ID is a current LFX username. This actor kind is restricted to
+`historical_import`, forbids actor JWT evidence, and retains null identity fields
+with false verification and no directory lookup. Known users keep the existing
+current-profile enrichment; M2M clients remain service actors. This is additive
+actor-reference vocabulary, not a new envelope/config or mapping field. Upgrade
+history readers for the new kind before dispatch; see
+[historical attribution mapping](audit-v2-contract.md#historical-attribution-mapping).
+
 `schema_version` and `audit` are reserved, lowercase discriminator fields. A
 present audit block without a version (including null), unsupported/invalid
 versions, and unsupported subjects are rejected rather than

@@ -105,6 +105,9 @@ func (r *AuditProjectionRepository) ApplyIfNewer(ctx context.Context, envelope *
 	if r == nil || r.client == nil || r.index == "" || r.index == historyIndex || envelope == nil || envelope.Audit == nil || fingerprint == "" {
 		return nil, false, fmt.Errorf("audited projection is not configured")
 	}
+	if envelope.Audit.Origin == types.AuditOriginHistoricalImport {
+		return nil, false, fmt.Errorf("historical imports must not write current projections")
+	}
 	body, err := contracts.AuditProjectionBody(envelope, objectType)
 	if err != nil {
 		return nil, false, err

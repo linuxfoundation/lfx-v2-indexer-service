@@ -83,3 +83,16 @@ func TestNewHistoryRecord(t *testing.T) {
 	_, err = NewHistoryRecord(e, "fixture_resource", historyFixtureValidator, now)
 	require.ErrorContains(t, err, "projection-only")
 }
+
+func TestNewHistoryRecord_HistoricalImport(t *testing.T) {
+	envelope := historyFixture()
+	envelope.Audit.Origin = types.AuditOriginHistoricalImport
+	record, err := NewHistoryRecord(envelope, "fixture_resource", historyFixtureValidator, time.Now())
+	require.NoError(t, err)
+	require.Equal(t, types.AuditOriginHistoricalImport, record.Audit.Origin)
+	importFingerprint := record.Fingerprint
+	envelope.Audit.Origin = types.AuditOriginMutation
+	fingerprint, err := AuditFingerprint(envelope, "fixture_resource")
+	require.NoError(t, err)
+	require.NotEqual(t, importFingerprint, fingerprint, "delivery mode must be immutable")
+}

@@ -122,10 +122,10 @@ inside the audit block.
 | `event_id` | Immutable publisher-wide delivery identity for any origin; `[A-Za-z0-9][A-Za-z0-9._-]{0,127}` |
 | `occurred_at` | Required nonzero RFC3339 source occurrence time, independent of ingestion time |
 | `resource_revision` | JSON integer from 1 through 9223372036854775807; monotonic for the resource |
-| `origin` | `mutation`, `reindex`, `backfill`, or `sync_echo` |
+| `origin` | `mutation`, `historical_import`, `reindex`, `backfill`, or `sync_echo` |
 | `attribution` | Required initiating/effective refs and optional JWT evidence; verification and retained identity are indexer-owned output |
 | `scope` | Required before/after ownership references according to the action |
-| `content` | Approved before/after snapshots for mutations; absent for projection-only origins |
+| `content` | Approved before/after snapshots for mutations and historical imports; absent for projection-only origins |
 
 For mutation origins, the publisher assigns event identity, occurrence time,
 revision, and payload once in the same PostgreSQL transaction as the committed
@@ -168,6 +168,16 @@ for the principal. A background mutation explicitly identifies a service actor;
 missing authentication must never be converted into a system identity. The fresh
 relay credential is not the original initiating user's credential.
 
+Historical imports additionally accept `legacy:<source>/<opaque-id>` for an
+actor that cannot be mapped confidently to an LFX principal or known M2M client.
+`source` uses the publisher namespace grammar (for example `v1-platform` or
+`v1-salesforce`); the complete `<source>/<opaque-id>` obeys the existing 256-byte
+opaque-ID bound and character rules. This preserves source provenance, not a
+username, service identity or authorization object. It is valid **only** for
+`historical_import`, in either actor role, and must not carry JWT evidence.
+No envelope fields or OpenSearch mapping fields are added. Older consumers and
+readers reject this new actor kind; deploy compatible readers before dispatch.
+
 ### Publisher input and indexer-owned output
 
 Publishers send the two refs and optional `actor_jwt` and `effective_actor_jwt`
@@ -180,6 +190,13 @@ Only the indexer sets verification booleans and retained user identities. Stored
 attribution includes the refs, booleans, and, for users, an identity with **only
 nullable `username` and `email`**. Service actors have no identity record.
 Neither JWTs nor name/avatar snapshots belong in stored attribution.
+
+Unresolved `legacy:` actors have an identity object with both `username` and
+`email` explicitly null, and verification always false. The source-qualified
+reference is retained unchanged. It never enters token validation, the identity
+cache or auth-service lookup, even if a direct internal caller supplies evidence
+or an email. Wire/builders reject JWT evidence on this kind rather than treating
+it as an LFX principal. The indexer does not invent a human or machine identity.
 
 ### Verification at ingestion
 
@@ -277,6 +294,13 @@ cache: 10 minutes found, 1 minute not found. Do not cache failures as deletion.
 Enrich authorized events only; no extra per-user gate is added beyond existing
 history authorization. Render display strings as text, not trusted HTML.
 
+For `legacy:` actors, the compatible reader returns an `unavailable` profile
+with null username/email/avatar and the display-only label `Unknown legacy user`.
+This label is not persisted identity. No directory lookup is attempted, and the
+stored false verification flag is preserved. Service actors still omit profiles.
+The reader must reject verified/non-null legacy identities and legacy refs on
+non-import records instead of disguising malformed history as an unknown actor.
+
 Opaque IDs are 1–256 printable non-space ASCII characters, excluding `:`, `#`,
 `@`, `{`, and `}`. Resource types use `[a-z][a-z0-9_]{0,63}`; scope/authorization
 references use `<type>:<id>`;
@@ -352,6 +376,81 @@ Never retain credentials, tokens, raw headers, arbitrary request bodies, or
 unapproved profiles. Snapshot schema versions are immutable once adopted;
 changing permitted fields/semantics requires an explicitly supported schema
 version and coordinated retention/privacy review.
+
+## Historical imports
+
+`origin: "historical_import"` represents an available historical source change,
+not a new live mutation or a current-resource bootstrap. It uses the existing
+version-2 shape with **no additional fields**. Earlier consumers reject this
+unknown origin; upgrade every consumer before granting an import policy. Do not
+change the origin on a frozen event or reuse its identity under another origin.
+
+- The authenticated publisher must have explicit `historical_import` permission
+  for the subject resource type and approved closed snapshot schemas. Mutation
+  permission does not imply import permission, nor does import permission grant
+  mutation, reindex or backfill. `backfill` continues to omit content and never
+  appends history.
+- Import content obeys the same action-specific before/after snapshot rules as
+  mutations. Identity, occurrence time, positive bounded source revision,
+  actor refs, scope and complete concrete authorization config remain required.
+  Source revisions must have an approved source-owned meaning and be frozen
+  across retries; import revisions never establish, advance or reset the live
+  current-resource revision lineage. Do not invent missing historical values to
+  fit a live resource schema. Approve an appropriate versioned historical schema.
+- The workflow reserves the publisher/event ID, verifies retained history or its
+  erasure fence, and appends missing history through the same create-only adapter.
+  Success/ACK requires completed history persistence or verification, **not just
+  a receipt or PubAck**. Identical replay preserves the first ingestion time and
+  attribution; changed immutable content/origin conflicts. A receipt can exist
+  after a failed append and does not prove history was imported.
+- There is **no current-resource stage**: imports never create an absent resource,
+  overwrite a live resource/tombstone, modify current revision metadata, schedule
+  cleanup or emit `lfx.{object_type}.{action}`. This holds even if the imported
+  revision is higher than the live revision. The projection adapter also rejects
+  this origin defensively. No current-resource lookup is used for admission.
+- A history-only policy does not need a legacy projection fence for its resource
+  type and does not establish live audit adoption/completeness. The existing
+  global audited startup/provisioning gates remain unchanged. Live mutations,
+  reindex and sync-echo still require fenced required types.
+- Existing history authorization and erasure/replay fences remain mandatory.
+  Use stable source-derived IDs and never re-ID an erased event to bypass a
+  fence. Importing history creates no FGA grants. Missing or deleted anchors fail
+  closed under the history-query authorization policy; do not guess a project
+  grant to make deleted-committee history readable.
+
+### Historical attribution mapping
+
+The agreed V1 import policy prefers current display enrichment over retaining
+historical name/avatar captures. Supplied actor profiles/identities/verification
+flags remain rejected. The importer authenticates as its own machine publisher;
+it does not mint Heimdall actor JWTs to manufacture evidence of past requests.
+
+| Source attribution | Import representation |
+| --- | --- |
+| Confidently mapped LFX username | `user:<principal>` without actor JWT evidence. Retain the username; resolve current email at first append and current name/avatar at read time. These are not claims about historical profile values. |
+| Known username, account absent | Preserve the user ref/username; null email on explicit absence. Read-time explicit absence gives `deleted` with null name/avatar. Do not rebind a possibly reassigned username without a trustworthy identity match. |
+| Known M2M client | `service:<client-name>`, without the `@clients` suffix or a human profile. Preserve the actual client, not the importer. |
+| No confident username/client mapping | `legacy:<source>/<opaque-id>`, retaining the recorded actor ID. Identity attributes are null, verification is false, and no directory lookup occurs. |
+
+If the source actor ID itself is absent, use a stable, explicitly documented
+source-row reference (for example `legacy:v1-audit-event/<source-event-id>`), not
+a single invented user shared by unrelated events. The ref describes provenance,
+not evidence that two records have the same initiating person. Missing profile
+attributes remain null; generic display labels are never stored as usernames,
+emails, names or avatars. Email-only matching must not silently bind history to
+a current account. A source actor may have been a last modifier rather than the
+deleter: preserve that limitation rather than promoting it to verified evidence.
+
+Resolve mappings once before freezing an event. Later identity discovery or
+directory changes must not rewrite attribution under that event ID; identical
+replay retains the first append's identity/verification and bypasses resolution.
+Transient directory failures remain retryable and are never classified as account
+absence. Permanent erasure fences still apply to all imported actor copies,
+resource snapshots, export/manifests and replay sources.
+
+This does not approve any raw V1 resource snapshot or turn missing source values
+into defaults. Closed historical resource schemas and source mapping/coverage
+remain prerequisites for dispatch. Do not copy raw legacy rows into live schemas.
 
 ## Non-mutation operations
 

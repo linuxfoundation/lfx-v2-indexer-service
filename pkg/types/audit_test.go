@@ -152,25 +152,28 @@ func TestIndexerMessageEnvelope_ValidateV2(t *testing.T) {
 		{name: "unknown_origin", mutate: func(e *IndexerMessageEnvelope) { e.Audit.Origin = "unknown" }},
 		{name: "projection_with_snapshot", mutate: func(e *IndexerMessageEnvelope) { e.Audit.Origin = AuditOriginReindex }},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			e := fixtureAuditEnvelope(constants.ActionUpdated)
-			if tt.mutate != nil {
-				tt.mutate(e)
-			}
-			err := e.ValidateV2("fixture_resource", fixtureAuditValidator)
-			if tt.valid {
-				require.NoError(t, err)
-				payload, err := json.Marshal(e)
-				require.NoError(t, err)
-				decoded, err := DecodeV2Envelope(payload, "fixture_resource", fixtureAuditValidator)
-				require.NoError(t, err)
-				require.Equal(t, e.IndexingConfig, decoded.IndexingConfig, "version 2 must preserve literal config strings")
-			} else {
-				require.Error(t, err)
-				require.NotContains(t, err.Error(), "fixture-secret")
-			}
-		})
+	for _, origin := range []AuditOrigin{AuditOriginMutation, AuditOriginHistoricalImport} {
+		for _, tt := range tests {
+			t.Run(string(origin)+"/"+tt.name, func(t *testing.T) {
+				e := fixtureAuditEnvelope(constants.ActionUpdated)
+				e.Audit.Origin = origin
+				if tt.mutate != nil {
+					tt.mutate(e)
+				}
+				err := e.ValidateV2("fixture_resource", fixtureAuditValidator)
+				if tt.valid {
+					require.NoError(t, err)
+					payload, err := json.Marshal(e)
+					require.NoError(t, err)
+					decoded, err := DecodeV2Envelope(payload, "fixture_resource", fixtureAuditValidator)
+					require.NoError(t, err)
+					require.Equal(t, e.IndexingConfig, decoded.IndexingConfig, "version 2 must preserve literal config strings")
+				} else {
+					require.Error(t, err)
+					require.NotContains(t, err.Error(), "fixture-secret")
+				}
+			})
+		}
 	}
 	for _, action := range []constants.MessageAction{constants.ActionCreated, constants.ActionUpdated, constants.ActionDeleted} {
 		t.Run(string(action)+"_snapshot_rules", func(t *testing.T) {

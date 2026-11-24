@@ -116,7 +116,7 @@ func auditAdmissionFixture() *types.IndexerMessageEnvelope {
 func testAuditPolicy() AuditPublisherPolicy {
 	return AuditPublisherPolicy{Publisher: "test-publisher", Principal: "fixture@clients", CanAttestActors: true,
 		Resources: map[string]AuditResourcePolicy{"fixture_resource": {
-			Origins: map[types.AuditOrigin]bool{types.AuditOriginMutation: true, types.AuditOriginReindex: true},
+			Origins: map[types.AuditOrigin]bool{types.AuditOriginMutation: true, types.AuditOriginHistoricalImport: true, types.AuditOriginReindex: true},
 			Schemas: map[string]func(before, after json.RawMessage) error{"fixture.audit.v1": func(before, after json.RawMessage) error {
 				for _, snapshot := range []json.RawMessage{before, after} {
 					var value map[string]json.RawMessage
@@ -136,44 +136,47 @@ func testAuditPolicy() AuditPublisherPolicy {
 // TestAuditAdmission_Admit checks authenticated publisher ownership, schema
 // allowlisting and origin restrictions before any storage operation.
 func TestAuditAdmission_Admit(t *testing.T) {
-	for _, tt := range []struct {
-		name      string
-		principal string
-		modify    func(*types.IndexerMessageEnvelope)
-		wantError string
-	}{
-		{name: "trusted mutation", principal: "fixture@clients"},
-		{name: "wrong authenticated producer", principal: "service:other", wantError: "authentication failed"},
-		{name: "unregistered publisher", principal: "fixture@clients", modify: func(e *types.IndexerMessageEnvelope) { e.Audit.Publisher = "other" }, wantError: "rejected by registered schema"},
-		{name: "unregistered schema", principal: "fixture@clients", modify: func(e *types.IndexerMessageEnvelope) { e.Audit.Content.Schema = "unknown" }, wantError: "rejected by registered schema"},
-		{name: "unapproved field", principal: "fixture@clients", modify: func(e *types.IndexerMessageEnvelope) {
-			e.Audit.Content.After = json.RawMessage(`{"name":"After","secret":"forbidden"}`)
-		}, wantError: "rejected by registered schema"},
-		{name: "unsupported origin", principal: "fixture@clients", modify: func(e *types.IndexerMessageEnvelope) {
-			e.Audit.Origin = types.AuditOriginSyncEcho
-			e.Audit.Content = nil
-		}, wantError: "not authorized"},
-		{name: "approved reindex", principal: "fixture@clients", modify: func(e *types.IndexerMessageEnvelope) {
-			e.Audit.Origin = types.AuditOriginReindex
-			e.Audit.Content = nil
-		}},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			admission, err := NewAuditAdmission(newTestAuditAuth(tt.principal), []AuditPublisherPolicy{testAuditPolicy()})
-			require.NoError(t, err)
-			e := auditAdmissionFixture()
-			if tt.modify != nil {
-				tt.modify(e)
-			}
-			payload, err := json.Marshal(e)
-			require.NoError(t, err)
-			_, err = admission.Admit(context.Background(), payload, "fixture_resource")
-			if tt.wantError != "" {
-				require.ErrorContains(t, err, tt.wantError)
-			} else {
+	for _, origin := range []types.AuditOrigin{types.AuditOriginMutation, types.AuditOriginHistoricalImport} {
+		for _, tt := range []struct {
+			name      string
+			principal string
+			modify    func(*types.IndexerMessageEnvelope)
+			wantError string
+		}{
+			{name: "trusted mutation", principal: "fixture@clients"},
+			{name: "wrong authenticated producer", principal: "service:other", wantError: "authentication failed"},
+			{name: "unregistered publisher", principal: "fixture@clients", modify: func(e *types.IndexerMessageEnvelope) { e.Audit.Publisher = "other" }, wantError: "rejected by registered schema"},
+			{name: "unregistered schema", principal: "fixture@clients", modify: func(e *types.IndexerMessageEnvelope) { e.Audit.Content.Schema = "unknown" }, wantError: "rejected by registered schema"},
+			{name: "unapproved field", principal: "fixture@clients", modify: func(e *types.IndexerMessageEnvelope) {
+				e.Audit.Content.After = json.RawMessage(`{"name":"After","secret":"forbidden"}`)
+			}, wantError: "rejected by registered schema"},
+			{name: "unsupported origin", principal: "fixture@clients", modify: func(e *types.IndexerMessageEnvelope) {
+				e.Audit.Origin = types.AuditOriginSyncEcho
+				e.Audit.Content = nil
+			}, wantError: "not authorized"},
+			{name: "approved reindex", principal: "fixture@clients", modify: func(e *types.IndexerMessageEnvelope) {
+				e.Audit.Origin = types.AuditOriginReindex
+				e.Audit.Content = nil
+			}},
+		} {
+			t.Run(string(origin)+"/"+tt.name, func(t *testing.T) {
+				admission, err := NewAuditAdmission(newTestAuditAuth(tt.principal), []AuditPublisherPolicy{testAuditPolicy()})
 				require.NoError(t, err)
-			}
-		})
+				e := auditAdmissionFixture()
+				e.Audit.Origin = origin
+				if tt.modify != nil {
+					tt.modify(e)
+				}
+				payload, err := json.Marshal(e)
+				require.NoError(t, err)
+				_, err = admission.Admit(context.Background(), payload, "fixture_resource")
+				if tt.wantError != "" {
+					require.ErrorContains(t, err, tt.wantError)
+				} else {
+					require.NoError(t, err)
+				}
+			})
+		}
 	}
 }
 
@@ -186,6 +189,31 @@ func TestAuditAdmission_FailClosed(t *testing.T) {
 	require.NoError(t, err)
 	_, err = empty.Admit(context.Background(), payload, "fixture_resource")
 	require.ErrorContains(t, err, "not configured")
+}
+
+func TestAuditAdmission_HistoricalImportIsSeparatePermission(t *testing.T) {
+	for _, allowed := range []types.AuditOrigin{types.AuditOriginMutation, types.AuditOriginHistoricalImport} {
+		for _, sent := range []types.AuditOrigin{types.AuditOriginMutation, types.AuditOriginHistoricalImport} {
+			t.Run(string(allowed)+"/"+string(sent), func(t *testing.T) {
+				policy := testAuditPolicy()
+				resource := policy.Resources["fixture_resource"]
+				resource.Origins = map[types.AuditOrigin]bool{allowed: true}
+				policy.Resources["fixture_resource"] = resource
+				admission, err := NewAuditAdmission(newTestAuditAuth("fixture@clients"), []AuditPublisherPolicy{policy})
+				require.NoError(t, err)
+				envelope := auditAdmissionFixture()
+				envelope.Audit.Origin = sent
+				payload, err := json.Marshal(envelope)
+				require.NoError(t, err)
+				_, err = admission.Admit(context.Background(), payload, "fixture_resource")
+				if allowed == sent {
+					require.NoError(t, err)
+				} else {
+					require.ErrorContains(t, err, "not authorized")
+				}
+			})
+		}
+	}
 }
 
 func TestAuditAdmission_PolicyIsFrozen(t *testing.T) {

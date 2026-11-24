@@ -42,6 +42,17 @@ internal revision and identity fields. An authorized `backfill` may bootstrap
 an existing legacy document; ordinary mutations fail closed on legacy current
 documents lacking a source revision. Same-revision projections may refresh
 current search without adding history; old revisions cannot replace newer ones.
+
+An explicitly authorized `historical_import` instead reserves delivery identity
+and appends/verifies history, then returns **before** any current projection,
+cleanup or post-index publication. It shares snapshot validation, immutable
+fingerprints, first-append attribution, indefinite retention and erasure fences
+with live mutations. The projection adapter independently rejects this origin.
+No mapping changes or direct-import storage bypass are introduced. A history-only
+policy does not adopt current resource types; source mapping, historical identity
+representation and import execution remain separate work. See the
+[import contract](audit-v2-contract.md#historical-imports).
+
 Startup requires each current/history/receipt target to resolve to one backing
 index. A multi-index current alias is unsafe even with a designated write index,
 because the atomic guard cannot inspect copies in the other backing indices.
@@ -138,6 +149,16 @@ failures merely bypass the cache. Service actors have no identity record.
 Name/avatar are not stored; query-service's live-enrichment rollout is separate.
 Retention/erasure and index permissions must cover both retained identity copies
 and all replay/repair sources. The indexer never fetches avatar bytes.
+
+Historical imports can retain unresolved source actors as
+`legacy:<source>/<opaque-id>`. These are provenance refs, never LFX usernames:
+preflight restricts them to historical imports without actor JWTs, verification
+remains false, and identity resolution produces explicit null username/email
+without token, cache or directory I/O. Known user and service behavior is
+unchanged. This adds actor-reference vocabulary inside existing fields, not a
+mapping change. Roll out the compatible query-service reader before import;
+older readers reject the unknown kind. Replay preserves the original reference
+even if a matching current account is discovered later.
 
 The committee PostgreSQL migration should commit the mutation and an immutable
 outbox event in one database transaction. A relay attaches fresh service
@@ -264,8 +285,10 @@ needs to verify the selected publisher, bootstrap, and deployed roles before
 enabling. Retain admissible late mutations in history even if their current
 projection is skipped. Do not claim chronological correctness for legacy types.
 Mutation, reindex and sync-echo policies must target legacy-fenced required
-types. Only a backfill-only policy may prepare an unfenced type, without adding
-history coverage. Legacy writes can still remove that preparatory metadata;
+types. A backfill-only policy may prepare an unfenced type, without adding
+history coverage. A historical-import-only policy may append approved historical
+changes for an unfenced type without touching its current state or establishing
+live coverage. Legacy writes can still remove preparatory backfill metadata;
 rebootstrap after pausing/fencing them before treating that type as adopted.
 
 The existing JetStream retry limit and 24-hour/10-GiB stream retention are not

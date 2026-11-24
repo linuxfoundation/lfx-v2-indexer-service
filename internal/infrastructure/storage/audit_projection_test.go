@@ -20,6 +20,24 @@ import (
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/types"
 )
 
+func TestAuditProjectionRepository_RejectsHistoricalImport(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	client, err := opensearch.NewClient(opensearch.Config{Addresses: []string{server.URL}})
+	require.NoError(t, err)
+	envelope := auditIntegrationEnvelope("historical-event", 42, constants.ActionUpdated, time.Now())
+	envelope.Audit.Origin = types.AuditOriginHistoricalImport
+	body, applied, err := NewAuditProjectionRepository(client, "resources").ApplyIfNewer(context.Background(), envelope, "fixture_resource", "fixture-fingerprint")
+	require.ErrorContains(t, err, "historical imports must not write current projections")
+	require.Nil(t, body)
+	require.False(t, applied)
+	require.Zero(t, requests)
+}
+
 // TestAuditProjectionRepository_AtomicUpdateRequest checks script inputs,
 // bootstrap authorization and opt-in refresh waiting without copying credentials.
 func TestAuditProjectionRepository_AtomicUpdateRequest(t *testing.T) {

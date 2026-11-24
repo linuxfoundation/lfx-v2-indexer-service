@@ -41,6 +41,11 @@ func (r *AuditIdentityResolver) Resolve(ctx context.Context, actorRef string, ma
 	if kind == "service" {
 		return nil, nil
 	}
+	if kind == "legacy" {
+		// A legacy reference is source provenance, not a directory lookup key.
+		// Ignore even a caller-supplied matched email; this actor is unresolved.
+		return &types.AuditActorIdentity{}, nil
+	}
 	identity := &types.AuditActorIdentity{Username: &principal}
 	if matchedEmail != nil && *matchedEmail != "" {
 		email := *matchedEmail
