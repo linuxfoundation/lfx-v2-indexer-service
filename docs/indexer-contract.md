@@ -475,7 +475,9 @@ authentication or other dependencies of the index half are `transient`.
 
 The FGA half writes to the OpenFGA server at `OPENFGA_API_URL`, in the store
 named `OPENFGA_STORE_NAME` (default `lfx-core`, looked up in the background at
-startup) or `OPENFGA_STORE_ID`. Its write semantics are lfx-v2-fga-sync's:
+startup) or `OPENFGA_STORE_ID`. Writes use the store's latest authorization
+model unless `OPENFGA_AUTH_MODEL_ID` pins one. Its write semantics are
+lfx-v2-fga-sync's:
 
 - The tuples are written on `fga.object_type`, which may differ from the
   subject's object type (a `key_contact` request writes on
@@ -508,6 +510,15 @@ Without `OPENFGA_API_URL`, or until the store is found, every request carrying
 - The queue group spreads one resource's requests across replicas, so across
   replicas ordering relies on the producer: wait for the reply to one request
   before sending the next request for the same resource.
+- Operations on one OpenFGA object (`fga.object_type:fga.data.uid`) run one at
+  a time across all replicas, even when they come from requests for different
+  resources. Each holds a lease in the NATS KV bucket `OPENFGA_LOCK_BUCKET`
+  (default `indexer-fga-locks`) from its first read to its last write, so two
+  full syncs of a shared object cannot interleave. A lease lives at most half
+  the bucket TTL; a request that cannot get one before its timeout replies
+  `ERROR: transient: fga: another request is writing this object`, and one
+  that cannot reach the bucket replies
+  `ERROR: transient: fga: fga write lease unavailable`.
 - Each replica runs at most `NATS_WORKER_COUNT` requests at a time; beyond that
   it stops taking new requests until one finishes.
 

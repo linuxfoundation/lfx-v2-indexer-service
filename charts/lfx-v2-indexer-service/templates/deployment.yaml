@@ -188,6 +188,12 @@ spec:
             - name: OPENFGA_STORE_ID
               value: {{ . | quote }}
             {{- end }}
+            {{- with .Values.openfga.authModelId }}
+            - name: OPENFGA_AUTH_MODEL_ID
+              value: {{ . | quote }}
+            {{- end }}
+            - name: OPENFGA_LOCK_BUCKET
+              value: {{ .Values.openfga.lockBucket.name | quote }}
             - name: CACHE_BACKEND
               value: {{ .Values.cache.backend | quote }}
             - name: CACHE_TIMEOUT

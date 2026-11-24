@@ -1,0 +1,22 @@
+# Copyright The Linux Foundation and each contributor to LFX.
+# SPDX-License-Identifier: MIT
+---
+{{- if and .Values.openfga.apiUrl .Values.openfga.lockBucket.creation }}
+apiVersion: jetstream.nats.io/v1beta2
+kind: KeyValue
+metadata:
+  name: {{ .Values.openfga.lockBucket.name }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    # Provisioned before the Deployment, so FGA requests do not reply
+    # transient while the bucket is missing.
+    argocd.argoproj.io/sync-wave: "-1"
+  labels:
+    app.kubernetes.io/name: {{ .Chart.Name }}
+spec:
+  bucket: {{ .Values.openfga.lockBucket.name }}
+  history: 1
+  ttl: {{ required "openfga.lockBucket.ttl is required: a lease without a TTL never expires" .Values.openfga.lockBucket.ttl }}
+  storage: {{ .Values.openfga.lockBucket.storage }}
+  replicas: {{ .Values.openfga.lockBucket.replicas }}
+{{- end }}

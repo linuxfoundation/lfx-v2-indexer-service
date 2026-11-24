@@ -120,11 +120,19 @@ func logger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
+// noLease grants every lease at once; these tests run one operation at a
+// time.
+type noLease struct{}
+
+func (noLease) Acquire(ctx context.Context, _ string) (context.Context, func(), error) {
+	return ctx, func() {}, nil
+}
+
 // newResolvedWriter builds a Writer that finds the store by name, and waits
 // for the background lookup to succeed.
 func newResolvedWriter(t *testing.T, url, storeName string) *fga.Writer {
 	t.Helper()
-	w := fga.New(fga.Config{APIURL: url, StoreName: storeName, LookupRetryInterval: 50 * time.Millisecond}, logger())
+	w := fga.New(fga.Config{APIURL: url, StoreName: storeName, LookupRetryInterval: 50 * time.Millisecond}, noLease{}, logger())
 	t.Cleanup(w.Close)
 	probe := `{"object_type":"committee","operation":"delete_access","data":{"uid":"lookup-probe"}}`
 	require.Eventually(t, func() bool {
@@ -298,14 +306,14 @@ func testUnreachable(t *testing.T) {
 	require.NoError(t, listener.Close())
 	payload := `{"object_type":"committee","operation":"update_access","data":{"uid":"c-unreachable","public":true}}`
 
-	byID := fga.New(fga.Config{APIURL: closedURL, StoreID: "01ARZ3NDEKTSV4RRFFQ69G5FAV"}, logger())
+	byID := fga.New(fga.Config{APIURL: closedURL, StoreID: "01ARZ3NDEKTSV4RRFFQ69G5FAV"}, noLease{}, logger())
 	defer byID.Close()
 	_, err = apply(t, byID, payload)
 	require.Error(t, err)
 	var rejectedErr *contracts.FGARejectedError
 	assert.False(t, errors.As(err, &rejectedErr), "an unreachable OpenFGA is transient: %v", err)
 
-	byName := fga.New(fga.Config{APIURL: closedURL, StoreName: "lfx-core", LookupRetryInterval: 50 * time.Millisecond}, logger())
+	byName := fga.New(fga.Config{APIURL: closedURL, StoreName: "lfx-core", LookupRetryInterval: 50 * time.Millisecond}, noLease{}, logger())
 	defer byName.Close()
 	_, err = apply(t, byName, payload)
 	assert.ErrorIs(t, err, fga.ErrStoreNotResolved)

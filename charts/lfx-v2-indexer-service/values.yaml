@@ -382,6 +382,21 @@ openfga:
   storeName: lfx-core
   # storeId skips the lookup by name when set
   storeId: ""
+  # authModelId pins writes to one authorization model; empty uses the
+  # store's latest model
+  authModelId: ""
+  # lockBucket is the NATS KV bucket of per-object write leases, which keep
+  # operations on one OpenFGA object from interleaving across replicas
+  lockBucket:
+    # creation creates the bucket with this chart; set it to false to use an
+    # existing bucket, which must have a TTL
+    creation: true
+    name: indexer-fga-locks
+    # ttl frees the lease of a crashed holder; a lease is held for at most
+    # half of it
+    ttl: 60s
+    storage: file
+    replicas: 1
 
 # networkPolicy restricts the indexer pods' egress to the ports below (and DNS)
 networkPolicy:

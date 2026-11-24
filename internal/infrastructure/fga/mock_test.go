@@ -48,7 +48,15 @@ func newTestStore(m *mockFGAClient) tupleStore {
 }
 
 func newTestWriter(m *mockFGAClient) *Writer {
-	return &Writer{store: newTestStore(m), logger: discardLogger(), stop: func() {}, done: make(chan struct{})}
+	return &Writer{store: newTestStore(m), lease: noLease{}, logger: discardLogger(), stop: func() {}, done: make(chan struct{})}
+}
+
+// noLease grants every lease at once, for tests that run one operation at a
+// time.
+type noLease struct{}
+
+func (noLease) Acquire(ctx context.Context, _ string) (context.Context, func(), error) {
+	return ctx, func() {}, nil
 }
 
 // readFor matches a Read request for object.

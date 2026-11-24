@@ -15,6 +15,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
 )
 
 const (
@@ -28,14 +30,15 @@ type fakeStore struct {
 	Name string `json:"name"`
 }
 
-// fakeOpenFGA answers ListStores from pages and records the store id of
-// every write.
+// fakeOpenFGA answers ListStores from pages and records the store id and
+// authorization model id of every write.
 type fakeOpenFGA struct {
 	mu          sync.Mutex
 	pages       func(call int, token string) ([]fakeStore, string)
 	listCalls   int
 	listNames   []string
 	writeStores []string
+	writeModels []string
 }
 
 func (f *fakeOpenFGA) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -50,6 +53,11 @@ func (f *fakeOpenFGA) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"stores": stores, "continuation_token": next})
 	case r.Method == http.MethodPost && len(r.URL.Path) > len("/stores/"):
 		f.writeStores = append(f.writeStores, r.URL.Path)
+		var body struct {
+			AuthorizationModelID string `json:"authorization_model_id"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		f.writeModels = append(f.writeModels, body.AuthorizationModelID)
 		_, _ = w.Write([]byte(`{}`))
 	default:
 		http.NotFound(w, r)
@@ -107,7 +115,7 @@ func TestFindStore(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			f, url := newFakeOpenFGA(t, tt.pages)
-			c, err := newSDKClient(url)
+			c, err := newSDKClient(url, "")
 			require.NoError(t, err)
 
 			got, err := c.findStore(context.Background(), "lfx-core")
@@ -135,7 +143,7 @@ func TestNewLooksUpTheStoreInTheBackgroundUntilFound(t *testing.T) {
 		return []fakeStore{{ID: testStoreID, Name: "lfx-core"}}, ""
 	})
 
-	w := New(Config{APIURL: url, StoreName: "lfx-core", LookupRetryInterval: 10 * time.Millisecond}, discardLogger())
+	w := New(Config{APIURL: url, StoreName: "lfx-core", LookupRetryInterval: 10 * time.Millisecond}, noLease{}, discardLogger())
 	defer w.Close()
 
 	require.Eventually(t, found.Load, 5*time.Second, 10*time.Millisecond)
@@ -150,7 +158,7 @@ func TestNewLooksUpTheStoreInTheBackgroundUntilFound(t *testing.T) {
 
 func TestApplyBeforeTheStoreIsFoundIsTransient(t *testing.T) {
 	_, url := newFakeOpenFGA(t, func(int, string) ([]fakeStore, string) { return nil, "" })
-	w := New(Config{APIURL: url, StoreName: "lfx-core", LookupRetryInterval: 10 * time.Millisecond}, discardLogger())
+	w := New(Config{APIURL: url, StoreName: "lfx-core", LookupRetryInterval: 10 * time.Millisecond}, noLease{}, discardLogger())
 
 	_, err := apply(w, memberRemove)
 
@@ -171,7 +179,7 @@ func TestApplyBeforeTheStoreIsFoundIsTransient(t *testing.T) {
 
 func TestNewWithStoreIDSkipsTheLookup(t *testing.T) {
 	f, url := newFakeOpenFGA(t, func(int, string) ([]fakeStore, string) { return nil, "" })
-	w := New(Config{APIURL: url, StoreName: "lfx-core", StoreID: otherStoreID}, discardLogger())
+	w := New(Config{APIURL: url, StoreName: "lfx-core", StoreID: otherStoreID}, noLease{}, discardLogger())
 	defer w.Close()
 
 	_, err := apply(w, memberRemove)
@@ -183,6 +191,33 @@ func TestNewWithStoreIDSkipsTheLookup(t *testing.T) {
 	assert.Equal(t, []string{"/stores/" + otherStoreID + "/write"}, f.writeStores)
 }
 
+func TestWritesCarryTheConfiguredAuthorizationModel(t *testing.T) {
+	const modelID = "01HVMMBCMGZNT3SED4Z17ECXCA"
+	for name, configured := range map[string]string{"pinned": modelID, "latest": ""} {
+		t.Run(name, func(t *testing.T) {
+			f, url := newFakeOpenFGA(t, func(int, string) ([]fakeStore, string) { return nil, "" })
+			w := New(Config{APIURL: url, StoreID: testStoreID, AuthModelID: configured}, noLease{}, discardLogger())
+			defer w.Close()
+
+			_, err := apply(w, memberRemove)
+
+			require.NoError(t, err)
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			assert.Equal(t, []string{configured}, f.writeModels)
+		})
+	}
+}
+
+func TestNewWithMalformedAuthorizationModelIsNotConfigured(t *testing.T) {
+	w := New(Config{APIURL: "http://openfga:8080", StoreID: testStoreID, AuthModelID: "not-a-ulid"}, noLease{}, discardLogger())
+	defer w.Close()
+
+	_, err := apply(w, memberRemove)
+
+	assert.EqualError(t, err, contracts.ErrFGANotConfigured.Error())
+}
+
 func TestHTTPClientIsBoundedByEightSeconds(t *testing.T) {
 	assert.Equal(t, 8*time.Second, newHTTPClient().Timeout)
 }
@@ -191,13 +226,22 @@ func TestConfigFromEnv(t *testing.T) {
 	t.Setenv("OPENFGA_API_URL", "")
 	t.Setenv("OPENFGA_STORE_NAME", "")
 	t.Setenv("OPENFGA_STORE_ID", "")
+	t.Setenv("OPENFGA_AUTH_MODEL_ID", "")
+	t.Setenv("OPENFGA_LOCK_BUCKET", "")
 	cfg := ConfigFromEnv()
 	assert.False(t, cfg.Enabled())
 	assert.Equal(t, DefaultStoreName, cfg.StoreName)
+	assert.Equal(t, DefaultLockBucket, cfg.LockBucket)
+	assert.Empty(t, cfg.AuthModelID)
 	assert.Equal(t, defaultLookupRetryInterval, cfg.lookupRetryInterval())
 
 	t.Setenv("OPENFGA_API_URL", "http://openfga:8080")
 	t.Setenv("OPENFGA_STORE_NAME", "custom")
 	t.Setenv("OPENFGA_STORE_ID", testStoreID)
-	assert.Equal(t, Config{APIURL: "http://openfga:8080", StoreName: "custom", StoreID: testStoreID}, ConfigFromEnv())
+	t.Setenv("OPENFGA_AUTH_MODEL_ID", otherStoreID)
+	t.Setenv("OPENFGA_LOCK_BUCKET", "custom-locks")
+	assert.Equal(t, Config{
+		APIURL: "http://openfga:8080", StoreName: "custom", StoreID: testStoreID,
+		AuthModelID: otherStoreID, LockBucket: "custom-locks",
+	}, ConfigFromEnv())
 }

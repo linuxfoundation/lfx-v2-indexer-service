@@ -39,8 +39,12 @@ type sdkClient struct {
 	storeID atomic.Pointer[string]
 }
 
-func newSDKClient(apiURL string) (*sdkClient, error) {
-	sdk, err := client.NewSdkClient(&client.ClientConfiguration{ApiUrl: apiURL, HTTPClient: newHTTPClient()})
+func newSDKClient(apiURL, authModelID string) (*sdkClient, error) {
+	sdk, err := client.NewSdkClient(&client.ClientConfiguration{
+		ApiUrl:               apiURL,
+		AuthorizationModelId: authModelID,
+		HTTPClient:           newHTTPClient(),
+	})
 	if err != nil {
 		return nil, err
 	}

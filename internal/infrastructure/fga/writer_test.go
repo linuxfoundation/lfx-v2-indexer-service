@@ -4,9 +4,12 @@
 package fga
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -359,7 +362,7 @@ func TestApplyMemberRemove(t *testing.T) {
 }
 
 func TestNewWithoutAPIURLIsNotConfigured(t *testing.T) {
-	w := New(Config{}, discardLogger())
+	w := New(Config{}, noLease{}, discardLogger())
 	defer w.Close()
 
 	_, err := apply(w, `{"object_type":"committee","operation":"delete_access","data":{"uid":"resource-1"}}`)
@@ -369,13 +372,52 @@ func TestNewWithoutAPIURLIsNotConfigured(t *testing.T) {
 }
 
 func TestNewWithInvalidAPIURLIsNotConfigured(t *testing.T) {
-	w := New(Config{APIURL: "://not a url"}, discardLogger())
+	w := New(Config{APIURL: "://not a url"}, noLease{}, discardLogger())
 	defer w.Close()
 
 	_, err := apply(w, `{"object_type":"committee","operation":"delete_access","data":{"uid":"resource-1"}}`)
 
 	assert.EqualError(t, err, contracts.ErrFGANotConfigured.Error(), "the URL must not reach the reply")
 	assert.False(t, isRejected(err))
+}
+
+// fakeAPIErr stands in for an SDK API error whose text echoes a tuple.
+type fakeAPIErr struct{}
+
+func (fakeAPIErr) Error() string {
+	return "write failed for tuple committee:c1#member@user:synthetic-user-7f3"
+}
+func (fakeAPIErr) ResponseStatusCode() int { return 500 }
+func (fakeAPIErr) RequestId() string       { return "req-123" }
+
+func TestFailedWritesLogNoOpenFGAErrorText(t *testing.T) {
+	relations := []string{`"member"`}
+	for i := range maxOperationsPerBatch {
+		relations = append(relations, fmt.Sprintf(`"relation_%d"`, i))
+	}
+	payloads := map[string]string{
+		"one batch":     `{"object_type":"committee","operation":"member_remove","data":{"uid":"c1","username":"synthetic-user-7f3","relations":["member"]}}`,
+		"several batch": `{"object_type":"committee","operation":"member_remove","data":{"uid":"c1","username":"synthetic-user-7f3","relations":[` + strings.Join(relations, ",") + `]}}`,
+	}
+	for name, payload := range payloads {
+		t.Run(name, func(t *testing.T) {
+			var logs bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&logs, nil))
+			m := new(mockFGAClient)
+			m.On("Write", mock.Anything, mock.Anything, mock.Anything).Return((*client.ClientWriteResponse)(nil), fakeAPIErr{}).Once()
+			w := newTestWriter(m)
+			w.logger, w.store.logger = logger, logger
+
+			_, err := apply(w, payload)
+
+			require.ErrorIs(t, err, errOpenFGAFailed)
+			assert.NotContains(t, logs.String(), "synthetic-user-7f3@")
+			assert.NotContains(t, logs.String(), "user:synthetic-user-7f3")
+			assert.Contains(t, logs.String(), `"http_status":500`)
+			assert.Contains(t, logs.String(), `"request_id":"req-123"`)
+			assert.Contains(t, logs.String(), `"error":"openfga request failed"`)
+		})
+	}
 }
 
 // The FGA cache encodes SeedKeys itself, so they must be plain relation keys

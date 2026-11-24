@@ -12,7 +12,7 @@ import (
 // start a real writer, whose background store lookup adds HTTP spans and
 // changes FGA replies. Tests that need a writer set them with t.Setenv.
 func TestMain(m *testing.M) {
-	for _, key := range []string{"OPENFGA_API_URL", "OPENFGA_STORE_NAME", "OPENFGA_STORE_ID"} {
+	for _, key := range []string{"OPENFGA_API_URL", "OPENFGA_STORE_NAME", "OPENFGA_STORE_ID", "OPENFGA_AUTH_MODEL_ID", "OPENFGA_LOCK_BUCKET"} {
 		_ = os.Unsetenv(key)
 	}
 	os.Exit(m.Run())

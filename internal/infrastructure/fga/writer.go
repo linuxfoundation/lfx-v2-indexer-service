@@ -19,6 +19,7 @@ import (
 // Writer applies FGA operations to OpenFGA.
 type Writer struct {
 	store    tupleStore
+	lease    Lease
 	disabled error
 	logger   *slog.Logger
 
@@ -28,19 +29,20 @@ type Writer struct {
 
 var _ contracts.FGAWriter = (*Writer)(nil)
 
-// New builds a Writer for cfg. It never fails: without an API URL, or with
-// one the SDK refuses, Apply returns contracts.ErrFGANotConfigured. When no
-// store id is configured the store is looked up by name in the background
-// until found, and Apply returns ErrStoreNotResolved until then.
-func New(cfg Config, logger *slog.Logger) *Writer {
+// New builds a Writer for cfg that holds lease on each object while it
+// writes. It never fails: without an API URL, or with a setting the SDK
+// refuses, Apply returns contracts.ErrFGANotConfigured. When no store id is
+// configured the store is looked up by name in the background until found,
+// and Apply returns ErrStoreNotResolved until then.
+func New(cfg Config, lease Lease, logger *slog.Logger) *Writer {
 	logger = logging.WithComponent(logger, "fga_writer")
-	w := &Writer{logger: logger, stop: func() {}, done: make(chan struct{})}
+	w := &Writer{lease: lease, logger: logger, stop: func() {}, done: make(chan struct{})}
 	if !cfg.Enabled() {
 		w.disabled = contracts.ErrFGANotConfigured
 		close(w.done)
 		return w
 	}
-	c, err := newSDKClient(cfg.APIURL)
+	c, err := newSDKClient(cfg.APIURL, cfg.AuthModelID)
 	if err != nil {
 		logger.Warn("FGA writer turned off by an invalid setting", "error", err.Error())
 		w.disabled = fmt.Errorf("%w: %w", contracts.ErrFGANotConfigured, err)
@@ -97,25 +99,47 @@ func (w *Writer) Apply(ctx context.Context, objectType string, operation json.Ra
 		return contracts.FGAWriteResult{}, err
 	}
 
-	var result contracts.FGAWriteResult
-	switch op.Operation {
-	case types.FGAOperationUpdateAccess:
-		result, err = w.updateAccess(ctx, op)
-	case types.FGAOperationDeleteAccess:
-		result, err = w.deleteAccess(ctx, op)
-	case types.FGAOperationMemberPut:
-		result, err = w.memberPut(ctx, op)
-	case types.FGAOperationMemberRemove:
-		result, err = w.memberRemove(ctx, op)
-	default:
-		return contracts.FGAWriteResult{}, rejected(errors.New("unsupported operation"))
-	}
+	result, err := w.applyLeased(ctx, op)
 	if err != nil {
-		w.logger.ErrorContext(ctx, "FGA operation failed", "subject_object_type", objectType,
-			"object_type", op.ObjectType, "operation", op.Operation, "changed", result.Changed, "error", err.Error())
+		attrs := append([]any{"subject_object_type", objectType, "object_type", op.ObjectType,
+			"operation", op.Operation, "changed", result.Changed}, errorAttrs(err)...)
+		w.logger.ErrorContext(ctx, "FGA operation failed", attrs...)
 		return result, replyError(err)
 	}
 	return result, nil
+}
+
+// applyLeased runs op while holding the lease on its object. Without a
+// readable uid there is no object to lease, and every operation rejects the
+// payload with its own message.
+func (w *Writer) applyLeased(ctx context.Context, op types.FGAOperation) (contracts.FGAWriteResult, error) {
+	var target struct {
+		UID string `json:"uid"`
+	}
+	if err := op.UnmarshalData(&target); err != nil || target.UID == "" {
+		return w.apply(ctx, op)
+	}
+	ctx, release, err := w.lease.Acquire(ctx, buildObjectID(op.ObjectType, target.UID))
+	if err != nil {
+		return contracts.FGAWriteResult{}, err
+	}
+	defer release()
+	return w.apply(ctx, op)
+}
+
+func (w *Writer) apply(ctx context.Context, op types.FGAOperation) (contracts.FGAWriteResult, error) {
+	switch op.Operation {
+	case types.FGAOperationUpdateAccess:
+		return w.updateAccess(ctx, op)
+	case types.FGAOperationDeleteAccess:
+		return w.deleteAccess(ctx, op)
+	case types.FGAOperationMemberPut:
+		return w.memberPut(ctx, op)
+	case types.FGAOperationMemberRemove:
+		return w.memberRemove(ctx, op)
+	default:
+		return contracts.FGAWriteResult{}, rejected(errors.New("unsupported operation"))
+	}
 }
 
 // errOpenFGAFailed replaces OpenFGA and transport errors in the reply: they
@@ -123,12 +147,37 @@ func (w *Writer) Apply(ctx context.Context, objectType string, operation json.Ra
 var errOpenFGAFailed = errors.New("openfga request failed")
 
 // replyError keeps the errors whose text is fixed by this package and
-// replaces every other one with errOpenFGAFailed. The full error is logged.
+// replaces every other one with errOpenFGAFailed.
 func replyError(err error) error {
-	if errors.As(err, new(*contracts.FGARejectedError)) || errors.Is(err, ErrStoreNotResolved) {
+	switch {
+	case errors.As(err, new(*contracts.FGARejectedError)), errors.Is(err, ErrStoreNotResolved):
 		return err
+	case errors.Is(err, errLeaseBusy):
+		return errLeaseBusy
+	case errors.Is(err, errLeaseUnavailable):
+		return errLeaseUnavailable
 	}
 	return errOpenFGAFailed
+}
+
+// errorAttrs describes err for a log line without its OpenFGA text, which
+// can hold usernames from tuples. Lease errors come from NATS and keep
+// their cause.
+func errorAttrs(err error) []any {
+	text := replyError(err).Error()
+	if errors.Is(err, errLeaseUnavailable) {
+		text = err.Error()
+	}
+	attrs := []any{"error", text}
+	var status interface{ ResponseStatusCode() int }
+	if errors.As(err, &status) {
+		attrs = append(attrs, "http_status", status.ResponseStatusCode())
+	}
+	var request interface{ RequestId() string }
+	if errors.As(err, &request) && request.RequestId() != "" {
+		attrs = append(attrs, "request_id", request.RequestId())
+	}
+	return attrs
 }
 
 func rejected(err error) error {

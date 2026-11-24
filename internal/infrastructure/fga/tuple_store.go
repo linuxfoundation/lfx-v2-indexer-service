@@ -103,8 +103,9 @@ func (s tupleStore) writeAndDeleteTuples(
 		batchSkipped, err := s.writeAndDeleteTuplesBatch(ctx, batchWrites, batchDeletes)
 		skippedWrites = append(skippedWrites, batchSkipped...)
 		if err != nil {
-			s.logger.ErrorContext(ctx, "failed to execute batch", "batch_number", batch,
-				"batch_writes", len(batchWrites), "batch_deletes", len(batchDeletes), "error", err.Error())
+			attrs := append([]any{"batch_number", batch,
+				"batch_writes", len(batchWrites), "batch_deletes", len(batchDeletes)}, errorAttrs(err)...)
+			s.logger.ErrorContext(ctx, "failed to execute batch", attrs...)
 			return skippedWrites, err
 		}
 	}

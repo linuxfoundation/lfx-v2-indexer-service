@@ -382,6 +382,8 @@ JANITOR_ENABLED=true                         # Enable cleanup service (default: 
 OPENFGA_API_URL=                             # e.g. http://localhost:8080; unset makes FGA requests reply transient
 OPENFGA_STORE_NAME=lfx-core                  # Store looked up by name when OPENFGA_STORE_ID is unset
 OPENFGA_STORE_ID=                            # Optional; skips the lookup
+OPENFGA_AUTH_MODEL_ID=                       # Optional; pins writes to this model (default: the store's latest)
+OPENFGA_LOCK_BUCKET=indexer-fga-locks        # NATS KV bucket with a TTL, for per-object write leases
 
 # FGA check cache (off by default; run.sh sets natskv, so set it yourself with make run)
 CACHE_BACKEND=none                           # natskv, valkey or none

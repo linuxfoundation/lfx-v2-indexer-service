@@ -82,6 +82,7 @@ func TestContainer_InitializeDelivery_FGAWriterFromEnv(t *testing.T) {
 		Config:              &config.AppConfig{NATS: config.NATSConfig{IndexerIndexSubject: constants.AllIndexerIndexSubjects, Queue: constants.DefaultQueue, WorkerCount: 1, RequestTimeout: time.Second}},
 		MessagingRepository: repository,
 		MessageProcessor:    processor,
+		NATSConnection:      auditTestNATS(t),
 	}
 	c.initializeDelivery()
 	require.NotNil(t, c.fgaWriter)
