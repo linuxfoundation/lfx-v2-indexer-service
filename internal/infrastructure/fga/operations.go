@@ -17,21 +17,23 @@ import (
 
 // updateAccess fully syncs an object's tuples to data: public, references and
 // relations. Relations in exclude_relations are left alone.
-func (w *Writer) updateAccess(ctx context.Context, op types.FGAOperation) (contracts.FGAWriteResult, error) {
+func (w *Writer) updateAccess(op types.FGAOperation) (string, leasedRun, error) {
 	data, err := decodeData[types.FGAAccessData](op)
 	if err != nil {
-		return contracts.FGAWriteResult{}, err
+		return "", nil, err
 	}
 	if data.UID == "" {
-		return contracts.FGAWriteResult{}, rejected(fmt.Errorf("%s ID not found", op.ObjectType))
+		return "", nil, rejected(fmt.Errorf("%s ID not found", op.ObjectType))
 	}
 	object := buildObjectID(op.ObjectType, data.UID)
 	tuples, err := accessTuples(object, op.ObjectType, data)
 	if err != nil {
-		return contracts.FGAWriteResult{}, err
+		return "", nil, err
 	}
-	result, err := w.store.syncObjectTuples(ctx, object, tuples, data.ExcludeRelations...)
-	return syncWriteResult(result), err
+	return object, func(ctx context.Context) (contracts.FGAWriteResult, error) {
+		result, err := w.store.syncObjectTuples(ctx, object, tuples, data.ExcludeRelations...)
+		return syncWriteResult(result), err
+	}, nil
 }
 
 func accessTuples(object, objectType string, data *types.FGAAccessData) ([]client.ClientTupleKey, error) {
@@ -75,16 +77,19 @@ func referenceUser(refType, value string) (string, error) {
 
 // deleteAccess removes every publisher-managed tuple on the object, keeping
 // team grants on non-global relations.
-func (w *Writer) deleteAccess(ctx context.Context, op types.FGAOperation) (contracts.FGAWriteResult, error) {
+func (w *Writer) deleteAccess(op types.FGAOperation) (string, leasedRun, error) {
 	data, err := decodeData[types.FGADeleteData](op)
 	if err != nil {
-		return contracts.FGAWriteResult{}, err
+		return "", nil, err
 	}
 	if data.UID == "" {
-		return contracts.FGAWriteResult{}, rejected(errors.New("uid is required"))
+		return "", nil, rejected(errors.New("uid is required"))
 	}
-	result, err := w.store.syncObjectTuples(ctx, buildObjectID(op.ObjectType, data.UID), nil)
-	return syncWriteResult(result), err
+	object := buildObjectID(op.ObjectType, data.UID)
+	return object, func(ctx context.Context) (contracts.FGAWriteResult, error) {
+		result, err := w.store.syncObjectTuples(ctx, object, nil)
+		return syncWriteResult(result), err
+	}, nil
 }
 
 func syncWriteResult(result syncResult) contracts.FGAWriteResult {
@@ -102,20 +107,22 @@ func changed(writes, deletes, skippedWrites int) bool {
 
 // memberPut gives the user every listed relation and removes the user's
 // mutually exclusive relations that are not listed.
-func (w *Writer) memberPut(ctx context.Context, op types.FGAOperation) (contracts.FGAWriteResult, error) {
+func (w *Writer) memberPut(op types.FGAOperation) (string, leasedRun, error) {
 	data, err := decodeData[types.FGAMemberData](op)
 	if err != nil {
-		return contracts.FGAWriteResult{}, err
+		return "", nil, err
 	}
 	if err := validateMemberPut(data); err != nil {
-		return contracts.FGAWriteResult{}, err
+		return "", nil, err
 	}
 	object := buildObjectID(op.ObjectType, data.UID)
-	writes, deletes, err := w.memberPutChanges(ctx, object, userPrefix+data.Username, data)
-	if err != nil {
-		return contracts.FGAWriteResult{}, err
-	}
-	return w.applyChanges(ctx, writes, deletes)
+	return object, func(ctx context.Context) (contracts.FGAWriteResult, error) {
+		writes, deletes, err := w.memberPutChanges(ctx, object, userPrefix+data.Username, data)
+		if err != nil {
+			return contracts.FGAWriteResult{}, err
+		}
+		return w.applyChanges(ctx, writes, deletes)
+	}, nil
 }
 
 func validateMemberPut(data *types.FGAMemberData) error {
@@ -176,38 +183,42 @@ func (w *Writer) memberPutChanges(
 // memberRemove removes the listed relations from the user, or all of the
 // user's relations on the object when none are listed. Empty entries are
 // ignored.
-func (w *Writer) memberRemove(ctx context.Context, op types.FGAOperation) (contracts.FGAWriteResult, error) {
+func (w *Writer) memberRemove(op types.FGAOperation) (string, leasedRun, error) {
 	data, err := decodeData[types.FGAMemberData](op)
 	if err != nil {
-		return contracts.FGAWriteResult{}, err
+		return "", nil, err
 	}
 	if data.Username == "" {
-		return contracts.FGAWriteResult{}, rejected(errors.New("member_remove: username is required"))
+		return "", nil, rejected(errors.New("member_remove: username is required"))
 	}
 	if data.UID == "" {
-		return contracts.FGAWriteResult{}, rejected(errors.New("member_remove: uid is required"))
+		return "", nil, rejected(errors.New("member_remove: uid is required"))
 	}
 	object := buildObjectID(op.ObjectType, data.UID)
 	user := userPrefix + data.Username
 
-	var deletes []client.ClientTupleKeyWithoutCondition
+	var listed []client.ClientTupleKeyWithoutCondition
 	for _, relation := range data.Relations {
 		if relation != "" {
-			deletes = append(deletes, client.ClientTupleKeyWithoutCondition{User: user, Relation: relation, Object: object})
+			listed = append(listed, client.ClientTupleKeyWithoutCondition{User: user, Relation: relation, Object: object})
 		}
 	}
-	if len(deletes) == 0 {
+	return object, func(ctx context.Context) (contracts.FGAWriteResult, error) {
+		if len(listed) > 0 {
+			return w.applyChanges(ctx, nil, listed)
+		}
 		held, err := w.store.getTuplesByUserAndObject(ctx, user, object)
 		if err != nil {
 			return contracts.FGAWriteResult{}, err
 		}
+		deletes := make([]client.ClientTupleKeyWithoutCondition, 0, len(held))
 		for _, tuple := range held {
 			deletes = append(deletes, client.ClientTupleKeyWithoutCondition{
 				User: tuple.User, Relation: tuple.Relation, Object: tuple.Object,
 			})
 		}
-	}
-	return w.applyChanges(ctx, nil, deletes)
+		return w.applyChanges(ctx, nil, deletes)
+	}, nil
 }
 
 // applyChanges sends writes and deletes. Changed is true on an error, because

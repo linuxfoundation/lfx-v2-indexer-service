@@ -62,9 +62,18 @@ func (l *kvLease) Acquire(ctx context.Context, object string) (context.Context, 
 	}
 	key := leaseKey(object)
 	for {
+		// The TTL starts when NATS stores the key, after attempt, so a hold
+		// measured from attempt ends before the key expires however late the
+		// acknowledgement arrives.
+		attempt := time.Now()
 		revision, err := kv.Create(ctx, key, nil)
 		if err == nil {
-			held, cancel := context.WithTimeout(ctx, hold)
+			held, cancel := context.WithDeadline(ctx, attempt.Add(hold))
+			if held.Err() != nil {
+				cancel()
+				l.release(kv, key, revision)
+				return nil, nil, errLeaseBusy
+			}
 			return held, func() {
 				cancel()
 				l.release(kv, key, revision)

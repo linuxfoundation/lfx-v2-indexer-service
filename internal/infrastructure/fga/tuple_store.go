@@ -42,7 +42,9 @@ func (s tupleStore) readObjectTuples(ctx context.Context, object string) ([]open
 	req := client.ClientReadRequest{
 		Object: openfga.PtrString(object),
 	}
-	options := client.ClientReadOptions{}
+	// These reads decide what to write and delete. OpenFGA answers reads
+	// from its read replica unless higher consistency is requested.
+	options := client.ClientReadOptions{Consistency: openfga.CONSISTENCYPREFERENCE_HIGHER_CONSISTENCY.Ptr()}
 	var tuples []openfga.Tuple
 	for {
 		resp, err := s.client.Read(ctx, req, options)

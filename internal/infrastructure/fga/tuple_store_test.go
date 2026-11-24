@@ -18,6 +18,9 @@ import (
 
 func withToken(token *string) any {
 	return mock.MatchedBy(func(opts client.ClientReadOptions) bool {
+		if opts.Consistency == nil || *opts.Consistency != openfga.CONSISTENCYPREFERENCE_HIGHER_CONSISTENCY {
+			return false
+		}
 		if token == nil {
 			return opts.ContinuationToken == nil
 		}

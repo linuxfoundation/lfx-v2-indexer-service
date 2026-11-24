@@ -109,36 +109,40 @@ func (w *Writer) Apply(ctx context.Context, objectType string, operation json.Ra
 	return result, nil
 }
 
-// applyLeased runs op while holding the lease on its object. Without a
-// readable uid there is no object to lease, and every operation rejects the
-// payload with its own message.
+// leasedRun does an operation's tuple reads and writes while its object is
+// leased.
+type leasedRun func(ctx context.Context) (contracts.FGAWriteResult, error)
+
+// applyLeased validates op before taking the lease on its object, so an
+// invalid payload is rejected even when the lease is busy or unavailable,
+// then runs its tuple I/O while holding the lease.
 func (w *Writer) applyLeased(ctx context.Context, op types.FGAOperation) (contracts.FGAWriteResult, error) {
-	var target struct {
-		UID string `json:"uid"`
+	object, run, err := w.prepare(op)
+	if err != nil {
+		return contracts.FGAWriteResult{}, err
 	}
-	if err := op.UnmarshalData(&target); err != nil || target.UID == "" {
-		return w.apply(ctx, op)
-	}
-	ctx, release, err := w.lease.Acquire(ctx, buildObjectID(op.ObjectType, target.UID))
+	ctx, release, err := w.lease.Acquire(ctx, object)
 	if err != nil {
 		return contracts.FGAWriteResult{}, err
 	}
 	defer release()
-	return w.apply(ctx, op)
+	return run(ctx)
 }
 
-func (w *Writer) apply(ctx context.Context, op types.FGAOperation) (contracts.FGAWriteResult, error) {
+// prepare decodes and validates op without I/O. It returns the object op
+// writes and the run that writes it.
+func (w *Writer) prepare(op types.FGAOperation) (string, leasedRun, error) {
 	switch op.Operation {
 	case types.FGAOperationUpdateAccess:
-		return w.updateAccess(ctx, op)
+		return w.updateAccess(op)
 	case types.FGAOperationDeleteAccess:
-		return w.deleteAccess(ctx, op)
+		return w.deleteAccess(op)
 	case types.FGAOperationMemberPut:
-		return w.memberPut(ctx, op)
+		return w.memberPut(op)
 	case types.FGAOperationMemberRemove:
-		return w.memberRemove(ctx, op)
+		return w.memberRemove(op)
 	default:
-		return contracts.FGAWriteResult{}, rejected(errors.New("unsupported operation"))
+		return "", nil, rejected(errors.New("unsupported operation"))
 	}
 }
 

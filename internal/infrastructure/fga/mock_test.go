@@ -59,6 +59,17 @@ func (noLease) Acquire(ctx context.Context, _ string) (context.Context, func(), 
 	return ctx, func() {}, nil
 }
 
+// busyLease refuses every lease and records whether one was asked for.
+type busyLease struct{ called bool }
+
+func (l *busyLease) Acquire(context.Context, string) (context.Context, func(), error) {
+	l.called = true
+	return nil, nil, errLeaseBusy
+}
+
+// readOptions is the ClientReadOptions every first-page tuple read sends.
+var readOptions = client.ClientReadOptions{Consistency: openfga.CONSISTENCYPREFERENCE_HIGHER_CONSISTENCY.Ptr()}
+
 // readFor matches a Read request for object.
 func readFor(object string) any {
 	return mock.MatchedBy(func(req client.ClientReadRequest) bool {

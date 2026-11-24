@@ -91,11 +91,15 @@ func TestApplyRejectsPayloadsFgaSyncTerminates(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := new(mockFGAClient)
+			w := newTestWriter(m)
+			lease := &busyLease{}
+			w.lease = lease
 
-			result, err := apply(newTestWriter(m), tt.payload)
+			result, err := apply(w, tt.payload)
 
 			require.Error(t, err)
 			assert.True(t, isRejected(err), "expected a rejected error: %v", err)
+			assert.False(t, lease.called, "an invalid payload must be rejected before the lease is taken")
 			assert.False(t, result.Changed)
 			if tt.redacted != "" {
 				assert.NotContains(t, err.Error(), tt.redacted)
@@ -126,7 +130,7 @@ func TestApplyMemberRemoveEmptyRelationsIsValid(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := new(mockFGAClient)
-			m.On("Read", mock.Anything, mock.Anything, client.ClientReadOptions{}).Return(tuplesResponse(), nil)
+			m.On("Read", mock.Anything, mock.Anything, readOptions).Return(tuplesResponse(), nil)
 
 			result, err := apply(newTestWriter(m), tt.payload)
 
@@ -170,7 +174,7 @@ func TestApplyLeavesFgaErrorsTransient(t *testing.T) {
 		for _, fgaErr := range fgaErrors {
 			t.Run(p.name+"/"+fgaErr.name, func(t *testing.T) {
 				m := new(mockFGAClient)
-				m.On("Read", mock.Anything, mock.Anything, client.ClientReadOptions{}).
+				m.On("Read", mock.Anything, mock.Anything, readOptions).
 					Return((*client.ClientReadResponse)(nil), fgaErr.err)
 
 				_, err := apply(newTestWriter(m), p.payload)
@@ -198,7 +202,7 @@ func TestApplyWriteErrorIsTransientAndReportsChanged(t *testing.T) {
 
 func TestApplyUpdateAccess(t *testing.T) {
 	m := new(mockFGAClient)
-	m.On("Read", mock.Anything, readFor("committee:resource-1"), client.ClientReadOptions{}).Return(tuplesResponse(
+	m.On("Read", mock.Anything, readFor("committee:resource-1"), readOptions).Return(tuplesResponse(
 		tuple("committee:resource-1", "member", "user:old-member"),
 		tuple("committee:resource-1", "participant", "user:managed-elsewhere"),
 	), nil).Once()
@@ -233,7 +237,7 @@ func TestApplyUpdateAccess(t *testing.T) {
 
 func TestApplyUpdateAccessNoChange(t *testing.T) {
 	m := new(mockFGAClient)
-	m.On("Read", mock.Anything, mock.Anything, client.ClientReadOptions{}).
+	m.On("Read", mock.Anything, mock.Anything, readOptions).
 		Return(tuplesResponse(tuple("committee:resource-1", "viewer", "user:*")), nil).Once()
 
 	result, err := apply(newTestWriter(m), `{"object_type":"committee","operation":"update_access","data":{"uid":"resource-1","public":true}}`)
@@ -244,7 +248,7 @@ func TestApplyUpdateAccessNoChange(t *testing.T) {
 
 func TestApplyUpdateAccessOnlyInvalidWritesIsNotChanged(t *testing.T) {
 	m := new(mockFGAClient)
-	m.On("Read", mock.Anything, mock.Anything, client.ClientReadOptions{}).Return(tuplesResponse(), nil).Once()
+	m.On("Read", mock.Anything, mock.Anything, readOptions).Return(tuplesResponse(), nil).Once()
 	m.On("Write", mock.Anything, mock.Anything, mock.Anything).Return((*client.ClientWriteResponse)(nil),
 		makeValidationError("Invalid tuple 'committee:resource-1#bogus@user:alice'. Reason: relation 'committee#bogus' not found"),
 	).Once()
@@ -257,7 +261,7 @@ func TestApplyUpdateAccessOnlyInvalidWritesIsNotChanged(t *testing.T) {
 
 func TestApplyDeleteAccess(t *testing.T) {
 	m := new(mockFGAClient)
-	m.On("Read", mock.Anything, readFor("committee:resource-1"), client.ClientReadOptions{}).Return(tuplesResponse(
+	m.On("Read", mock.Anything, readFor("committee:resource-1"), readOptions).Return(tuplesResponse(
 		tuple("committee:resource-1", "viewer", "user:*"),
 		tuple("committee:resource-1", "auditor", "team:auditors#member"),
 	), nil).Once()
@@ -304,7 +308,7 @@ func TestApplyMemberPut(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := new(mockFGAClient)
-			m.On("Read", mock.Anything, readFor("meeting:m1"), client.ClientReadOptions{}).Return(tuplesResponse(existing...), nil).Once()
+			m.On("Read", mock.Anything, readFor("meeting:m1"), readOptions).Return(tuplesResponse(existing...), nil).Once()
 			changed := len(tt.wantWrites) > 0 || len(tt.wantDeletes) > 0
 			if changed {
 				m.On("Write", mock.Anything, mock.MatchedBy(func(req client.ClientWriteRequest) bool {

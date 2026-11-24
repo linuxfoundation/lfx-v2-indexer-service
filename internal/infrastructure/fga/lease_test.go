@@ -113,6 +113,54 @@ func TestKVLeaseHoldEndsBeforeTheLeaseExpires(t *testing.T) {
 	assert.LessOrEqual(t, time.Until(deadline), time.Second)
 }
 
+// slowAckKV stores the key at once and returns from Create after delay, as a
+// slow JetStream acknowledgement would.
+type slowAckKV struct {
+	jetstream.KeyValue
+	delay time.Duration
+}
+
+func (s slowAckKV) Create(ctx context.Context, key string, value []byte, opts ...jetstream.KVCreateOpt) (uint64, error) {
+	revision, err := s.KeyValue.Create(ctx, key, value, opts...)
+	time.Sleep(s.delay)
+	return revision, err
+}
+
+func slowAckLease(t *testing.T, ttl, delay time.Duration) *kvLease {
+	t.Helper()
+	s := startJetStream(t)
+	js := connectJetStream(t, s)
+	l := NewKVLease(js, createLeaseBucket(t, js, ttl), discardLogger()).(*kvLease)
+	kv, _, err := l.bound(context.Background())
+	require.NoError(t, err)
+	l.kv = slowAckKV{KeyValue: kv, delay: delay}
+	return l
+}
+
+func TestKVLeaseHoldIsMeasuredFromTheCreateAttempt(t *testing.T) {
+	delay := 300 * time.Millisecond
+	l := slowAckLease(t, 2*time.Second, delay)
+
+	held, release := acquire(t, l, "committee:c1")
+	defer release()
+
+	deadline, ok := held.Deadline()
+	require.True(t, ok)
+	assert.LessOrEqual(t, time.Until(deadline), time.Second-delay)
+}
+
+func TestKVLeaseAcknowledgedAfterTheHoldIsBusyAndReleased(t *testing.T) {
+	l := slowAckLease(t, 2*time.Second, 1500*time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, _, err := l.Acquire(ctx, "committee:c1")
+	require.ErrorIs(t, err, errLeaseBusy)
+
+	_, err = l.kv.Get(ctx, leaseKey("committee:c1"))
+	assert.ErrorIs(t, err, jetstream.ErrKeyNotFound)
+}
+
 func TestKVLeaseOfACrashedHolderExpires(t *testing.T) {
 	s := startJetStream(t)
 	js := connectJetStream(t, s)
