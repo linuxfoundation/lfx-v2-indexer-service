@@ -16,6 +16,7 @@ import (
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/mocks"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/types"
 )
 
 func TestAuditIdentityResolver_Resolve(t *testing.T) {
@@ -95,6 +96,19 @@ func TestAuditIdentityResolver_Resolve(t *testing.T) {
 			cache.AssertExpectations(t)
 		})
 	}
+}
+
+func TestAuditIdentityResolver_LegacyDoesNotLookup(t *testing.T) {
+	directory, cache := &mocks.MockIdentityDirectory{}, &mocks.MockIdentityCache{}
+	resolver, err := NewAuditIdentityResolver(directory, cache)
+	require.NoError(t, err)
+	email := "first.last@example.com"
+	identity, err := resolver.Resolve(context.Background(), "legacy:v1-platform/actor-001", &email)
+	require.NoError(t, err)
+	require.Equal(t, &types.AuditActorIdentity{}, identity)
+	directory.AssertNotCalled(t, "LookupIdentity", mock.Anything, mock.Anything)
+	cache.AssertNotCalled(t, "GetIdentity", mock.Anything, mock.Anything)
+	cache.AssertNotCalled(t, "SetIdentity", mock.Anything, mock.Anything, mock.Anything)
 }
 
 func TestAuditIdentityResolver_WithoutCache(t *testing.T) {

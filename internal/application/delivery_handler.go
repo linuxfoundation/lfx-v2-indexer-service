@@ -33,7 +33,7 @@ type deliveryRequest struct {
 	// objectRef is the ordering key: <object_type>:<id>.
 	objectRef string
 	// indexBody is the envelope without fga and sync, or nil when the
-	// request has no indexing_config.
+	// request is FGA-only: no indexing_config, no data, and not a delete.
 	indexBody []byte
 	fga       json.RawMessage
 	sync      bool
@@ -283,9 +283,11 @@ func parseDeliveryRequest(data []byte, subject string) (*deliveryRequest, *deliv
 		return nil, failure
 	}
 	req.objectRef = objectType + ":" + id
-	// Every delete is index work, so the index half rejects a malformed one
-	// instead of the request replying OK after only the FGA half.
-	if envelope.IndexingConfig != nil || envelope.isDelete() {
+	// Every delete and every request carrying resource data is index work, so
+	// the index half rejects a malformed one (such as an update missing
+	// indexing_config) instead of the request replying OK after only the FGA
+	// half.
+	if envelope.IndexingConfig != nil || envelope.isDelete() || present(envelope.Data) {
 		for key := range fields {
 			if strings.EqualFold(key, "fga") || strings.EqualFold(key, "sync") {
 				delete(fields, key)

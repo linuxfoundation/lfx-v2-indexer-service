@@ -48,7 +48,8 @@ type TransactionBody struct {
 
 // InvalidTransactionError marks an index request that fails validation:
 // replaying the same payload fails the same way, so it must not be retried.
-// Dependency failures (storage, token validation, history) are never wrapped.
+// Dependency failures (storage unavailable, token validation, history reads)
+// are never wrapped; a stored identity that conflicts with the request is.
 type InvalidTransactionError struct {
 	Err error
 }

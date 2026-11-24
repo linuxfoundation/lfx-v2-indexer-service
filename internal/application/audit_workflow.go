@@ -77,7 +77,7 @@ func (w *AuditWorkflow) Process(ctx context.Context, payload []byte, subject str
 	}); err != nil {
 		return &auditError{fmt.Errorf("reserve audited delivery identity: %w", err)}
 	}
-	if envelope.Audit.Origin == types.AuditOriginMutation {
+	if envelope.Audit.Origin.RequiresHistory() {
 		record, err := w.admission.NewRecord(envelope, objectType, w.now())
 		if err != nil {
 			return err
@@ -99,6 +99,12 @@ func (w *AuditWorkflow) Process(ctx context.Context, payload []byte, subject str
 				return &auditError{fmt.Errorf("append audit history: %w", err)}
 			}
 		}
+	}
+	// An import must never bootstrap a missing current document, modify a live
+	// resource/tombstone or revision lineage, schedule cleanup, or notify sync
+	// consumers. Its ACK requires verified history, not just a reserved receipt.
+	if envelope.Audit.Origin == types.AuditOriginHistoricalImport {
+		return nil
 	}
 	body, applied, err := w.current.ApplyIfNewer(ctx, envelope, objectType, fingerprint)
 	if err != nil {

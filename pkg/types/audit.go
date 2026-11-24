@@ -27,13 +27,16 @@ const AuditSchemaVersion = 2
 // A broker may impose a smaller transport limit including headers.
 const MaxAuditEnvelopeBytes = 1 << 20
 
-// AuditOrigin identifies whether a message represents a committed mutation or
-// a projection operation. Only an authorized producer may assert these values.
+// AuditOrigin identifies a live mutation, historical import, or projection
+// operation. Only an authorized producer may assert these values.
 type AuditOrigin string
 
 const (
 	// AuditOriginMutation is a committed domain change, including system changes.
 	AuditOriginMutation AuditOrigin = "mutation"
+	// AuditOriginHistoricalImport appends a historical change without touching
+	// current resources, revision guards, cleanup, or downstream resource events.
+	AuditOriginHistoricalImport AuditOrigin = "historical_import"
 	// AuditOriginReindex rebuilds a projection without inventing a domain change.
 	AuditOriginReindex AuditOrigin = "reindex"
 	// AuditOriginBackfill loads a projection without fabricating historical changes.
@@ -66,8 +69,9 @@ type AuditAttribution struct {
 	EffectiveActorJWT string `json:"effective_actor_jwt,omitempty"`
 }
 
-// AuditActorIdentity is the indexer-owned retained user identity. The username
+// AuditActorIdentity is the indexer-owned retained identity. For users, username
 // comes from the actor ref and email from matched token evidence or auth-service.
+// Unresolved legacy actors retain explicit nulls, never a fabricated username.
 // Display names, avatar URLs and credentials never belong in this record.
 type AuditActorIdentity struct {
 	Username *string `json:"username"`
@@ -114,8 +118,16 @@ func ValidAuditObjectType(name string) bool {
 // RequiresLegacyFence identifies audited origins that depend on retained
 // revision guards. Only explicitly authorized backfill may bootstrap an
 // unfenced type, without claiming history coverage or ongoing guard stability.
+// Historical imports never touch current state and need no projection fence.
 func (origin AuditOrigin) RequiresLegacyFence() bool {
 	return origin == AuditOriginMutation || origin == AuditOriginReindex || origin == AuditOriginSyncEcho
+}
+
+// RequiresHistory identifies origins that must append or verify approved history.
+// Historical imports have no current-projection stage and do not require a
+// legacy write fence; they still require explicit publisher/origin/schema policy.
+func (origin AuditOrigin) RequiresHistory() bool {
+	return origin == AuditOriginMutation || origin == AuditOriginHistoricalImport
 }
 
 // AuditContentValidator must reject unregistered schemas, schemas not owned by
@@ -212,6 +224,14 @@ func (e *IndexerMessageEnvelope) validateV2(objectType string, validateContent A
 	if !auditActorRef(audit.Attribution.ActorRef) || !auditActorRef(audit.Attribution.EffectiveActorRef) {
 		return fmt.Errorf("explicit audit actor and effective actor references are required")
 	}
+	for _, actor := range []AuditActor{
+		{Ref: audit.Attribution.ActorRef, JWT: audit.Attribution.ActorJWT},
+		{Ref: audit.Attribution.EffectiveActorRef, JWT: audit.Attribution.EffectiveActorJWT},
+	} {
+		if ValidLegacyAuditActorRef(actor.Ref) && (audit.Origin != AuditOriginHistoricalImport || actor.JWT != "") {
+			return fmt.Errorf("legacy actors require historical_import origin and no actor JWT evidence")
+		}
+	}
 	for _, refs := range [][]string{audit.Scope.Before, audit.Scope.After} {
 		for _, ref := range refs {
 			if !auditRef(ref) {
@@ -223,7 +243,7 @@ func (e *IndexerMessageEnvelope) validateV2(objectType string, validateContent A
 		return err
 	}
 	switch audit.Origin {
-	case AuditOriginMutation:
+	case AuditOriginMutation, AuditOriginHistoricalImport:
 		if err := e.validateAuditContent(validateContent, objectType); err != nil {
 			return err
 		}
@@ -322,11 +342,24 @@ func auditRef(value string) bool {
 
 func auditActorRef(value string) bool {
 	kind, _, _ := strings.Cut(value, ":")
-	return (kind == "user" || kind == "service") && auditRef(value)
+	return ((kind == "user" || kind == "service") && auditRef(value)) || ValidLegacyAuditActorRef(value)
 }
 
-// ValidAuditActorRef validates a user:<principal> or service:<client name> ref.
-// It checks syntax only, never actor authentication or delegation authority.
+// ValidAuditActorRef validates user, service and source-qualified legacy refs.
+// It checks syntax only, never authentication, origin or delegation authority.
 func ValidAuditActorRef(value string) bool {
 	return auditActorRef(value)
+}
+
+// ValidLegacyAuditActorRef validates legacy:<source>/<opaque-id>. Source uses
+// the publisher namespace grammar; the complete source/id is bounded to 256
+// characters. This is provenance, not a Heimdall principal or an access grant.
+// Only historical imports may use it, and it can never carry actor JWT evidence.
+func ValidLegacyAuditActorRef(value string) bool {
+	kind, id, ok := strings.Cut(value, ":")
+	if !ok || kind != "legacy" || !auditID(id) {
+		return false
+	}
+	source, sourceID, ok := strings.Cut(id, "/")
+	return ok && ValidAuditPublisherName(source) && auditID(sourceID)
 }

@@ -142,6 +142,74 @@ func TestQueueSubscribeDispatch_DrainWaitsForDone(t *testing.T) {
 	}
 }
 
+// A request arriving while drain waits for JetStream workers must not be
+// accepted, because it would only get what is left of the shared deadline.
+func TestQueueSubscribeDispatch_StopsBeforeJetStreamWait(t *testing.T) {
+	nc := startCoreNATS(t)
+	repo := newDispatchRepo(t, nc)
+
+	dispatched := make(chan struct{}, 1)
+	err := repo.QueueSubscribeDispatch(context.Background(), "lfx.indexer.index.>", "q", func(_ context.Context, _ []byte, _ string, reply func([]byte) error, done func()) {
+		dispatched <- struct{}{}
+		_ = reply([]byte("OK"))
+		done()
+	})
+	require.NoError(t, err)
+	publisher := startPublisher(t, nc)
+	sub := repo.dispatchSubs[0]
+
+	repo.jsWg.Add(1)
+	drained := make(chan struct{})
+	go func() {
+		_ = repo.DrainWithTimeout()
+		close(drained)
+	}()
+	require.Eventually(t, func() bool { return !sub.IsValid() }, 2*time.Second, 10*time.Millisecond,
+		"dispatch must stop while JetStream workers are still running")
+	_, err = publisher.Request("lfx.indexer.index.fixture", []byte("late"), 200*time.Millisecond)
+	require.Error(t, err)
+	require.Empty(t, dispatched)
+
+	repo.jsWg.Done()
+	select {
+	case <-drained:
+	case <-time.After(5 * time.Second):
+		t.Fatal("drain did not return after the JetStream worker finished")
+	}
+}
+
+// Accepted work outlives the connection, so drain still waits for it.
+func TestQueueSubscribeDispatch_DrainWaitsForDoneAfterConnectionClosed(t *testing.T) {
+	nc := startCoreNATS(t)
+	repo := newDispatchRepo(t, nc)
+
+	finished := make(chan func(), 1)
+	err := repo.QueueSubscribeDispatch(context.Background(), "lfx.indexer.index.>", "q", func(_ context.Context, _ []byte, _ string, _ func([]byte) error, done func()) {
+		finished <- done
+	})
+	require.NoError(t, err)
+	require.NoError(t, startPublisher(t, nc).Publish("lfx.indexer.index.fixture", []byte("x")))
+	done := <-finished
+	nc.Close()
+
+	drained := make(chan struct{})
+	go func() {
+		_ = repo.DrainWithTimeout()
+		close(drained)
+	}()
+	select {
+	case <-drained:
+		t.Fatal("drain returned before the dispatched message finished")
+	case <-time.After(300 * time.Millisecond):
+	}
+	done()
+	select {
+	case <-drained:
+	case <-time.After(5 * time.Second):
+		t.Fatal("drain did not return after the message finished")
+	}
+}
+
 func TestQueueSubscribeDispatch_RefusedWhileShuttingDown(t *testing.T) {
 	nc := startCoreNATS(t)
 	repo := newDispatchRepo(t, nc)

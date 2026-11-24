@@ -6,6 +6,7 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -22,11 +23,18 @@ import (
 // TestHistoryRepository_CreateOrVerify requires immutable read-back evidence
 // for duplicate appends rather than treating every HTTP 409 as success.
 func TestHistoryRepository_CreateOrVerify(t *testing.T) {
+	for _, origin := range []types.AuditOrigin{types.AuditOriginMutation, types.AuditOriginHistoricalImport} {
+		t.Run(string(origin), func(t *testing.T) { testHistoryCreateOrVerify(t, origin) })
+	}
+}
+
+func testHistoryCreateOrVerify(t *testing.T, origin types.AuditOrigin) {
+	t.Helper()
 	original := &contracts.HistoryRecord{
 		Publisher: "test-publisher", EventID: "fixture-event-1", ObjectType: "fixture_resource",
 		ObjectID: "fixture-resource", Fingerprint: strings.Repeat("a", 64),
 		IngestedAt: time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC),
-		Audit:      contracts.HistoryAudit{Origin: types.AuditOriginMutation},
+		Audit:      contracts.HistoryAudit{Origin: origin},
 	}
 	for _, tt := range []struct {
 		name       string
@@ -113,6 +121,7 @@ func TestHistoryRepository_VerifyExisting(t *testing.T) {
 		body      string
 		exists    bool
 		wantError string
+		invalid   bool
 	}{
 		{name: "absent", status: http.StatusNotFound, body: `{"_index":"resource-history-v1","_id":"test-publisher:fixture-event-1","found":false}`},
 		{name: "404 storage error", status: http.StatusNotFound, body: `{"error":{"type":"index_not_found_exception","reason":"private-response"},"status":404}`, wantError: "invalid not-found response"},
@@ -129,7 +138,7 @@ func TestHistoryRepository_VerifyExisting(t *testing.T) {
 		{name: "404 oversized", status: http.StatusNotFound, body: `{"found":false,"extra":"` + strings.Repeat("x", 8192) + `"}`, wantError: "invalid not-found response"},
 		{name: "retained", status: http.StatusOK, exists: true},
 		{name: "erased", status: http.StatusOK, body: `{"_source":{"erased":true}}`, wantError: "explicitly erased"},
-		{name: "mismatch", status: http.StatusOK, body: `{"_source":{"fingerprint":"different"}}`, wantError: "different content"},
+		{name: "mismatch", status: http.StatusOK, body: `{"_source":{"fingerprint":"different"}}`, wantError: "different content", invalid: true},
 		{name: "malformed", status: http.StatusOK, body: `{`, wantError: "decode existing"},
 		{name: "unavailable", status: http.StatusServiceUnavailable, body: "private-response", wantError: "status 503"},
 	} {
@@ -152,6 +161,7 @@ func TestHistoryRepository_VerifyExisting(t *testing.T) {
 			if tt.wantError != "" {
 				require.ErrorContains(t, err, tt.wantError)
 				require.NotContains(t, err.Error(), "private-response")
+				require.Equal(t, tt.invalid, errors.As(err, new(*contracts.InvalidTransactionError)))
 			} else {
 				require.NoError(t, err)
 			}
