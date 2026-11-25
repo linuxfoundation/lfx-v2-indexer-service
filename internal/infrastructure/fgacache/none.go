@@ -25,8 +25,8 @@ func (noneCache) Set(context.Context, map[string]bool, contracts.InvalidationMar
 	return contracts.ErrCacheBypassed
 }
 
-func (noneCache) Invalidate(context.Context) (contracts.InvalidationMarker, error) {
-	return contracts.InvalidationMarker{}, contracts.ErrCacheBypassed
+func (noneCache) Invalidate(context.Context, contracts.InvalidationMarker) (contracts.InvalidationMarker, bool, error) {
+	return contracts.InvalidationMarker{}, false, contracts.ErrCacheBypassed
 }
 
 func (noneCache) Seed(context.Context, []string, contracts.InvalidationMarker) error {

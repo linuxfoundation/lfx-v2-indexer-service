@@ -118,7 +118,7 @@ func (s *natsKVStore) CurrentMarker(ctx context.Context) (contracts.Invalidation
 	case err != nil:
 		return contracts.InvalidationMarker{}, err
 	}
-	return contracts.NewTimeMarker(entry.Created()), nil
+	return contracts.NewTimeMarker(entry.Created()).WithRevision(entry.Revision()), nil
 }
 
 func (s *natsKVStore) Get(ctx context.Context, relationKeys []string, m contracts.InvalidationMarker) (map[string]bool, error) {
@@ -228,17 +228,35 @@ func (s *natsKVStore) remove(ctx context.Context, kv jetstream.KeyValue, cacheKe
 
 // Invalidate returns the marker of its own write. Reading the latest marker
 // instead could return a later writer's invalidation, and a seed under that
-// marker would survive it.
-func (s *natsKVStore) Invalidate(ctx context.Context) (contracts.InvalidationMarker, error) {
+// marker would survive it. It replaces inv only if inv is still the entry
+// before was read from; if that fails, another invalidation landed (or the
+// store failed, which the unconditional Put then reports) and it writes inv
+// anyway.
+func (s *natsKVStore) Invalidate(
+	ctx context.Context, before contracts.InvalidationMarker,
+) (contracts.InvalidationMarker, bool, error) {
 	kv, err := s.bound(ctx)
 	if err != nil {
-		return contracts.InvalidationMarker{}, err
+		return contracts.InvalidationMarker{}, false, err
 	}
-	revision, err := kv.Put(ctx, InvalidationKey, []byte("1"))
+	var revision uint64
+	if before.Revision() == 0 {
+		revision, err = kv.Create(ctx, InvalidationKey, []byte("1"))
+	} else {
+		revision, err = kv.Update(ctx, InvalidationKey, []byte("1"), before.Revision())
+	}
+	onlyMine := err == nil
+	if !onlyMine {
+		revision, err = kv.Put(ctx, InvalidationKey, []byte("1"))
+		if err != nil {
+			return contracts.InvalidationMarker{}, false, err
+		}
+	}
+	m, err := s.markerAt(ctx, kv, revision)
 	if err != nil {
-		return contracts.InvalidationMarker{}, err
+		return contracts.InvalidationMarker{}, false, err
 	}
-	return s.markerAt(ctx, kv, revision)
+	return m, onlyMine, nil
 }
 
 // markerAt returns the marker written at revision. When a later invalidation

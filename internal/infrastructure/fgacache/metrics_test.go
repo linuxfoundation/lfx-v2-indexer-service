@@ -106,16 +106,39 @@ func TestMetrics_FailedInvalidateIsAnError(t *testing.T) {
 	inner := &failingInvalidateStore{fakeStore: newFakeStore()}
 	c, reader := newMeteredFailSafe(t, inner)
 
-	_, err := c.Invalidate(context.Background())
+	_, err := invalidate(context.Background(), c)
 	require.ErrorIs(t, err, contracts.ErrCacheBypassed)
 	assert.Equal(t, int64(1), counterValue(t, reader, "fga_cache.errors"))
 	assert.Zero(t, counterValue(t, reader, "fga_cache.bypasses"))
+	assert.Zero(t, counterValue(t, reader, "fga_cache.invalidations_overtaken"))
+}
+
+func TestMetrics_OvertakenInvalidationIsCounted(t *testing.T) {
+	c, reader := newMeteredFailSafe(t, &overtakenStore{fakeStore: newFakeStore()})
+
+	_, onlyMine, err := c.Invalidate(context.Background(), contracts.InvalidationMarker{})
+	require.NoError(t, err)
+	assert.False(t, onlyMine)
+	assert.Equal(t, int64(1), counterValue(t, reader, "fga_cache.invalidations_overtaken"))
+	assert.Zero(t, counterValue(t, reader, "fga_cache.errors"))
 }
 
 type failingInvalidateStore struct {
 	*fakeStore
 }
 
-func (s *failingInvalidateStore) Invalidate(context.Context) (contracts.InvalidationMarker, error) {
-	return contracts.InvalidationMarker{}, errors.New("marker write failed")
+func (s *failingInvalidateStore) Invalidate(
+	context.Context, contracts.InvalidationMarker,
+) (contracts.InvalidationMarker, bool, error) {
+	return contracts.InvalidationMarker{}, false, errors.New("marker write failed")
+}
+
+type overtakenStore struct {
+	*fakeStore
+}
+
+func (s *overtakenStore) Invalidate(
+	context.Context, contracts.InvalidationMarker,
+) (contracts.InvalidationMarker, bool, error) {
+	return contracts.NewTimeMarker(time.Now()), false, nil
 }

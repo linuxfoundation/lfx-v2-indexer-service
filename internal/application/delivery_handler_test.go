@@ -34,9 +34,15 @@ type fakeFGAWriter struct {
 	err     error
 	delay   time.Duration
 	applied []string
+	// during, when set, runs inside Apply, as another writer acting while
+	// this write is in flight.
+	during func()
 }
 
 func (w *fakeFGAWriter) Apply(ctx context.Context, objectType string, op json.RawMessage) (contracts.FGAWriteResult, error) {
+	if w.during != nil {
+		w.during()
+	}
 	if w.delay > 0 {
 		select {
 		case <-time.After(w.delay):

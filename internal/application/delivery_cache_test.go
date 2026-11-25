@@ -153,12 +153,67 @@ func TestDeliveryCache_FailedWriteThatChangedTuplesStillInvalidates(t *testing.T
 	require.Empty(t, got, "a failed write must not seed")
 }
 
+// Writer A grants a tuple; while A is writing, writer B removes it and
+// invalidates. A's invalidation then follows B's, and A's seed would answer
+// "allowed" for a tuple OpenFGA no longer has, so A must not seed.
+func TestDeliveryCache_WriteOvertakenByAnotherInvalidationDoesNotSeed(t *testing.T) {
+	cache, kv, _ := natsKVCache(t)
+	seedKey := "fixture_resource:fixture-1#viewer@user:fixture-user"
+	var otherErr error
+	writer := &fakeFGAWriter{
+		result: contracts.FGAWriteResult{Changed: true, SeedKeys: []string{seedKey}},
+		during: func() {
+			_, _, otherErr = cache.Invalidate(context.Background(), contracts.InvalidationMarker{})
+		},
+	}
+	h := newTestDeliveryHandler(&fakeIndex{}, writer, cache)
+	before := invRevision(t, kv)
+
+	reply, atReply := deliverObservingInv(t, h, kv)
+	require.NoError(t, otherErr)
+	require.Equal(t, "OK", reply)
+	require.Greater(t, atReply, before+1, "both invalidations land before the reply")
+
+	marker, err := cache.CurrentMarker(context.Background())
+	require.NoError(t, err)
+	got, err := cache.Get(context.Background(), []string{seedKey}, marker)
+	require.NoError(t, err)
+	require.Empty(t, got, "an overtaken write must not seed")
+}
+
+// markerReadFails is a cache whose CurrentMarker fails while the rest works.
+type markerReadFails struct {
+	contracts.FGACache
+}
+
+func (markerReadFails) CurrentMarker(context.Context) (contracts.InvalidationMarker, error) {
+	return contracts.InvalidationMarker{}, contracts.ErrCacheBypassed
+}
+
+func TestDeliveryCache_FailedMarkerReadStillInvalidatesWithoutSeeding(t *testing.T) {
+	cache, kv, _ := natsKVCache(t)
+	seedKey := "fixture_resource:fixture-1#viewer@user:fixture-user"
+	writer := &fakeFGAWriter{result: contracts.FGAWriteResult{Changed: true, SeedKeys: []string{seedKey}}}
+	h := newTestDeliveryHandler(&fakeIndex{}, writer, markerReadFails{cache})
+	before := invRevision(t, kv)
+
+	reply, atReply := deliverObservingInv(t, h, kv)
+	require.Equal(t, "OK", reply, "a failed marker read must not fail the write")
+	require.Greater(t, atReply, before, "the inv marker must advance before the reply")
+
+	marker, err := cache.CurrentMarker(context.Background())
+	require.NoError(t, err)
+	got, err := cache.Get(context.Background(), []string{seedKey}, marker)
+	require.NoError(t, err)
+	require.Empty(t, got, "no seed without a marker read before the write")
+}
+
 // With CACHE_BACKEND=none the container passes no cache, so a tuple change
 // replies OK without an invalidation.
 func TestDeliveryCache_NoneBackendSkipsInvalidation(t *testing.T) {
 	none := fgacache.New(config.CacheConfig{Backend: config.CacheBackendNone}, nil, discardLogger())
 	t.Cleanup(none.Close)
-	_, err := none.Invalidate(context.Background())
+	_, _, err := none.Invalidate(context.Background(), contracts.InvalidationMarker{})
 	require.ErrorIs(t, err, contracts.ErrCacheBypassed, "the none backend fails Invalidate, so the handler must not call it")
 
 	h := newTestDeliveryHandler(&fakeIndex{}, &fakeFGAWriter{result: contracts.FGAWriteResult{Changed: true}}, nil)

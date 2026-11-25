@@ -118,9 +118,9 @@ func (f *fakeStore) Set(context.Context, map[string]bool, contracts.Invalidation
 	return nil
 }
 
-func (f *fakeStore) Invalidate(context.Context) (contracts.InvalidationMarker, error) {
+func (f *fakeStore) Invalidate(context.Context, contracts.InvalidationMarker) (contracts.InvalidationMarker, bool, error) {
 	f.calls.Add(1)
-	return contracts.NewTimeMarker(time.Now()), nil
+	return contracts.NewTimeMarker(time.Now()), true, nil
 }
 
 func (f *fakeStore) Seed(context.Context, []string, contracts.InvalidationMarker) error {
@@ -305,7 +305,7 @@ func TestFailSafe_InvalidateIsAttemptedWhileDown(t *testing.T) {
 
 	// The bucket is shared with lfx-v2-fga-sync, so an invalidation must reach
 	// the store even when this replica believes it is down.
-	_, err := c.Invalidate(context.Background())
+	_, err := invalidate(context.Background(), c)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), store.calls.Load())
 }
@@ -330,7 +330,7 @@ func TestFailSafe_InvalidateSkipsTheBudget(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := c.Invalidate(context.Background())
+		_, err := invalidate(context.Background(), c)
 		done <- err
 	}()
 	select {
@@ -392,7 +392,7 @@ func TestNoneCache_AlwaysBypasses(t *testing.T) {
 	_, err = c.Get(ctx, []string{"k"}, m)
 	assert.ErrorIs(t, err, contracts.ErrCacheBypassed)
 	assert.ErrorIs(t, c.Set(ctx, map[string]bool{"k": true}, m), contracts.ErrCacheBypassed)
-	_, err = c.Invalidate(ctx)
+	_, err = invalidate(ctx, c)
 	assert.ErrorIs(t, err, contracts.ErrCacheBypassed)
 	assert.ErrorIs(t, c.Seed(ctx, []string{"k"}, m), contracts.ErrCacheBypassed)
 	assert.ErrorIs(t, c.HealthCheck(ctx), contracts.ErrCacheBypassed)

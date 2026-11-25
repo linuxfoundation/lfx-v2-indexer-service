@@ -8,7 +8,10 @@ import "encoding/base32"
 // The key format and the last-invalidation marker semantics in this file are
 // duplicated in lfx-v2-fga-sync/fga_cache.go. While both services read or
 // write the same cache they must stay identical. Change them in both repos and
-// upgrade both services together.
+// upgrade both services together. fga-sync seeds without checking for other
+// invalidations only because its tuple writes never overlap; the indexer's can,
+// so it seeds only when its invalidation was the only one since its write
+// began (FGACache.Invalidate).
 
 // InvalidationKey is the cache key of the last-invalidation marker.
 const InvalidationKey = "inv"

@@ -18,6 +18,7 @@ var ErrCacheBypassed = errors.New("fga cache bypassed")
 // counter on Valkey.
 type InvalidationMarker struct {
 	at         time.Time
+	revision   uint64
 	generation string
 	counter    int64
 }
@@ -25,6 +26,18 @@ type InvalidationMarker struct {
 // NewTimeMarker returns a marker for backends that compare store write times.
 func NewTimeMarker(at time.Time) InvalidationMarker {
 	return InvalidationMarker{at: at}
+}
+
+// WithRevision returns m carrying the store revision of the invalidation key,
+// zero when the key is absent, for backends whose Invalidate compares it.
+func (m InvalidationMarker) WithRevision(revision uint64) InvalidationMarker {
+	m.revision = revision
+	return m
+}
+
+// Revision returns the store revision set by WithRevision.
+func (m InvalidationMarker) Revision() uint64 {
+	return m.revision
 }
 
 // NewCounterMarker returns a marker for backends that compare an
@@ -74,12 +87,17 @@ type FGACache interface {
 	Set(ctx context.Context, results map[string]bool, m InvalidationMarker) error
 
 	// Invalidate records an invalidation and returns the marker of that
-	// write, for Seed. It is attempted even while the cache is marked down;
-	// an error means the invalidation may not have been recorded.
-	Invalidate(ctx context.Context) (InvalidationMarker, error)
+	// write, for Seed. before is the marker read just before the OpenFGA
+	// write; onlyMine reports that no other invalidation landed between
+	// before and this one. It is attempted even while the cache is marked
+	// down; an error means the invalidation may not have been recorded.
+	Invalidate(ctx context.Context, before InvalidationMarker) (m InvalidationMarker, onlyMine bool, err error)
 
 	// Seed writes true for relation keys just written to OpenFGA, under the
-	// marker returned by the Invalidate that followed that write.
+	// marker returned by the Invalidate that followed that write. Seed only
+	// when that Invalidate reported onlyMine: another invalidation in between
+	// may belong to a later change to the same tuples, such as a removal,
+	// which the seed would undo.
 	Seed(ctx context.Context, relationKeys []string, m InvalidationMarker) error
 
 	// HealthCheck reports whether the store is reachable. It is never part

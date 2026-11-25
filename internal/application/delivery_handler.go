@@ -155,6 +155,14 @@ func (h *DeliveryHandler) runIndex(ctx context.Context, req *deliveryRequest) *d
 func (h *DeliveryHandler) runFGA(ctx context.Context, req *deliveryRequest) *deliveryFailure {
 	start := time.Now()
 	defer func() { h.metrics.elapsed(ctx, halfFGA, time.Since(start)) }()
+	// Read before Apply, so Invalidate can tell whether another writer
+	// invalidated while this write was in flight. A failed read only costs
+	// the seed.
+	var before contracts.InvalidationMarker
+	var beforeErr error
+	if h.cache != nil {
+		before, beforeErr = h.cache.CurrentMarker(ctx)
+	}
 	result, err := h.fga.Apply(ctx, req.objectType, req.fga)
 	var failure *deliveryFailure
 	if err != nil {
@@ -169,10 +177,10 @@ func (h *DeliveryHandler) runFGA(ctx context.Context, req *deliveryRequest) *del
 		return failure
 	}
 	seedKeys := result.SeedKeys
-	if err != nil {
+	if err != nil || beforeErr != nil {
 		seedKeys = nil
 	}
-	if invalidation := h.invalidate(ctx, req, seedKeys); failure == nil {
+	if invalidation := h.invalidate(ctx, req, seedKeys, before); failure == nil {
 		failure = invalidation
 	}
 	return failure
@@ -180,20 +188,23 @@ func (h *DeliveryHandler) runFGA(ctx context.Context, req *deliveryRequest) *del
 
 // invalidate advances the shared cache marker before the reply, so no check
 // answered from an entry cached before this request is served again.
-// Seeding only adds entries newer than the marker; a failed seed costs a
-// cache miss, never a wrong answer.
-func (h *DeliveryHandler) invalidate(ctx context.Context, req *deliveryRequest, seedKeys []string) *deliveryFailure {
+// Seeding only adds entries newer than the marker, and only when no other
+// writer invalidated since before; a skipped or failed seed costs a cache
+// miss, never a wrong answer.
+func (h *DeliveryHandler) invalidate(
+	ctx context.Context, req *deliveryRequest, seedKeys []string, before contracts.InvalidationMarker,
+) *deliveryFailure {
 	logger := logging.FromContext(ctx, h.logger)
 	// Detached so a request that hit its deadline after tuples landed still
 	// invalidates.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cacheInvalidationTimeout)
 	defer cancel()
-	marker, err := h.cache.Invalidate(ctx)
+	marker, onlyMine, err := h.cache.Invalidate(ctx, before)
 	if err != nil {
 		logger.Error("FGA cache invalidation failed after an FGA write", "object_type", req.objectType, "error", err.Error())
 		return transient(halfFGA, "cache invalidation failed")
 	}
-	if len(seedKeys) == 0 {
+	if len(seedKeys) == 0 || !onlyMine {
 		return nil
 	}
 	if err := h.cache.Seed(ctx, seedKeys, marker); err != nil {

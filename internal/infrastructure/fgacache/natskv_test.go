@@ -196,7 +196,7 @@ func TestNATSKV_SetDoesNotPublishResultsFromBeforeAnInvalidation(t *testing.T) {
 
 	beforeCheck, err := c.CurrentMarker(ctx)
 	require.NoError(t, err)
-	_, err = c.Invalidate(ctx)
+	_, err = invalidate(ctx, c)
 	require.NoError(t, err)
 
 	require.NoError(t, c.Set(ctx, map[string]bool{"obj:8#writer@user:a": true}, beforeCheck))
@@ -410,9 +410,9 @@ func TestNATSKV_InvalidateReturnsMarkerOfItsWrite(t *testing.T) {
 	c := newNATSKVStore(js, name)
 	require.NoError(t, c.connect(ctx))
 
-	first, err := c.Invalidate(ctx)
+	first, err := invalidate(ctx, c)
 	require.NoError(t, err)
-	second, err := c.Invalidate(ctx)
+	second, err := invalidate(ctx, c)
 	require.NoError(t, err)
 
 	entry, err := kv.Get(ctx, InvalidationKey)
