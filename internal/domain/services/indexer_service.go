@@ -467,7 +467,7 @@ func (s *IndexerService) EnrichTransaction(ctx context.Context, transaction *con
 	}
 	logger.Debug("Data parsing completed", "transaction_id", transactionID)
 
-	// For create/update actions, indexing_config is required before authentication.
+	// For create/update actions, indexing_config is required.
 	canonicalAction := transaction.Action
 	if canonicalAction == constants.ActionCreated || canonicalAction == constants.ActionUpdated {
 		if transaction.IndexingConfig == nil {
@@ -475,11 +475,10 @@ func (s *IndexerService) EnrichTransaction(ctx context.Context, transaction *con
 		}
 	}
 
-	// Authenticate the publisher without collecting current-document attribution.
-	// Delegated actor evidence belongs to the separate audited workflow.
-	if _, err := s.messagingRepo.ValidateToken(ctx, transaction.Headers[constants.AuthorizationHeader]); err != nil {
-		return fmt.Errorf("failed to authenticate transaction: %w", err)
-	}
+	// Unversioned (legacy) messages are not authenticated, as before audit: the
+	// authorization header is required but not validated, and existing publishers
+	// send service-identity strings rather than JWTs. Only audited (version 2)
+	// messages are authenticated, by the audit workflow.
 
 	logger.Debug("Transaction enrichment completed successfully",
 		"transaction_id", transactionID)

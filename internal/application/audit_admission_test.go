@@ -12,7 +12,6 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 )
 
@@ -40,7 +39,6 @@ func TestIndexingHandler_AuditAdmission(t *testing.T) {
 
 func TestProcessIndexingMessage_LegacyNestedAuditFields(t *testing.T) {
 	processor, messaging, storage := setupTestMessageProcessor()
-	messaging.On("ValidateToken", mock.Anything, mock.Anything).Return(&contracts.Principal{Principal: "test-user"}, nil)
 	storage.On("Index", mock.Anything, constants.DefaultIndex, "project:fixture-resource", mock.Anything).Return(nil)
 	messaging.On("Publish", mock.Anything, constants.BuildEventSubject("project", constants.ActionCreated), mock.Anything).Return(nil)
 	payload, err := json.Marshal(map[string]any{

@@ -422,10 +422,13 @@ reuse those payloads as approved version 2 snapshots.
    ```
 
 2. **Token Requirements**:
-   - Must be a valid JWT token
-   - Validated against Heimdall service
-   - Authenticates current writes; invalid or expired credentials reject processing
-   - Does not populate top-level current-document attribution; audit identity is
+   - Unversioned messages: the header must be present and non-empty but is **not
+     validated**, as before audit; existing publishers send service-identity
+     strings (for example `Bearer lfx-v2-committee-service`) rather than JWTs.
+   - Audited (version 2) messages: must carry a valid Heimdall JWT whose principal
+     matches the publisher's audit policy; invalid or expired credentials reject
+     processing (see the audit contract).
+   - Neither populates top-level current-document attribution; audit identity is
      retained only in private history through the separate audit workflow
 
 ### Error Handling
@@ -598,7 +601,8 @@ and the indexed result; a publish acknowledgment is not processing confirmation.
 Create/update documents get `created_at` or `updated_at`; delete documents get
 `deleted_at`. Top-level attribution fields (`created_by*`, `updated_by*`, and
 `deleted_by*`) are intentionally absent from current documents and event bodies.
-The lower-case `authorization` credential is still validated before writing.
+Unversioned messages need a non-empty lower-case `authorization` header, but it is
+not validated; only audited (version 2) messages are JWT-authenticated.
 Only the platform V2 protocol and past-tense actions are supported.
 
 ### Issue: "indexing_config is required" error

@@ -356,8 +356,10 @@ are absent from the resources mapping template, `TransactionBody`, both projecti
 paths, and post-index event bodies. Timestamps remain. Existing index mappings may
 retain unused fields and old documents may retain values until replacement; no
 index rebuild or live deletion is required. `ParsePrincipals` no longer runs for
-current-document attribution; unversioned writes authenticate the authorization
-JWT directly. Private history retains actor refs, username/email identity
+current-document attribution. Unversioned writes are not authenticated, as before
+audit: the `authorization` header must be present but is not validated, because
+existing publishers send service-identity strings rather than JWTs. Only audited
+(version 2) messages are authenticated, by the audit workflow. Private history retains actor refs, username/email identity
 snapshots, and verification flags with unchanged evidence verification behavior.
 
 ## Approved content schemas

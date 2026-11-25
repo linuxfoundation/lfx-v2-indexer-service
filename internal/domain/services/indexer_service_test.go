@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -144,22 +145,23 @@ func TestIndexerService_ProcessTransaction_EnrichmentSuccess(t *testing.T) {
 	assert.True(t, result.Success)
 	assert.Len(t, mockStorageRepo.IndexCalls, 1)
 
-	// Authenticate without parsing or retaining delegated attribution.
-	require.Len(t, mockMessagingRepo.AuthRepo.ValidateTokenCalls, 1)
-	assert.Equal(t, transaction.Headers[constants.AuthorizationHeader], mockMessagingRepo.AuthRepo.ValidateTokenCalls[0].Token)
+	// Unversioned writes are neither authenticated nor attributed.
+	assert.Empty(t, mockMessagingRepo.AuthRepo.ValidateTokenCalls)
 	assert.Empty(t, mockMessagingRepo.AuthRepo.ParsePrincipalsCalls)
 }
 
-func TestIndexerService_ProcessTransaction_AuthenticationWithoutAttribution(t *testing.T) {
+// TestIndexerService_ProcessTransaction_UnversionedWithoutAuthentication keeps
+// unversioned (legacy) writes unauthenticated, as before audit: existing
+// publishers send service-identity strings, not JWTs. Only audited (version 2)
+// messages are authenticated.
+func TestIndexerService_ProcessTransaction_UnversionedWithoutAuthentication(t *testing.T) {
 	for _, action := range []constants.MessageAction{constants.ActionCreated, constants.ActionUpdated, constants.ActionDeleted} {
-		for _, authFailure := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/authFailure=%t", action, authFailure), func(t *testing.T) {
+		for _, authorization := range []string{"Bearer publisher-credential", "Bearer lfx-v2-committee-service", "Bearer a.b.c"} {
+			t.Run(fmt.Sprintf("%s/%s", action, authorization), func(t *testing.T) {
 				storage := mocks.NewMockStorageRepository()
 				messaging := mocks.NewMockMessagingRepository()
-				authErr := fmt.Errorf("invalid signature or expired credential")
-				if authFailure {
-					messaging.AuthRepo.ValidateTokenError = authErr
-				}
+				// Validation would fail if it ran: an unversioned write must not depend on it.
+				messaging.AuthRepo.ValidateTokenError = fmt.Errorf("invalid signature or expired credential")
 				// The legacy principal parser must not be used, even with delegation.
 				messaging.AuthRepo.ParsePrincipalsError = fmt.Errorf("attribution parser must not run")
 				logger, _ := logging.TestLogger(t)
@@ -168,7 +170,7 @@ func TestIndexerService_ProcessTransaction_AuthenticationWithoutAttribution(t *t
 				transaction := &contracts.LFXTransaction{
 					Action: action, ObjectType: "project", Timestamp: timestamp,
 					Headers: map[string]string{
-						constants.AuthorizationHeader: "Bearer publisher-credential",
+						constants.AuthorizationHeader: authorization,
 						constants.OnBehalfOfHeader:    "private-delegated-credential",
 					},
 					Data: map[string]any{"id": "fixture", "created_by": "resource-owned-value"},
@@ -181,16 +183,8 @@ func TestIndexerService_ProcessTransaction_AuthenticationWithoutAttribution(t *t
 					transaction.Data = "fixture"
 				}
 				result, err := service.ProcessTransaction(context.Background(), transaction, "resources")
-				require.Len(t, messaging.AuthRepo.ValidateTokenCalls, 1)
-				require.Equal(t, "Bearer publisher-credential", messaging.AuthRepo.ValidateTokenCalls[0].Token)
+				require.Empty(t, messaging.AuthRepo.ValidateTokenCalls, "unversioned writes are not authenticated")
 				require.Empty(t, messaging.AuthRepo.ParsePrincipalsCalls)
-				if authFailure {
-					require.ErrorIs(t, err, authErr)
-					require.False(t, result.Success)
-					require.Empty(t, storage.IndexCalls)
-					require.Empty(t, messaging.PublishCalls)
-					return
-				}
 				require.NoError(t, err)
 				require.True(t, result.Success)
 				require.Len(t, storage.IndexCalls, 1)
@@ -207,7 +201,7 @@ func TestIndexerService_ProcessTransaction_AuthenticationWithoutAttribution(t *t
 						require.NotContains(t, stored, prefix+suffix)
 					}
 				}
-				for _, private := range []string{"publisher-credential", "private-delegated-credential", "test@example.com", "test_user"} {
+				for _, private := range []string{strings.TrimPrefix(authorization, "Bearer "), "private-delegated-credential", "test@example.com", "test_user"} {
 					require.NotContains(t, storage.IndexCalls[0].Body, private)
 					require.NotContains(t, string(messaging.PublishCalls[0].Data), private)
 				}
