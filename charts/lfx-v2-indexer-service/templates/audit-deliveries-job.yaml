@@ -36,12 +36,12 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: {{ $secretName }}
-                  key: username
+                  key: {{ default "username" .Values.opensearch.auth.provisioningUsernameKey | quote }}
             - name: OPENSEARCH_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ $secretName }}
-                  key: password
+                  key: {{ default "password" .Values.opensearch.auth.provisioningPasswordKey | quote }}
           {{- end }}
           securityContext:
             allowPrivilegeEscalation: false

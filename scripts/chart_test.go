@@ -153,6 +153,69 @@ func TestAuditChartHookSettings(t *testing.T) {
 	}
 }
 
+// TestAuditChartOpenSearchCredentials keeps OpenSearch credentials optional for
+// audit, as for current-resource indexing, while auth-enabled deployments still
+// need a provisioning Secret and can read every pair from one Secret by key.
+func TestAuditChartOpenSearchCredentials(t *testing.T) {
+	audited := []string{
+		"--set", "audit.enabled=true", "--set", "audit.requiredTypes[0]=fixture_resource", "--set", "audit.policyConfigMap=fixture-policy",
+		"--set", "opensearch.history.indexingJob.enabled=true", "--set", "opensearch.auditDelivery.indexingJob.enabled=true",
+		"--set", "opensearch.auditProjectionMappingJob.enabled=true", "--set", "opensearch.indexingJob.enabled=true",
+		"--set-string", "nats.ackWait=235s", "--set-string", "nats.drainTimeout=230s", "--set", "app.terminationGracePeriodSeconds=235",
+	}
+
+	t.Run("without credentials", func(t *testing.T) {
+		output, err := renderIndexerChartArgs(t, append(audited, "--set", "opensearch.auth.enabled=false")...)
+		require.NoError(t, err, "%s", output)
+		require.Contains(t, output, "name: AUDIT_ENABLED")
+		require.NotContains(t, output, "OPENSEARCH_USERNAME")
+		require.NotContains(t, output, "OPENSEARCH_PASSWORD")
+		require.Equal(t, 4, strings.Count(output, "kind: Job"), "all setup Jobs still render")
+	})
+
+	t.Run("auth requires a provisioning Secret", func(t *testing.T) {
+		output, err := renderIndexerChartArgs(t, append(audited, "--set", "opensearch.auth.enabled=true", "--set", "opensearch.auth.existingSecret=fixture-runtime")...)
+		require.Error(t, err)
+		require.Contains(t, output, "provisioningSecret")
+	})
+
+	t.Run("one Secret with configurable keys", func(t *testing.T) {
+		output, err := renderIndexerChartArgs(t, append(audited, "--set", "opensearch.auth.enabled=true",
+			"--set", "opensearch.auth.existingSecret=fixture-shared", "--set", "opensearch.auth.provisioningSecret=fixture-shared",
+			"--set", "opensearch.auth.usernameKey=runtime_user", "--set", "opensearch.auth.passwordKey=runtime_pass",
+			"--set", "opensearch.auth.provisioningUsernameKey=provisioning_user", "--set", "opensearch.auth.provisioningPasswordKey=provisioning_pass")...)
+		require.NoError(t, err, "%s", output)
+		keys := regexp.MustCompile(`name: fixture-shared\n\s+key: "?([^"\s]+)"?`)
+		for _, part := range strings.Split(output, "\n# Source:") {
+			found := keys.FindAllStringSubmatch(part, -1)
+			if len(found) == 0 {
+				continue
+			}
+			got := []string{found[0][1], found[1][1]}
+			if strings.Contains(part, "kind: Deployment") {
+				require.Equal(t, []string{"runtime_user", "runtime_pass"}, got)
+			} else {
+				require.Contains(t, part, "kind: Job")
+				require.Equal(t, []string{"provisioning_user", "provisioning_pass"}, got)
+			}
+		}
+		require.Equal(t, 5, strings.Count(output, "name: fixture-shared\n")/2, "the Deployment and four Jobs read the shared Secret")
+	})
+
+	t.Run("numeric-looking keys stay strings", func(t *testing.T) {
+		output, err := renderIndexerChartArgs(t, append(audited, "--set", "opensearch.auth.enabled=true",
+			"--set", "opensearch.auth.existingSecret=fixture-runtime", "--set", "opensearch.auth.provisioningSecret=fixture-provisioner",
+			"--set-string", "opensearch.auth.usernameKey=123", "--set-string", "opensearch.auth.passwordKey=true",
+			"--set-string", "opensearch.auth.provisioningUsernameKey=456", "--set-string", "opensearch.auth.provisioningPasswordKey=false")...)
+		require.NoError(t, err, "%s", output)
+		require.Regexp(t, `key: "123"\n`, output)
+		require.Regexp(t, `key: "true"\n`, output)
+		require.Equal(t, 4, strings.Count(output, "key: \"456\"\n"), "every setup Job quotes the provisioning key")
+		require.Equal(t, 4, strings.Count(output, "key: \"false\"\n"))
+		require.NotRegexp(t, `key: (123|true|456|false)\n`, output)
+	})
+}
+
 // TestCacheChartSettings checks that each cache backend renders only its own
 // settings and that Valkey credentials arrive as mounted files.
 func TestCacheChartSettings(t *testing.T) {

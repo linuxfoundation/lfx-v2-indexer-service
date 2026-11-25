@@ -309,8 +309,12 @@ func (c *AppConfig) Validate() error {
 	return nil
 }
 
-// validateAudit requires explicit policy, adopted resource types and private
-// OpenSearch credentials only when audited ingestion is enabled.
+// validateAudit requires explicit policy and adopted resource types when
+// audited ingestion is enabled. OpenSearch credentials are optional: a domain
+// without access control is used unauthenticated, as for current-resource
+// indexing, and then the private history and delivery-receipt indexes are only
+// as protected as the network (see docs/audit-rollout.md). A partial credential
+// pair is always rejected.
 func (c *AppConfig) validateAudit() error {
 	if !c.Audit.Enabled {
 		return nil
@@ -318,8 +322,8 @@ func (c *AppConfig) validateAudit() error {
 	if c.Audit.PolicyFile == "" || len(c.Audit.RequiredTypes) == 0 {
 		return fmt.Errorf("AUDIT_POLICY_FILE and AUDIT_REQUIRED_TYPES are required when AUDIT_ENABLED=true")
 	}
-	if c.OpenSearch.Username == "" || c.OpenSearch.Password == "" {
-		return fmt.Errorf("authenticated OpenSearch credentials are required for audited ingestion")
+	if (c.OpenSearch.Username == "") != (c.OpenSearch.Password == "") {
+		return fmt.Errorf("OpenSearch username and password must be set together")
 	}
 	for _, resource := range c.Audit.RequiredTypes {
 		if !types.ValidAuditObjectType(resource) {
