@@ -236,7 +236,7 @@ func TestMessageProcessor_ProcessIndexingMessage_Success(t *testing.T) {
 
 	// Mock expectations
 	mockStorageRepo.On("Index", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
-	mockMessagingRepo.On("ParsePrincipals", mock.Anything, mock.Anything).Return([]contracts.Principal{}, nil)
+	mockMessagingRepo.On("ValidateToken", mock.Anything, mock.Anything).Return(&contracts.Principal{Principal: "test-user"}, nil)
 	mockMessagingRepo.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	// Execute
@@ -274,7 +274,7 @@ func TestMessageProcessor_ProcessIndexingMessage_UsesConfiguredIndex(t *testing.
 	require.NoError(t, err)
 
 	mockStorageRepo.On("Index", mock.Anything, "configured-index", "project:test-123", mock.Anything).Return(nil)
-	mockMessagingRepo.On("ParsePrincipals", mock.Anything, mock.Anything).Return([]contracts.Principal{}, nil)
+	mockMessagingRepo.On("ValidateToken", mock.Anything, mock.Anything).Return(&contracts.Principal{Principal: "test-user"}, nil)
 	mockMessagingRepo.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	err = mp.ProcessIndexingMessage(ctx, data, "lfx.index.project")
@@ -351,7 +351,7 @@ func TestMessageProcessor_ProcessIndexingMessage_ProcessingError(t *testing.T) {
 
 	// Mock expectations with error
 	mockStorageRepo.On("Index", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(errors.New("storage error"))
-	mockMessagingRepo.On("ParsePrincipals", mock.Anything, mock.Anything).Return([]contracts.Principal{}, nil)
+	mockMessagingRepo.On("ValidateToken", mock.Anything, mock.Anything).Return(&contracts.Principal{Principal: "test-user"}, nil)
 
 	// Execute
 	err := mp.ProcessIndexingMessage(ctx, data, subject)
@@ -411,6 +411,7 @@ func TestMessageProcessor_RetiredProtocolRejected(t *testing.T) {
 			storage.AssertNumberOfCalls(t, "Index", 0)
 			messaging.AssertNumberOfCalls(t, "Publish", 0)
 			messaging.AssertNumberOfCalls(t, "ParsePrincipals", 0)
+			messaging.AssertNumberOfCalls(t, "ValidateToken", 0)
 		})
 	}
 }
@@ -486,7 +487,7 @@ func TestIndexingHandler_HandleWithReply_V2Message(t *testing.T) {
 
 	// Mock expectations
 	mockStorageRepo.On("Index", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
-	mockMessagingRepo.On("ParsePrincipals", mock.Anything, mock.Anything).Return([]contracts.Principal{}, nil)
+	mockMessagingRepo.On("ValidateToken", mock.Anything, mock.Anything).Return(&contracts.Principal{Principal: "test-user"}, nil)
 	mockMessagingRepo.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	// Create handler
@@ -538,7 +539,7 @@ func TestIndexingHandler_HandleWithReply_ProcessingError(t *testing.T) {
 
 	// Mock expectations with error
 	mockStorageRepo.On("Index", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(errors.New("storage error"))
-	mockMessagingRepo.On("ParsePrincipals", mock.Anything, mock.Anything).Return([]contracts.Principal{}, nil)
+	mockMessagingRepo.On("ValidateToken", mock.Anything, mock.Anything).Return(&contracts.Principal{Principal: "test-user"}, nil)
 
 	// Create handler
 	handler := &indexingHandler{useCase: mp}
@@ -580,9 +581,7 @@ func TestIndexingHandler_HandleWithReply_NoReply(t *testing.T) {
 
 	// Mock expectations
 	mockStorageRepo.On("Index", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
-	mockMessagingRepo.On("ParsePrincipals", mock.Anything, mock.Anything).Return([]contracts.Principal{
-		{Principal: "test-user", Email: "test@example.com"},
-	}, nil)
+	mockMessagingRepo.On("ValidateToken", mock.Anything, mock.Anything).Return(&contracts.Principal{Principal: "test-user", Email: "test@example.com"}, nil)
 	mockMessagingRepo.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	// Create handler
@@ -629,7 +628,7 @@ func TestIndexingHandler_HandleWithReply_SetsRefreshWaitFor_WithReply(t *testing
 	mockStorageRepo.On("Index", mock.MatchedBy(func(c context.Context) bool {
 		return logging.NeedsRefreshWaitFor(c)
 	}), mock.Anything, mock.Anything, mock.Anything).Return(nil)
-	mockMessagingRepo.On("ParsePrincipals", mock.Anything, mock.Anything).Return([]contracts.Principal{}, nil)
+	mockMessagingRepo.On("ValidateToken", mock.Anything, mock.Anything).Return(&contracts.Principal{Principal: "test-user"}, nil)
 	mockMessagingRepo.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	handler := &indexingHandler{useCase: mp}
@@ -670,9 +669,7 @@ func TestIndexingHandler_HandleWithReply_NoRefreshWaitFor_WithoutReply(t *testin
 	mockStorageRepo.On("Index", mock.MatchedBy(func(c context.Context) bool {
 		return !logging.NeedsRefreshWaitFor(c)
 	}), mock.Anything, mock.Anything, mock.Anything).Return(nil)
-	mockMessagingRepo.On("ParsePrincipals", mock.Anything, mock.Anything).Return([]contracts.Principal{
-		{Principal: "test-user", Email: "test@example.com"},
-	}, nil)
+	mockMessagingRepo.On("ValidateToken", mock.Anything, mock.Anything).Return(&contracts.Principal{Principal: "test-user", Email: "test@example.com"}, nil)
 	mockMessagingRepo.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	handler := &indexingHandler{useCase: mp}
@@ -770,8 +767,8 @@ func TestMessageProcessor_IntegrationWorkflow(t *testing.T) {
 	// Setup storage mocks
 	mockStorageRepo.On("Index", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
-	// Setup ParsePrincipals mock for V2 messages
-	mockMessagingRepo.On("ParsePrincipals", mock.Anything, mock.Anything).Return([]contracts.Principal{}, nil)
+	// Set up credential validation for V2 messages.
+	mockMessagingRepo.On("ValidateToken", mock.Anything, mock.Anything).Return(&contracts.Principal{Principal: "test-user"}, nil)
 	mockMessagingRepo.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	// Start subscriptions

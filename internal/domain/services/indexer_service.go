@@ -467,7 +467,7 @@ func (s *IndexerService) EnrichTransaction(ctx context.Context, transaction *con
 	}
 	logger.Debug("Data parsing completed", "transaction_id", transactionID)
 
-	// For create/update actions, indexing_config is required before we do principal work
+	// For create/update actions, indexing_config is required before authentication.
 	canonicalAction := transaction.Action
 	if canonicalAction == constants.ActionCreated || canonicalAction == constants.ActionUpdated {
 		if transaction.IndexingConfig == nil {
@@ -475,19 +475,14 @@ func (s *IndexerService) EnrichTransaction(ctx context.Context, transaction *con
 		}
 	}
 
-	// Parse authenticated platform V2 principals.
-	principals, err := s.parsePrincipals(ctx, transaction)
-	if err != nil {
-		return fmt.Errorf("failed to parse principals: %w", err)
+	// Authenticate the publisher without collecting current-document attribution.
+	// Delegated actor evidence belongs to the separate audited workflow.
+	if _, err := s.messagingRepo.ValidateToken(ctx, transaction.Headers[constants.AuthorizationHeader]); err != nil {
+		return fmt.Errorf("failed to authenticate transaction: %w", err)
 	}
-	transaction.ParsedPrincipals = principals
-	logger.Debug("Principal parsing completed",
-		"transaction_id", transactionID,
-		"principal_count", len(principals))
 
 	logger.Debug("Transaction enrichment completed successfully",
-		"transaction_id", transactionID,
-		"principal_count", len(principals))
+		"transaction_id", transactionID)
 
 	return nil
 }
@@ -542,19 +537,14 @@ func (s *IndexerService) GenerateTransactionBody(ctx context.Context, transactio
 	case constants.ActionCreated:
 		body.CreatedAt = &transaction.Timestamp
 		body.UpdatedAt = body.CreatedAt // For search sorting
-		s.setPrincipalFields(body, transaction.ParsedPrincipals, constants.ActionCreated)
 		logger.Debug("Created action body prepared",
-			"transaction_id", transactionID,
-			"principal_count", len(transaction.ParsedPrincipals))
+			"transaction_id", transactionID)
 	case constants.ActionUpdated:
 		body.UpdatedAt = &transaction.Timestamp
-		s.setPrincipalFields(body, transaction.ParsedPrincipals, constants.ActionUpdated)
 		logger.Debug("Updated action body prepared",
-			"transaction_id", transactionID,
-			"principal_count", len(transaction.ParsedPrincipals))
+			"transaction_id", transactionID)
 	case constants.ActionDeleted:
 		body.DeletedAt = &transaction.Timestamp
-		s.setPrincipalFields(body, transaction.ParsedPrincipals, constants.ActionDeleted)
 		if !isValidObjectID(transaction.ParsedObjectID) {
 			err := fmt.Errorf("%s: %q", constants.ErrInvalidObjectID, transaction.ParsedObjectID)
 			logging.LogError(logger, constants.ErrInvalidObjectID, err,
@@ -585,8 +575,7 @@ func (s *IndexerService) GenerateTransactionBody(ctx context.Context, transactio
 		logger.Debug("Deleted action body prepared",
 			"transaction_id", transactionID,
 			"object_id", body.ObjectID,
-			"object_ref", body.ObjectRef,
-			"principal_count", len(transaction.ParsedPrincipals))
+			"object_ref", body.ObjectRef)
 
 		// Deletes have no resource data to enrich; legacy UID-only deletes remain supported.
 		logger.Debug("Transaction body generation completed (delete action)", "transaction_id", transactionID)
@@ -927,74 +916,6 @@ func (s *IndexerService) performHealthCheck(ctx context.Context) *HealthStatus {
 	return status
 }
 
-// setPrincipalFields sets principal-related fields on the transaction body
-func (s *IndexerService) setPrincipalFields(body *contracts.TransactionBody, principals []contracts.Principal, action constants.MessageAction) {
-	for _, principal := range principals {
-		principalRef := fmt.Sprintf("%s <%s>", principal.Principal, principal.Email)
-
-		switch action {
-		case constants.ActionCreated:
-			body.CreatedBy = append(body.CreatedBy, principalRef)
-			body.CreatedByPrincipals = append(body.CreatedByPrincipals, principal.Principal)
-			if principal.Email != "" {
-				body.CreatedByEmails = append(body.CreatedByEmails, principal.Email)
-			}
-		case constants.ActionUpdated:
-			body.UpdatedBy = append(body.UpdatedBy, principalRef)
-			body.UpdatedByPrincipals = append(body.UpdatedByPrincipals, principal.Principal)
-			if principal.Email != "" {
-				body.UpdatedByEmails = append(body.UpdatedByEmails, principal.Email)
-			}
-		case constants.ActionDeleted:
-			body.DeletedBy = append(body.DeletedBy, principalRef)
-			body.DeletedByPrincipals = append(body.DeletedByPrincipals, principal.Principal)
-			if principal.Email != "" {
-				body.DeletedByEmails = append(body.DeletedByEmails, principal.Email)
-			}
-		}
-	}
-}
-
-// parsePrincipals parses authenticated platform V2 principals.
-func (s *IndexerService) parsePrincipals(ctx context.Context, transaction *contracts.LFXTransaction) ([]contracts.Principal, error) {
-	logger := logging.FromContext(ctx, s.logger)
-	transactionID := s.generateTransactionID(transaction)
-
-	logger.Debug("Parsing principals",
-		"transaction_id", transactionID,
-		"header_count", len(transaction.Headers))
-
-	principals, err := s.parseV2Principals(ctx, transaction, transactionID)
-	if err != nil {
-		return nil, err
-	}
-
-	logger.Debug("V2 principals parsed",
-		"transaction_id", transactionID,
-		"principal_count", len(principals))
-	return principals, nil
-}
-
-// parseV2Principals parses principals for V2 transactions
-func (s *IndexerService) parseV2Principals(ctx context.Context, transaction *contracts.LFXTransaction, transactionID string) ([]contracts.Principal, error) {
-	logger := logging.FromContext(ctx, s.logger)
-
-	logger.Debug("Parsing V2 principals using messaging repository",
-		"transaction_id", transactionID,
-		"auth_header_present", transaction.Headers[constants.AuthorizationHeader] != "")
-
-	// Parse principals using messaging repository
-	principals, err := s.messagingRepo.ParsePrincipals(ctx, transaction.Headers)
-	if err != nil {
-		return nil, err
-	}
-
-	logger.Debug("V2 principals parsed successfully",
-		"transaction_id", transactionID,
-		"principal_count", len(principals))
-	return principals, nil
-}
-
 // parseTransactionData parses the transaction data based on action
 func (s *IndexerService) parseTransactionData(transaction *contracts.LFXTransaction) error {
 	switch {
@@ -1120,19 +1041,16 @@ func (s *IndexerService) buildTransactionBodyFromIndexingConfig(
 	body.Fulltext = config.Fulltext
 	body.Contacts = config.Contacts
 
-	// Set timestamp and principal fields based on action (server-side fields)
+	// Set timestamps based on action (server-side fields).
 	canonicalAction := transaction.Action
 	switch canonicalAction {
 	case constants.ActionCreated:
 		body.CreatedAt = &transaction.Timestamp
 		body.UpdatedAt = body.CreatedAt // For search sorting
-		s.setPrincipalFields(body, transaction.ParsedPrincipals, constants.ActionCreated)
 	case constants.ActionUpdated:
 		body.UpdatedAt = &transaction.Timestamp
-		s.setPrincipalFields(body, transaction.ParsedPrincipals, constants.ActionUpdated)
 	case constants.ActionDeleted:
 		body.DeletedAt = &transaction.Timestamp
-		s.setPrincipalFields(body, transaction.ParsedPrincipals, constants.ActionDeleted)
 	}
 
 	slog.Debug("Built transaction body from indexing config", "body", body)
