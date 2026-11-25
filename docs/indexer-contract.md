@@ -192,7 +192,7 @@ type IndexingConfig struct {
 | `{{` in `ObjectID`, `AccessCheck*`, `HistoryCheck*`, or any `ParentRefs` entry (template references are not supported) | NAKed and retried during `IndexingConfig` parsing. Every other field is stored literally, including `{{ ... }}` text. See [literal values](client-guide.md#literal-values-in-indexing_config) |
 | Unknown `action` value | NAKed and retried (`unknown action`) |
 | Missing lower-case `authorization` header on V2 messages | NAKed and retried during header validation |
-| Invalid, expired, or unverifiable authorization JWT | NAKed and retried before any current-document write or event |
+| Invalid, expired, or unverifiable authorization JWT on an audited (version 2) message | Rejected by audit admission before any history, current-document write or event (see the audit contract). Unversioned messages do not validate the header value |
 | `data` not present on create/update | NAKed and retried |
 | `data` not a string on delete | NAKed and retried |
 | Subject suffix empty (`lfx.index.` with no type) | NAKed and retried (must have a non-empty resource type) |
@@ -289,9 +289,11 @@ document. The stored `object_ref` and resource ID remain unchanged.
 Current documents and post-index event bodies no longer contain the nine top-level
 `created_by`, `updated_by`, `deleted_by`, `*_by_principals`, or `*_by_emails`
 attribution fields. Both unversioned and audited projections retain their action
-timestamps. JWT authentication remains required; the unversioned path validates
-the lower-case `authorization` credential directly, without calling
-`ParsePrincipals` or collecting `x-on-behalf-of` identities. Audit actors,
+timestamps. The unversioned path requires a non-empty lower-case `authorization`
+header but does not validate it, as before audit, because existing publishers send
+service-identity strings rather than JWTs. It does not call `ValidateToken` or
+`ParsePrincipals`, or collect `x-on-behalf-of` identities. Only audited (version 2)
+messages are JWT-authenticated, by audit admission. Audit actors,
 username/email snapshots, and verification flags remain confined to private
 history and retain their separate verification policy. Resource-owned keys inside
 `data` and publisher-supplied contact/search fields are unchanged; this is not a
@@ -635,7 +637,8 @@ Before merging a change to publisher code in a resource service, verify:
    publishing for durable outbox delivery. On `lfx.index.*`, neither persistence
    acknowledgment nor core request/reply reports successful indexer processing;
    only an `OK` reply on `lfx.indexer.index.*` does.
-5. Headers carry the lower-case `authorization` credential for JWT authentication.
+5. Headers carry a non-empty lower-case `authorization` value. Unversioned messages
+   do not have it validated; audited (version 2) messages need a Heimdall JWT.
    `x-on-behalf-of` does not populate current-document attribution. Audited actor
    evidence belongs in `audit.attribution`, under its separate verification policy.
 6. Existing traffic omits both new discriminator fields. Do not enable audited

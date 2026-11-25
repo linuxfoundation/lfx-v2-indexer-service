@@ -22,7 +22,7 @@ A high-performance, indexer service for the LFX V2 platform that processes resou
 The LFX V2 Indexer Service is responsible for:
 
 - **Message Processing**: NATS stream processing with queue group load balancing across multiple instances
-- **Transaction Enrichment**: JWT authentication and data validation; audited actor verification is separate from current documents
+- **Transaction Enrichment**: data validation for unversioned messages; publisher JWT authentication and actor verification for audited (version 2) messages, separate from current documents
 - **Search Indexing**: OpenSearch document writes under the `object_ref` document ID
 - **Data Consistency**: Event-driven janitor service for conflict resolution
 - **Envelope Support**: Existing unversioned V2 messages and opt-in audit envelopes, both using past-tense actions
@@ -250,6 +250,7 @@ sequenceDiagram
     participant MR as MessagingRepository
     participant UH as IndexingMessageHandler
     participant MP as MessageProcessor
+    participant AA as AuditAdmission
     participant IS as IndexerService
     participant AR as AuthRepository
     participant JWT as JWT Service
@@ -270,6 +271,17 @@ sequenceDiagram
     UH->>MP: ProcessIndexingMessage(ctx, data, subject)
     Note over MP: Generate messageID<br/>Log reception metrics
 
+    %% Audit admission (audited version 2 messages only)
+    opt Audited (version 2) message
+        MP->>AA: Admit(ctx, payload, objectType) via audit workflow
+        AA->>AR: ValidateToken(ctx, authorization)
+        AR->>JWT: ValidateToken(ctx, token)
+        JWT-->>AR: Principal{Principal, Email}
+        AR-->>AA: Principal (must match the publisher's audit policy)
+        AA-->>MP: Admitted (audit workflow writes history, then the current document)
+    end
+    Note over MP: Unversioned messages continue below.<br/>The authorization header must be present<br/>but is not validated
+
     %% Transaction Creation & Validation
     MP->>TE: createTransaction(data, subject)
     TE->>TE: Parse message format<br/>Extract object type from subject<br/>Validate required fields (pure data)
@@ -279,12 +291,6 @@ sequenceDiagram
     MP->>IS: ProcessTransaction(ctx, transaction, index)
 
     Note over IS: Consolidated processing:<br/>• EnrichTransaction() with action validation<br/>• GenerateTransactionBody()<br/>• Index document<br/>(Action helpers moved to service layer)
-
-    %% Authentication & Authorization
-    IS->>AR: ValidateToken(ctx, authorization)
-    AR->>JWT: ValidateToken(ctx, token)
-    JWT-->>AR: Principal{Principal, Email}
-    AR-->>IS: Validated credential (identity not retained in current body)
 
     %% Validation & Body Generation
     IS->>IS: EnrichTransaction()<br/>ValidateObjectType()<br/>GenerateTransactionBody()
@@ -635,7 +641,7 @@ guide. Audit envelope version 2 is not yet admitted by the consumer.
 # Smoke-test an unversioned platform V2 publish (not a processing acknowledgment)
 nats pub lfx.index.project '{
   "action": "created",
-  "headers": {"authorization": "Bearer <valid JWT>"},
+  "headers": {"authorization": "Bearer <token>"},
   "data": {
     "id": "test-project-123",
     "uid": "test-project-123",
@@ -691,7 +697,10 @@ curl $OPENSEARCH_URL/resources/_mapping
 curl $OPENSEARCH_URL/resources/_search?size=5&sort=@timestamp:desc
 ```
 
-**3. JWT Validation Failures**
+**3. JWT Validation Failures (audited version 2 messages)**
+
+Unversioned messages are not JWT-validated, so these failures only affect audited
+delivery.
 
 ```bash
 # Check Heimdall connectivity
@@ -726,9 +735,9 @@ LOG_LEVEL=debug make run
 
 **JWT Authentication:**
 
-- **Heimdall Integration**: All messages validated against JWT service
+- **Heimdall Integration**: Audited (version 2) messages validated against JWT service
 - **Multiple Audiences**: Configurable audience validation
-- **Authentication**: Signed `authorization` JWT required before current writes; delegated actor verification belongs to the audit-history workflow
+- **Authentication**: Audited messages require a signed `authorization` JWT matching the publisher's audit policy; delegated actor verification belongs to the audit-history workflow. Unversioned (legacy) messages require a non-empty `authorization` header but it is **not validated**, because existing publishers send service-identity strings rather than JWTs
 - **Machine User Detection**: `@clients` suffix identification
 
 **Input Validation:**

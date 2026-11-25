@@ -145,7 +145,8 @@ central `/lfx-skills:lfx-platform-architecture` skill.
 
 **Authentication**:
 
-- V2: JWT tokens via the lower-case `authorization` header key in the NATS JSON envelope (validated against Heimdall)
+- Unversioned (legacy) messages: the lower-case `authorization` header key in the NATS JSON envelope is required but **not validated**; existing publishers send service-identity strings, not JWTs. Do not add authentication to this path without migrating every publisher first.
+- Audited (version 2) messages: a Heimdall JWT validated by the audit workflow against the publisher's policy principal.
 - Current writes do not collect `x-on-behalf-of` identities or populate attribution fields. Delegated actor evidence belongs in `audit.attribution` under the audited workflow's separate verification policy.
 
 **Configuration**: CLI flags > Environment variables > Defaults
