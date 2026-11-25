@@ -33,13 +33,14 @@ func TestIndexingHandler_AuditAdmission(t *testing.T) {
 			storage.AssertNumberOfCalls(t, "Index", 0)
 			messaging.AssertNumberOfCalls(t, "Publish", 0)
 			messaging.AssertNumberOfCalls(t, "ParsePrincipals", 0)
+			messaging.AssertNumberOfCalls(t, "ValidateToken", 0)
 		})
 	}
 }
 
 func TestProcessIndexingMessage_LegacyNestedAuditFields(t *testing.T) {
 	processor, messaging, storage := setupTestMessageProcessor()
-	messaging.On("ParsePrincipals", mock.Anything, mock.Anything).Return([]contracts.Principal{}, nil)
+	messaging.On("ValidateToken", mock.Anything, mock.Anything).Return(&contracts.Principal{Principal: "test-user"}, nil)
 	storage.On("Index", mock.Anything, constants.DefaultIndex, "project:fixture-resource", mock.Anything).Return(nil)
 	messaging.On("Publish", mock.Anything, constants.BuildEventSubject("project", constants.ActionCreated), mock.Anything).Return(nil)
 	payload, err := json.Marshal(map[string]any{

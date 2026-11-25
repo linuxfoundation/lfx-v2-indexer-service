@@ -30,17 +30,8 @@ type TransactionBody struct {
 	HistoryCheckQuery    string              `json:"history_check_query,omitempty"`
 	Latest               *bool               `json:"latest,omitempty"`
 	CreatedAt            *time.Time          `json:"created_at,omitempty"`
-	CreatedBy            []string            `json:"created_by,omitempty"`
-	CreatedByPrincipals  []string            `json:"created_by_principals,omitempty"`
-	CreatedByEmails      []string            `json:"created_by_emails,omitempty"`
 	UpdatedAt            *time.Time          `json:"updated_at,omitempty"`
-	UpdatedBy            []string            `json:"updated_by,omitempty"`
-	UpdatedByPrincipals  []string            `json:"updated_by_principals,omitempty"`
-	UpdatedByEmails      []string            `json:"updated_by_emails,omitempty"`
 	DeletedAt            *time.Time          `json:"deleted_at,omitempty"`
-	DeletedBy            []string            `json:"deleted_by,omitempty"`
-	DeletedByPrincipals  []string            `json:"deleted_by_principals,omitempty"`
-	DeletedByEmails      []string            `json:"deleted_by_emails,omitempty"`
 	Data                 map[string]any      `json:"data,omitempty"`
 	Fulltext             string              `json:"fulltext,omitempty"`
 	Contacts             []types.ContactBody `json:"contacts,omitempty"`
@@ -91,9 +82,6 @@ type LFXTransaction struct {
 
 	// Capture timestamp at ingest time.
 	Timestamp time.Time `json:"-"`
-
-	// Enhanced fields for improved validation and processing
-	ParsedPrincipals []Principal `json:"-"`
 
 	// IndexingConfig contains the indexing configuration for the resource,
 	// as specified by the client. They can specify all the searchability fields

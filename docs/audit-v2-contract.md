@@ -350,12 +350,15 @@ an approved history snapshot. When included in an outbox payload, it must be the
 publisher's sanitized indexer representation, not a raw database row containing
 credentials. This revision changes audit ingestion, public types, history
 mappings and deployment timing requirements. Current-resource attribution fields
-remain unchanged until the separate coordinated cleanup removes all nine
-fields (`created_by`, `created_by_principals`, `created_by_emails`, and the
-corresponding `updated_by*` and `deleted_by*` fields) from the mapping template,
-`TransactionBody`, and both projection paths. Existing index mappings may retain
-unused fields; no migration is required to populate or repurpose them.
-`ParsePrincipals` must no longer run to populate current-document attribution.
+have been removed: all nine fields (`created_by`, `created_by_principals`,
+`created_by_emails`, and the corresponding `updated_by*` and `deleted_by*` fields)
+are absent from the resources mapping template, `TransactionBody`, both projection
+paths, and post-index event bodies. Timestamps remain. Existing index mappings may
+retain unused fields and old documents may retain values until replacement; no
+index rebuild or live deletion is required. `ParsePrincipals` no longer runs for
+current-document attribution; unversioned writes authenticate the authorization
+JWT directly. Private history retains actor refs, username/email identity
+snapshots, and verification flags with unchanged evidence verification behavior.
 
 ## Approved content schemas
 
@@ -560,8 +563,8 @@ Before enabling the revised contract:
   narrows the durable consumer filter. Check externally managed stream settings
   during rollout and finish mockdata's duplicated reset-mapping cleanup separately.
   This does not remove resource-service synchronization with legacy systems.
-- Remove current-document attribution fields as described above; do not replace
-  them with history identities or verification fields in the current index.
+- Current-document attribution fields are removed as described above; do not
+  replace them with history identities or verification fields in the current index.
 - Run `make lint` and `make test` in each touched Go repository and validate
   chart/deployment/reset changes before rollout. Keep audited adoption disabled
   until these changes and the existing policy/provisioning gates are complete.

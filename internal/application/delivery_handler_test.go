@@ -204,7 +204,7 @@ func TestDeliveryHandler_CombinedRequestEmitsPostIndexingEvents(t *testing.T) {
 		t.Run(objectType, func(t *testing.T) {
 			mp, messaging, storage := setupTestMessageProcessor()
 			storage.On("Index", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
-			messaging.On("ParsePrincipals", mock.Anything, mock.Anything).Return([]contracts.Principal{{Principal: "fixture-principal"}}, nil)
+			messaging.On("ValidateToken", mock.Anything, mock.Anything).Return(&contracts.Principal{Principal: "fixture-principal"}, nil)
 			messaging.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 			h := newTestDeliveryHandler(mp, &fakeFGAWriter{result: contracts.FGAWriteResult{Changed: true}}, nil)
 
