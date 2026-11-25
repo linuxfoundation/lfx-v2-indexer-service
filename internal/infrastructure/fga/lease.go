@@ -35,6 +35,9 @@ var (
 const (
 	leaseRetryInterval  = 25 * time.Millisecond
 	leaseReleaseTimeout = time.Second
+	// leaseHold is fixed rather than derived from the bucket TTL, so every
+	// replica, whenever it started, holds a lease for the same time.
+	leaseHold = 30 * time.Second
 )
 
 // kvLease holds a lease as a key in a NATS KV bucket. Create succeeds for
@@ -42,21 +45,21 @@ const (
 type kvLease struct {
 	js     jetstream.JetStream
 	bucket string
+	hold   time.Duration
 	logger *slog.Logger
 
-	mu   sync.Mutex
-	kv   jetstream.KeyValue
-	hold time.Duration
+	mu sync.Mutex
+	kv jetstream.KeyValue
 }
 
 // NewKVLease returns a Lease kept in bucket. The bucket is bound on first use
-// and must have a TTL.
+// and its TTL must be at least twice leaseHold.
 func NewKVLease(js jetstream.JetStream, bucket string, logger *slog.Logger) Lease {
-	return &kvLease{js: js, bucket: bucket, logger: logger}
+	return &kvLease{js: js, bucket: bucket, hold: leaseHold, logger: logger}
 }
 
 func (l *kvLease) Acquire(ctx context.Context, object string) (context.Context, func(), error) {
-	kv, hold, err := l.bound(ctx)
+	kv, err := l.bound(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: %w", errLeaseUnavailable, err)
 	}
@@ -68,7 +71,13 @@ func (l *kvLease) Acquire(ctx context.Context, object string) (context.Context, 
 		attempt := time.Now()
 		revision, err := kv.Create(ctx, key, nil)
 		if err == nil {
-			held, cancel := context.WithDeadline(ctx, attempt.Add(hold))
+			// Checked after Create: a TTL lowered far enough to expire the
+			// previous holder's key early is visible once this key exists.
+			if err := l.checkTTL(ctx, kv); err != nil {
+				l.release(kv, key, revision)
+				return nil, nil, fmt.Errorf("%w: %w", errLeaseUnavailable, err)
+			}
+			held, cancel := context.WithDeadline(ctx, attempt.Add(l.hold))
 			if held.Err() != nil {
 				cancel()
 				l.release(kv, key, revision)
@@ -106,27 +115,31 @@ func (l *kvLease) release(kv jetstream.KeyValue, key string, revision uint64) {
 	}
 }
 
-// bound binds the bucket and derives the hold limit from its TTL: half the
-// TTL, so a holder stops writing well before its lease can expire.
-func (l *kvLease) bound(ctx context.Context) (jetstream.KeyValue, time.Duration, error) {
+func (l *kvLease) bound(ctx context.Context) (jetstream.KeyValue, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.kv != nil {
-		return l.kv, l.hold, nil
+		return l.kv, nil
 	}
 	kv, err := l.js.KeyValue(ctx, l.bucket)
 	if err != nil {
-		return nil, 0, fmt.Errorf("bind KV bucket %q: %w", l.bucket, err)
+		return nil, fmt.Errorf("bind KV bucket %q: %w", l.bucket, err)
 	}
+	l.kv = kv
+	return l.kv, nil
+}
+
+// checkTTL requires a bucket TTL of at least twice the hold, so a holder
+// stops writing well before its lease can expire.
+func (l *kvLease) checkTTL(ctx context.Context, kv jetstream.KeyValue) error {
 	status, err := kv.Status(ctx)
 	if err != nil {
-		return nil, 0, fmt.Errorf("KV bucket %q status: %w", l.bucket, err)
+		return fmt.Errorf("KV bucket %q status: %w", l.bucket, err)
 	}
-	if status.TTL() <= 0 {
-		return nil, 0, fmt.Errorf("KV bucket %q has no TTL, so a crashed holder's lease would never expire", l.bucket)
+	if ttl := status.TTL(); ttl < 2*l.hold {
+		return fmt.Errorf("KV bucket %q TTL %s is below %s, twice the lease hold", l.bucket, ttl, 2*l.hold)
 	}
-	l.kv, l.hold = kv, status.TTL()/2
-	return l.kv, l.hold, nil
+	return nil
 }
 
 // leaseKey hashes object, because OpenFGA ids may hold characters NATS KV

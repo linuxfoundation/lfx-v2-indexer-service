@@ -210,7 +210,7 @@ func TestDeliveryHandler_CombinedRequestEmitsPostIndexingEvents(t *testing.T) {
 		t.Run(objectType, func(t *testing.T) {
 			mp, messaging, storage := setupTestMessageProcessor()
 			storage.On("Index", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
-			messaging.On("ParsePrincipals", mock.Anything, mock.Anything).Return([]contracts.Principal{{Principal: "fixture-principal"}}, nil)
+			messaging.On("ValidateToken", mock.Anything, mock.Anything).Return(&contracts.Principal{Principal: "fixture-principal"}, nil)
 			messaging.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 			h := newTestDeliveryHandler(mp, &fakeFGAWriter{result: contracts.FGAWriteResult{Changed: true}}, nil)
 
@@ -348,6 +348,7 @@ func TestDeliveryHandler_RejectsInvalidRequests(t *testing.T) {
 		{"neither block", deliverySubject, []byte(`{"action":"updated","data":{}}`), "ERROR: rejected: index: neither indexing_config nor fga is present"},
 		{"null fga and no indexing_config", deliverySubject, []byte(`{"fga":null}`), "ERROR: rejected: index: neither indexing_config nor fga is present"},
 		{"index object id missing", deliverySubject, indexRequest(t, func(r map[string]any) { r["indexing_config"].(map[string]any)["object_id"] = "" }), "ERROR: rejected: index: indexing_config.object_id is required"},
+		{"fga on a historical import", deliverySubject, []byte(`{"audit":{"origin":"historical_import"},"fga":{"object_type":"fixture_resource","operation":"delete_access","data":{"uid":"fixture-1"}}}`), "ERROR: rejected: fga: fga is not allowed with audit origin historical_import"},
 		{"fga uid missing", deliverySubject, []byte(`{"fga":{"object_type":"fixture_resource","operation":"delete_access","data":{}}}`), "ERROR: rejected: fga: fga.data.uid is required"},
 		{"sync is not a boolean", deliverySubject, indexRequest(t, func(r map[string]any) { r["sync"] = "yes" }), "ERROR: rejected: index: invalid request: json: cannot unmarshal string into Go struct field deliveryFields.sync of type bool"},
 		{"no object type", constants.IndexerIndexPrefix, indexRequest(t, nil), "ERROR: rejected: index: invalid subject"},

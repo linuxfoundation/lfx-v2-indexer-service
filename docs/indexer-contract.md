@@ -192,6 +192,7 @@ type IndexingConfig struct {
 | `{{` in `ObjectID`, `AccessCheck*`, `HistoryCheck*`, or any `ParentRefs` entry (template references are not supported) | NAKed and retried during `IndexingConfig` parsing. Every other field is stored literally, including `{{ ... }}` text. See [literal values](client-guide.md#literal-values-in-indexing_config) |
 | Unknown `action` value | NAKed and retried (`unknown action`) |
 | Missing lower-case `authorization` header on V2 messages | NAKed and retried during header validation |
+| Invalid, expired, or unverifiable authorization JWT | NAKed and retried before any current-document write or event |
 | `data` not present on create/update | NAKed and retried |
 | `data` not a string on delete | NAKed and retried |
 | Subject suffix empty (`lfx.index.` with no type) | NAKed and retried (must have a non-empty resource type) |
@@ -283,10 +284,23 @@ document. The stored `object_ref` and resource ID remain unchanged.
 | `audit_mutation_key`, `audit_mutation_fingerprint` | Audited current write only (disabled by default) | Preserve mutation identity across same-revision projection rebuilds; unindexed |
 | `audit_projection_order_time`, `audit_projection_order_key` | Audited current write only (disabled by default) | Stable same-revision ordering for authorized reindex/backfill/sync projections; unindexed |
 | `created_at`, `updated_at`, `deleted_at` | server timestamp by action (legacy); `audit.occurred_at` (UTC) for audited writes | Source-action timing for audited resources, not indexer ingestion time |
-| `created_by`, `updated_by`, `deleted_by` | parsed principals | Human-readable principal refs |
-| `created_by_principals`, `updated_by_principals`, `deleted_by_principals` | parsed principals | Principal IDs for filtering/audit |
-| `created_by_emails`, `updated_by_emails`, `deleted_by_emails` | parsed principals | Principal email addresses |
 | `data` | `IndexerMessageEnvelope.Data` on create/update | Full resource data (schema-free `flat_object`) |
+
+Current documents and post-index event bodies no longer contain the nine top-level
+`created_by`, `updated_by`, `deleted_by`, `*_by_principals`, or `*_by_emails`
+attribution fields. Both unversioned and audited projections retain their action
+timestamps. JWT authentication remains required; the unversioned path validates
+the lower-case `authorization` credential directly, without calling
+`ParsePrincipals` or collecting `x-on-behalf-of` identities. Audit actors,
+username/email snapshots, and verification flags remain confined to private
+history and retain their separate verification policy. Resource-owned keys inside
+`data` and publisher-supplied contact/search fields are unchanged; this is not a
+general payload-scrubbing policy.
+
+New resources-index mappings omit these attribution fields. Existing mappings
+may retain unused entries, and documents not yet replaced may retain old values.
+No index rebuild or live field deletion is required for this cleanup; the next
+current-body replacement omits them. Audit history is not migrated or rewritten.
 
 ### Field-naming rules
 
@@ -315,7 +329,7 @@ being queued up to `BatchMaxWait` before its batch's flush even starts, on top o
 timeout (see `internal/infrastructure/config/app_config.go`). None of this changes the
 per-document write shape: each create, update, or delete still writes the current document
 for that object reference and sets `latest: true`; deletes still write a tombstone-shaped
-document with `deleted_at` and delete principals. The janitor still scans for duplicate
+document with `deleted_at` and no top-level attribution. The janitor still scans for duplicate
 `latest: true` hits with the same `object_ref` and flips older duplicates to `latest: false`
 using optimistic update parameters. Queries must filter `latest: true` to see current data.
 For audited current writes, the janitor is queued even after a guarded no-op.
@@ -358,10 +372,9 @@ When a same-revision reindex/backfill/sync projection arrives before its mutatio
 the mutation still appends history and records its identity atomically, but does
 not replace the refreshed current body or publish a replacement-body event.
 Both arrival orders retain the projection body and the mutation identity.
-Audited current-document `*_by` and `*_by_principals` fields include the original
-actor and effective/on-behalf-of actor refs, deduplicated when equal. Private
-actor profile snapshots remain confined to history and are not copied into
-current documents or downstream event bodies.
+Actor and effective/on-behalf-of identities remain confined to private history;
+neither actor refs nor identity snapshots are copied into current documents or
+downstream event bodies as top-level attribution.
 
 Publisher namespace is a delivery-identity namespace, **not** a revision
 namespace. All admitted publishers that can address the same `(object_type,
@@ -434,6 +447,9 @@ plus two optional fields.
   `indexing_config` and no `data`.
 - `fga` and `sync` are accepted only on this subject. On `lfx.index.*` an audit
   version 2 envelope carrying them is rejected as an unknown field.
+- A request with `fga` and `audit.origin` `historical_import` replies
+  `ERROR: rejected: fga: ...` before either half runs, because importing
+  history creates no FGA grants.
 
 ### Reply body
 
@@ -514,10 +530,11 @@ Without `OPENFGA_API_URL`, or until the store is found, every request carrying
   a time across all replicas, even when they come from requests for different
   resources. Each holds a lease in the NATS KV bucket `OPENFGA_LOCK_BUCKET`
   (default `indexer-fga-locks`) from its first read to its last write, so two
-  full syncs of a shared object cannot interleave. A lease lives at most half
-  the bucket TTL; a request that cannot get one before its timeout replies
+  full syncs of a shared object cannot interleave. A lease lives at most 30
+  seconds, and the bucket TTL must be at least 60 seconds; a request that
+  cannot get one before its timeout replies
   `ERROR: transient: fga: another request is writing this object`, and one
-  that cannot reach the bucket replies
+  that cannot reach the bucket, or finds its TTL below 60 seconds, replies
   `ERROR: transient: fga: fga write lease unavailable`.
 - Each replica runs at most `NATS_WORKER_COUNT` requests at a time; beyond that
   it stops taking new requests until one finishes.
@@ -548,8 +565,10 @@ invalidates: it may be the replay of a request whose invalidation failed. If
 the invalidation cannot be recorded the reply is
 `ERROR: transient: fga: cache invalidation failed`, and the replay records it.
 With `CACHE_BACKEND=none` there is no cache to invalidate, so lfx-v2-fga-sync's
-cache never learns of these writes. Set `CACHE_BACKEND` to the backend
-fga-sync uses before any producer sends `fga` on this subject.
+cache never learns of these writes. Before any producer sends `fga` on this
+subject, point the indexer at the same cache fga-sync uses: the same
+`CACHE_BACKEND`, and the same `CACHE_BUCKET` on the same NATS server for
+`natskv`, or the same `VALKEY_ADDR` for `valkey`.
 
 ### Idempotence and retry
 
@@ -589,7 +608,9 @@ case types.Drop:
 - **Adding top-level fields to the OpenSearch document**: requires an indexer-service
   change. Do not invent new top-level fields in a publisher.
 - **Renaming or removing top-level fields**: breaking. Coordinate with the indexer
-  team and the query-service team; existing documents must be re-indexed.
+  team and the query-service team; determine whether existing documents require
+  reindexing. The coordinated current-attribution cleanup above permits unused
+  mappings and old document fields to remain until normal replacement.
 - **Changing `IndexingConfig` shape**: breaking for all publishers. Coordinate.
 - **Audit envelope version 2**: additive public fields with strict opt-in
   semantics, not an in-place change to existing fields. The runtime rejects it
@@ -612,8 +633,9 @@ Before merging a change to publisher code in a resource service, verify:
    publishing for durable outbox delivery. On `lfx.index.*`, neither persistence
    acknowledgment nor core request/reply reports successful indexer processing;
    only an `OK` reply on `lfx.indexer.index.*` does.
-5. Headers carry lower-case `authorization` and `x-on-behalf-of` keys so audit principals are
-   recorded on the indexed document.
+5. Headers carry the lower-case `authorization` credential for JWT authentication.
+   `x-on-behalf-of` does not populate current-document attribution. Audited actor
+   evidence belongs in `audit.attribution`, under its separate verification policy.
 6. Existing traffic omits both new discriminator fields. Do not enable audited
    delivery until the complete version 2 rollout in
    [audit-v2-contract.md](audit-v2-contract.md#rollout-coexistence-and-rollback)

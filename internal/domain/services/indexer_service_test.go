@@ -47,12 +47,6 @@ func TestIndexerService_ProcessTransaction_Success(t *testing.T) {
 			HistoryCheckRelation: "viewer",
 		},
 		Timestamp: time.Now(),
-		ParsedPrincipals: []contracts.Principal{
-			{
-				Principal: "test_user",
-				Email:     "test@example.com",
-			},
-		},
 	}
 
 	// Execute
@@ -102,9 +96,6 @@ func TestIndexerService_SetDocIndexer_RoutesWritesThroughOverride(t *testing.T) 
 			HistoryCheckRelation: "viewer",
 		},
 		Timestamp: time.Now(),
-		ParsedPrincipals: []contracts.Principal{
-			{Principal: "test_user", Email: "test@example.com"},
-		},
 	}
 
 	result, err := service.ProcessTransaction(context.Background(), transaction, "test-index")
@@ -123,7 +114,7 @@ func TestIndexerService_ProcessTransaction_EnrichmentSuccess(t *testing.T) {
 	logger, _ := logging.TestLogger(t)
 	service := NewIndexerService(mockStorageRepo, mockMessagingRepo, logger)
 
-	// Test data - transaction without parsed principals
+	// Test data requiring authentication and data enrichment.
 	transaction := &contracts.LFXTransaction{
 		Action:     constants.ActionUpdated,
 		ObjectType: "project",
@@ -142,7 +133,6 @@ func TestIndexerService_ProcessTransaction_EnrichmentSuccess(t *testing.T) {
 			HistoryCheckRelation: "viewer",
 		},
 		Timestamp: time.Now(),
-		// No ParsedPrincipals - should be enriched via auth
 	}
 
 	// Execute
@@ -154,9 +144,90 @@ func TestIndexerService_ProcessTransaction_EnrichmentSuccess(t *testing.T) {
 	assert.True(t, result.Success)
 	assert.Len(t, mockStorageRepo.IndexCalls, 1)
 
-	// Verify auth enrichment was called
-	assert.Len(t, mockMessagingRepo.AuthRepo.ParsePrincipalsCalls, 1)
-	assert.Equal(t, transaction.Headers, mockMessagingRepo.AuthRepo.ParsePrincipalsCalls[0].Headers)
+	// Authenticate without parsing or retaining delegated attribution.
+	require.Len(t, mockMessagingRepo.AuthRepo.ValidateTokenCalls, 1)
+	assert.Equal(t, transaction.Headers[constants.AuthorizationHeader], mockMessagingRepo.AuthRepo.ValidateTokenCalls[0].Token)
+	assert.Empty(t, mockMessagingRepo.AuthRepo.ParsePrincipalsCalls)
+}
+
+func TestIndexerService_ProcessTransaction_AuthenticationWithoutAttribution(t *testing.T) {
+	for _, action := range []constants.MessageAction{constants.ActionCreated, constants.ActionUpdated, constants.ActionDeleted} {
+		for _, authFailure := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/authFailure=%t", action, authFailure), func(t *testing.T) {
+				storage := mocks.NewMockStorageRepository()
+				messaging := mocks.NewMockMessagingRepository()
+				authErr := fmt.Errorf("invalid signature or expired credential")
+				if authFailure {
+					messaging.AuthRepo.ValidateTokenError = authErr
+				}
+				// The legacy principal parser must not be used, even with delegation.
+				messaging.AuthRepo.ParsePrincipalsError = fmt.Errorf("attribution parser must not run")
+				logger, _ := logging.TestLogger(t)
+				service := NewIndexerService(storage, messaging, logger)
+				timestamp := time.Now().UTC()
+				transaction := &contracts.LFXTransaction{
+					Action: action, ObjectType: "project", Timestamp: timestamp,
+					Headers: map[string]string{
+						constants.AuthorizationHeader: "Bearer publisher-credential",
+						constants.OnBehalfOfHeader:    "private-delegated-credential",
+					},
+					Data: map[string]any{"id": "fixture", "created_by": "resource-owned-value"},
+					IndexingConfig: &types.IndexingConfig{
+						ObjectID: "fixture", AccessCheckObject: "project:fixture", AccessCheckRelation: "viewer",
+						HistoryCheckObject: "project:fixture", HistoryCheckRelation: "auditor",
+					},
+				}
+				if action == constants.ActionDeleted {
+					transaction.Data = "fixture"
+				}
+				result, err := service.ProcessTransaction(context.Background(), transaction, "resources")
+				require.Len(t, messaging.AuthRepo.ValidateTokenCalls, 1)
+				require.Equal(t, "Bearer publisher-credential", messaging.AuthRepo.ValidateTokenCalls[0].Token)
+				require.Empty(t, messaging.AuthRepo.ParsePrincipalsCalls)
+				if authFailure {
+					require.ErrorIs(t, err, authErr)
+					require.False(t, result.Success)
+					require.Empty(t, storage.IndexCalls)
+					require.Empty(t, messaging.PublishCalls)
+					return
+				}
+				require.NoError(t, err)
+				require.True(t, result.Success)
+				require.Len(t, storage.IndexCalls, 1)
+				require.Len(t, messaging.PublishCalls, 1)
+				var stored map[string]any
+				require.NoError(t, json.Unmarshal([]byte(storage.IndexCalls[0].Body), &stored))
+				var event struct {
+					Body map[string]any `json:"body"`
+				}
+				require.NoError(t, json.Unmarshal(messaging.PublishCalls[0].Data, &event))
+				require.Equal(t, stored, event.Body)
+				for _, prefix := range []string{"created_by", "updated_by", "deleted_by"} {
+					for _, suffix := range []string{"", "_principals", "_emails"} {
+						require.NotContains(t, stored, prefix+suffix)
+					}
+				}
+				for _, private := range []string{"publisher-credential", "private-delegated-credential", "test@example.com", "test_user"} {
+					require.NotContains(t, storage.IndexCalls[0].Body, private)
+					require.NotContains(t, string(messaging.PublishCalls[0].Data), private)
+				}
+				wantTime := timestamp.Format(time.RFC3339Nano)
+				switch action {
+				case constants.ActionCreated:
+					require.Equal(t, wantTime, stored["created_at"])
+					require.Equal(t, wantTime, stored["updated_at"])
+				case constants.ActionUpdated:
+					require.Equal(t, wantTime, stored["updated_at"])
+				case constants.ActionDeleted:
+					require.Equal(t, wantTime, stored["deleted_at"])
+					require.NotContains(t, stored, "data")
+				}
+				if action != constants.ActionDeleted {
+					require.Equal(t, "resource-owned-value", stored["data"].(map[string]any)["created_by"])
+				}
+			})
+		}
+	}
 }
 
 func TestIndexerService_ProcessTransaction_InvalidAction(t *testing.T) {
@@ -236,12 +307,6 @@ func TestIndexerService_ProcessTransaction_BasicValidation(t *testing.T) {
 			HistoryCheckRelation: "viewer",
 		},
 		Timestamp: time.Now(),
-		ParsedPrincipals: []contracts.Principal{
-			{
-				Principal: "test_user",
-				Email:     "test@example.com",
-			},
-		},
 	}
 
 	// Execute
@@ -696,10 +761,9 @@ func TestIndexerService_buildTransactionBodyFromIndexingConfig(t *testing.T) {
 				Fulltext:             "Test Project description",
 			},
 			transaction: &contracts.LFXTransaction{
-				Action:           constants.ActionCreated,
-				ObjectType:       "project",
-				Timestamp:        time.Now(),
-				ParsedPrincipals: []contracts.Principal{{Principal: "user:123", Email: "test@example.com"}},
+				Action:     constants.ActionCreated,
+				ObjectType: "project",
+				Timestamp:  time.Now(),
 			},
 			validate: func(t *testing.T, body *contracts.TransactionBody) {
 				assert.Equal(t, "project", body.ObjectType)
@@ -726,11 +790,6 @@ func TestIndexerService_buildTransactionBodyFromIndexingConfig(t *testing.T) {
 				assert.NotNil(t, body.CreatedAt)
 				assert.NotNil(t, body.UpdatedAt)
 				assert.Equal(t, body.CreatedAt, body.UpdatedAt) // For created actions
-				assert.Len(t, body.CreatedBy, 1)
-				assert.Contains(t, body.CreatedBy[0], "user:123")
-				assert.Contains(t, body.CreatedBy[0], "test@example.com")
-				assert.Equal(t, []string{"user:123"}, body.CreatedByPrincipals)
-				assert.Equal(t, []string{"test@example.com"}, body.CreatedByEmails)
 			},
 		},
 		{
@@ -746,10 +805,9 @@ func TestIndexerService_buildTransactionBodyFromIndexingConfig(t *testing.T) {
 				HistoryCheckRelation: "historian",
 			},
 			transaction: &contracts.LFXTransaction{
-				Action:           constants.ActionUpdated,
-				ObjectType:       "project",
-				Timestamp:        time.Now(),
-				ParsedPrincipals: []contracts.Principal{{Principal: "user:456", Email: "updater@example.com"}},
+				Action:     constants.ActionUpdated,
+				ObjectType: "project",
+				Timestamp:  time.Now(),
 			},
 			validate: func(t *testing.T, body *contracts.TransactionBody) {
 				assert.Equal(t, "project", body.ObjectType)
@@ -768,10 +826,6 @@ func TestIndexerService_buildTransactionBodyFromIndexingConfig(t *testing.T) {
 				assert.True(t, *body.Latest)
 				assert.NotNil(t, body.UpdatedAt)
 				assert.Nil(t, body.CreatedAt) // Should not be set for updates
-				assert.Len(t, body.UpdatedBy, 1)
-				assert.Contains(t, body.UpdatedBy[0], "user:456")
-				assert.Equal(t, []string{"user:456"}, body.UpdatedByPrincipals)
-				assert.Equal(t, []string{"updater@example.com"}, body.UpdatedByEmails)
 			},
 		},
 		{
@@ -788,10 +842,9 @@ func TestIndexerService_buildTransactionBodyFromIndexingConfig(t *testing.T) {
 				HistoryCheckRelation: "historian",
 			},
 			transaction: &contracts.LFXTransaction{
-				Action:           constants.ActionDeleted,
-				ObjectType:       "project",
-				Timestamp:        time.Now(),
-				ParsedPrincipals: []contracts.Principal{{Principal: "user:789", Email: ""}},
+				Action:     constants.ActionDeleted,
+				ObjectType: "project",
+				Timestamp:  time.Now(),
 			},
 			validate: func(t *testing.T, body *contracts.TransactionBody) {
 				assert.False(t, body.Public)
@@ -802,10 +855,6 @@ func TestIndexerService_buildTransactionBodyFromIndexingConfig(t *testing.T) {
 				assert.NotNil(t, body.DeletedAt)
 				assert.Nil(t, body.CreatedAt)
 				assert.Nil(t, body.UpdatedAt)
-				assert.Len(t, body.DeletedBy, 1)
-				assert.Contains(t, body.DeletedBy[0], "user:789")
-				assert.Equal(t, []string{"user:789"}, body.DeletedByPrincipals)
-				assert.Empty(t, body.DeletedByEmails) // No email in this test
 			},
 		},
 		{
@@ -821,10 +870,9 @@ func TestIndexerService_buildTransactionBodyFromIndexingConfig(t *testing.T) {
 				HistoryCheckRelation: "admin",
 			},
 			transaction: &contracts.LFXTransaction{
-				Action:           constants.ActionCreated,
-				ObjectType:       "committee",
-				Timestamp:        time.Now(),
-				ParsedPrincipals: []contracts.Principal{},
+				Action:     constants.ActionCreated,
+				ObjectType: "committee",
+				Timestamp:  time.Now(),
 			},
 			validate: func(t *testing.T, body *contracts.TransactionBody) {
 				assert.Equal(t, "committee:committee-123#member", body.AccessCheckQuery)
@@ -1060,9 +1108,6 @@ func TestIndexerService_ProcessTransaction_PublishesIndexingEvent(t *testing.T) 
 			HistoryCheckRelation: "viewer",
 		},
 		Timestamp: time.Now(),
-		ParsedPrincipals: []contracts.Principal{
-			{Principal: "test_user", Email: "test@example.com"},
-		},
 	}
 
 	result, err := service.ProcessTransaction(context.Background(), transaction, "test-index")
@@ -1110,9 +1155,6 @@ func TestIndexerService_ProcessTransaction_PublishFailureIsNonBlocking(t *testin
 			HistoryCheckRelation: "viewer",
 		},
 		Timestamp: time.Now(),
-		ParsedPrincipals: []contracts.Principal{
-			{Principal: "test_user", Email: "test@example.com"},
-		},
 	}
 
 	result, err := service.ProcessTransaction(context.Background(), transaction, "test-index")
@@ -1148,9 +1190,6 @@ func TestIndexerService_ProcessTransaction_NoEventPublishedOnIndexFailure(t *tes
 			HistoryCheckRelation: "viewer",
 		},
 		Timestamp: time.Now(),
-		ParsedPrincipals: []contracts.Principal{
-			{Principal: "test_user", Email: "test@example.com"},
-		},
 	}
 
 	result, err := service.ProcessTransaction(context.Background(), transaction, "test-index")
@@ -1185,9 +1224,6 @@ func TestIndexerService_ProcessTransaction_RejectsPresentTenseActions(t *testing
 					HistoryCheckRelation: "viewer",
 				},
 				Timestamp: time.Now(),
-				ParsedPrincipals: []contracts.Principal{
-					{Principal: "admin", Email: "admin@example.com"},
-				},
 			}
 
 			result, err := service.ProcessTransaction(context.Background(), transaction, "test-index")
@@ -1195,6 +1231,7 @@ func TestIndexerService_ProcessTransaction_RejectsPresentTenseActions(t *testing
 			assert.Error(t, err)
 			assert.False(t, result.Success)
 			assert.Empty(t, mockMessagingRepo.AuthRepo.ParsePrincipalsCalls)
+			assert.Empty(t, mockMessagingRepo.AuthRepo.ValidateTokenCalls)
 			assert.Empty(t, mockStorageRepo.IndexCalls)
 			assert.Empty(t, mockMessagingRepo.PublishCalls)
 		})
@@ -1357,11 +1394,10 @@ func TestIndexerService_GenerateTransactionBody_InvalidObjectID_Delete(t *testin
 	)
 
 	transaction := &contracts.LFXTransaction{
-		ObjectType:       "groupsio_member",
-		Action:           constants.ActionDeleted,
-		ParsedObjectID:   "\u05cfz\ufffd\ufffd|", // corrupted binary member ID from LFXV2-1464
-		ParsedPrincipals: []contracts.Principal{},
-		Timestamp:        time.Now(),
+		ObjectType:     "groupsio_member",
+		Action:         constants.ActionDeleted,
+		ParsedObjectID: "\u05cfz\ufffd\ufffd|", // corrupted binary member ID from LFXV2-1464
+		Timestamp:      time.Now(),
 	}
 
 	body, err := s.GenerateTransactionBody(context.Background(), transaction)

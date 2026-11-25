@@ -4,6 +4,7 @@
 package messaging
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -18,7 +19,9 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/infrastructure/auth"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/mocks"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
 )
@@ -76,6 +79,27 @@ func TestMessagingRepository_ValidateToken_NoAuthRepo(t *testing.T) {
 	assert.Error(t, err)
 	assert.Nil(t, principal)
 	assert.Contains(t, err.Error(), constants.ErrAuthRepoNotConfigured)
+}
+
+func TestMessagingRepository_ValidateToken_DoesNotLogIdentity(t *testing.T) {
+	for _, principal := range []string{"private-user@example.test", "private-user", "private-service@clients"} {
+		t.Run(principal, func(t *testing.T) {
+			var logs bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			authRepo := mocks.NewMockAuthRepository()
+			authRepo.ValidateTokenResponse = &contracts.Principal{Principal: principal, Email: "private-profile@example.test"}
+			repo := NewMessagingRepository(nil, authRepo, logger, time.Second, constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit, constants.DefaultWorkerCount, constants.DefaultAckWait, 0)
+			const credential = "Bearer private-credential-marker"
+			got, err := repo.ValidateToken(context.Background(), credential)
+			require.NoError(t, err)
+			require.Same(t, authRepo.ValidateTokenResponse, got)
+			require.Equal(t, []mocks.ValidateTokenCall{{Token: credential}}, authRepo.ValidateTokenCalls)
+			require.Contains(t, logs.String(), "Token validation delegation completed successfully")
+			for _, private := range []string{principal, authRepo.ValidateTokenResponse.Email, credential} {
+				require.NotContains(t, logs.String(), private)
+			}
+		})
+	}
 }
 
 func TestMessagingRepository_ParsePrincipals_NoAuthRepo(t *testing.T) {
