@@ -39,8 +39,8 @@ func newCacheMetrics(provider metric.MeterProvider) *cacheMetrics {
 		errors:   newCounter(meter, "fga_cache.errors", "{call}", "FGA cache calls that failed in the store"),
 		bypasses: newCounter(meter, "fga_cache.bypasses", "{call}", "FGA cache calls skipped because the cache was down or saturated"),
 		overtakes: newCounter(meter, "fga_cache.invalidations_overtaken", "{call}",
-			"FGA invalidations that were not the first since the write began, "+
-				"or whose write began without a marker read; their seeds are skipped"),
+			"FGA invalidations that could not show they were the only one since the write's marker read; "+
+				"their seeds are skipped"),
 	}
 }
 
