@@ -55,6 +55,13 @@ func createLeaseBucket(t *testing.T, js jetstream.JetStream, ttl time.Duration) 
 	return name
 }
 
+// shortLease holds for hold, so a test bucket can have a short TTL.
+func shortLease(js jetstream.JetStream, bucket string, hold time.Duration) *kvLease {
+	l := NewKVLease(js, bucket, discardLogger()).(*kvLease)
+	l.hold = hold
+	return l
+}
+
 func acquire(t *testing.T, l Lease, object string) (context.Context, func()) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -103,7 +110,7 @@ func TestKVLeaseIsExclusiveAcrossReplicas(t *testing.T) {
 func TestKVLeaseHoldEndsBeforeTheLeaseExpires(t *testing.T) {
 	s := startJetStream(t)
 	js := connectJetStream(t, s)
-	l := NewKVLease(js, createLeaseBucket(t, js, 2*time.Second), discardLogger())
+	l := shortLease(js, createLeaseBucket(t, js, 2*time.Second), time.Second)
 
 	held, release := acquire(t, l, "committee:c1")
 	defer release()
@@ -130,8 +137,8 @@ func slowAckLease(t *testing.T, ttl, delay time.Duration) *kvLease {
 	t.Helper()
 	s := startJetStream(t)
 	js := connectJetStream(t, s)
-	l := NewKVLease(js, createLeaseBucket(t, js, ttl), discardLogger()).(*kvLease)
-	kv, _, err := l.bound(context.Background())
+	l := shortLease(js, createLeaseBucket(t, js, ttl), ttl/2)
+	kv, err := l.bound(context.Background())
 	require.NoError(t, err)
 	l.kv = slowAckKV{KeyValue: kv, delay: delay}
 	return l
@@ -164,7 +171,7 @@ func TestKVLeaseAcknowledgedAfterTheHoldIsBusyAndReleased(t *testing.T) {
 func TestKVLeaseOfACrashedHolderExpires(t *testing.T) {
 	s := startJetStream(t)
 	js := connectJetStream(t, s)
-	l := NewKVLease(js, createLeaseBucket(t, js, time.Second), discardLogger())
+	l := shortLease(js, createLeaseBucket(t, js, time.Second), 500*time.Millisecond)
 
 	_, _ = acquire(t, l, "committee:c1")
 
@@ -175,7 +182,7 @@ func TestKVLeaseOfACrashedHolderExpires(t *testing.T) {
 func TestKVLeaseStaleReleaseKeepsTheNewHolder(t *testing.T) {
 	s := startJetStream(t)
 	js := connectJetStream(t, s)
-	l := NewKVLease(js, createLeaseBucket(t, js, time.Second), discardLogger())
+	l := shortLease(js, createLeaseBucket(t, js, time.Second), 500*time.Millisecond)
 
 	_, staleRelease := acquire(t, l, "committee:c1")
 	_, release := acquire(t, l, "committee:c1")
@@ -188,6 +195,34 @@ func TestKVLeaseStaleReleaseKeepsTheNewHolder(t *testing.T) {
 	assert.ErrorIs(t, err, errLeaseBusy)
 }
 
+// Lowering the bucket TTL expires a held lease early. While the holder is
+// still writing, no replica, already running or started after the change,
+// may take the object.
+func TestKVLeaseRefusesAfterTheBucketTTLIsLowered(t *testing.T) {
+	s := startJetStream(t)
+	first := connectJetStream(t, s)
+	bucket := createLeaseBucket(t, first, 4*time.Second)
+	holder := shortLease(first, bucket, 2*time.Second)
+	running := shortLease(connectJetStream(t, s), bucket, 2*time.Second)
+	_, releaseOther := acquire(t, running, "committee:c2")
+	releaseOther()
+
+	held, release := acquire(t, holder, "committee:c1")
+	defer release()
+	_, err := first.UpdateKeyValue(context.Background(), jetstream.KeyValueConfig{Bucket: bucket, History: 1, TTL: 200 * time.Millisecond})
+	require.NoError(t, err)
+	time.Sleep(500 * time.Millisecond)
+	require.NoError(t, held.Err())
+
+	started := shortLease(connectJetStream(t, s), bucket, 2*time.Second)
+	for name, l := range map[string]Lease{"running": running, "started": started} {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		_, _, err := l.Acquire(ctx, "committee:c1")
+		cancel()
+		assert.ErrorIs(t, err, errLeaseUnavailable, name)
+	}
+}
+
 func TestKVLeaseNeedsABucketWithTTL(t *testing.T) {
 	s := startJetStream(t)
 	js := connectJetStream(t, s)
@@ -198,7 +233,7 @@ func TestKVLeaseNeedsABucketWithTTL(t *testing.T) {
 	noTTL := createLeaseBucket(t, js, 0)
 	_, _, err = NewKVLease(js, noTTL, discardLogger()).Acquire(context.Background(), "committee:c1")
 	assert.ErrorIs(t, err, errLeaseUnavailable)
-	assert.ErrorContains(t, err, "has no TTL")
+	assert.ErrorContains(t, err, "TTL 0s is below 1m0s")
 }
 
 // tupleServer is an in-memory OpenFGA that pauses after each read, so two

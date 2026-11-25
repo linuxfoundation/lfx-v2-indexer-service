@@ -389,11 +389,11 @@ openfga:
   # operations on one OpenFGA object from interleaving across replicas
   lockBucket:
     # creation creates the bucket with this chart; set it to false to use an
-    # existing bucket, which must have a TTL
+    # existing bucket, whose TTL must be at least 60s
     creation: true
     name: indexer-fga-locks
     # ttl frees the lease of a crashed holder; a lease is held for at most
-    # half of it
+    # 30s, and below 60s no lease is granted
     ttl: 60s
     storage: file
     replicas: 1
