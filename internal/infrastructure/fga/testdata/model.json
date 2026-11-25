@@ -1,0 +1,89 @@
+{
+  "schema_version": "1.1",
+  "type_definitions": [
+    { "type": "user" },
+    {
+      "type": "team",
+      "relations": { "member": { "this": {} } },
+      "metadata": {
+        "relations": {
+          "member": { "directly_related_user_types": [{ "type": "user" }] }
+        }
+      }
+    },
+    {
+      "type": "project",
+      "relations": {
+        "parent": { "this": {} },
+        "writer": { "this": {} },
+        "viewer": { "this": {} }
+      },
+      "metadata": {
+        "relations": {
+          "parent": { "directly_related_user_types": [{ "type": "project" }] },
+          "writer": { "directly_related_user_types": [{ "type": "user" }] },
+          "viewer": {
+            "directly_related_user_types": [{ "type": "user", "wildcard": {} }]
+          }
+        }
+      }
+    },
+    {
+      "type": "committee",
+      "relations": {
+        "project": { "this": {} },
+        "parent": { "this": {} },
+        "member": { "this": {} },
+        "writer": { "this": {} },
+        "auditor": { "this": {} },
+        "participant": { "this": {} },
+        "global_writer": { "this": {} },
+        "viewer": { "this": {} }
+      },
+      "metadata": {
+        "relations": {
+          "project": { "directly_related_user_types": [{ "type": "project" }] },
+          "parent": {
+            "directly_related_user_types": [{ "type": "committee" }]
+          },
+          "member": { "directly_related_user_types": [{ "type": "user" }] },
+          "writer": { "directly_related_user_types": [{ "type": "user" }] },
+          "auditor": {
+            "directly_related_user_types": [
+              { "type": "user" },
+              { "type": "team", "relation": "member" }
+            ]
+          },
+          "participant": {
+            "directly_related_user_types": [{ "type": "user" }]
+          },
+          "global_writer": {
+            "directly_related_user_types": [
+              { "type": "team", "relation": "member" }
+            ]
+          },
+          "viewer": {
+            "directly_related_user_types": [{ "type": "user", "wildcard": {} }]
+          }
+        }
+      }
+    },
+    {
+      "type": "meeting",
+      "relations": {
+        "host": { "this": {} },
+        "participant": { "this": {} },
+        "organizer": { "this": {} }
+      },
+      "metadata": {
+        "relations": {
+          "host": { "directly_related_user_types": [{ "type": "user" }] },
+          "participant": {
+            "directly_related_user_types": [{ "type": "user" }]
+          },
+          "organizer": { "directly_related_user_types": [{ "type": "user" }] }
+        }
+      }
+    }
+  ]
+}

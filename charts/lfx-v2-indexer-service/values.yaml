@@ -371,6 +371,33 @@ cache:
     # it to "" to authenticate as the default user with the password only
     usernameKey: username
 
+# openfga is the OpenFGA server the indexer writes tuples to for the fga half
+# of lfx.indexer.index.* requests. It is never required: with an empty apiUrl,
+# or while the server is unreachable, those requests reply transient and
+# index-only requests are unaffected.
+openfga:
+  # apiUrl is the OpenFGA HTTP API; empty turns the FGA half off
+  apiUrl: "http://lfx-platform-openfga.lfx.svc.cluster.local:8080"
+  # storeName is the store looked up by name when storeId is empty
+  storeName: lfx-core
+  # storeId skips the lookup by name when set
+  storeId: ""
+  # authModelId pins writes to one authorization model; empty uses the
+  # store's latest model
+  authModelId: ""
+  # lockBucket is the NATS KV bucket of per-object write leases, which keep
+  # operations on one OpenFGA object from interleaving across replicas
+  lockBucket:
+    # creation creates the bucket with this chart; set it to false to use an
+    # existing bucket, whose TTL must be at least 60s
+    creation: true
+    name: indexer-fga-locks
+    # ttl frees the lease of a crashed holder; a lease is held for at most
+    # 30s, and below 60s no lease is granted
+    ttl: 60s
+    storage: file
+    replicas: 1
+
 # networkPolicy restricts the indexer pods' egress to the ports below (and DNS)
 networkPolicy:
   # enabled renders templates/networkpolicy.yaml
@@ -384,6 +411,9 @@ networkPolicy:
     - 9200
   # heimdallJWKSPort is the port of heimdall.jwksUrl
   heimdallJWKSPort: 4457
+  # openfgaPort is the OpenFGA HTTP API port, for the FGA half of
+  # lfx.indexer.index.* requests
+  openfgaPort: 8080
   # otelGRPCPort and otelHTTPPort are the OpenTelemetry collector ports
   otelGRPCPort: 4317
   otelHTTPPort: 4318

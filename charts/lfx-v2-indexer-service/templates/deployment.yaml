@@ -180,6 +180,20 @@ spec:
               value: {{ .Values.health.cacheDuration }}
             - name: HEALTH_DETAILED_RESPONSE
               value: {{ .Values.health.enableDetailedResponse | quote }}
+            - name: OPENFGA_API_URL
+              value: {{ .Values.openfga.apiUrl | quote }}
+            - name: OPENFGA_STORE_NAME
+              value: {{ .Values.openfga.storeName | quote }}
+            {{- with .Values.openfga.storeId }}
+            - name: OPENFGA_STORE_ID
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.openfga.authModelId }}
+            - name: OPENFGA_AUTH_MODEL_ID
+              value: {{ . | quote }}
+            {{- end }}
+            - name: OPENFGA_LOCK_BUCKET
+              value: {{ .Values.openfga.lockBucket.name | quote }}
             - name: CACHE_BACKEND
               value: {{ .Values.cache.backend | quote }}
             - name: CACHE_TIMEOUT

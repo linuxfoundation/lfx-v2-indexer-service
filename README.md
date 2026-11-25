@@ -378,6 +378,13 @@ LOG_FORMAT=text                              # Log format (text,json)
 # Cleanup Service (Background Cleanup)
 JANITOR_ENABLED=true                         # Enable cleanup service (default: true)
 
+# OpenFGA writes for the fga half of lfx.indexer.index.* (off when the URL is unset)
+OPENFGA_API_URL=                             # e.g. http://localhost:8080; unset makes FGA requests reply transient
+OPENFGA_STORE_NAME=lfx-core                  # Store looked up by name when OPENFGA_STORE_ID is unset
+OPENFGA_STORE_ID=                            # Optional; skips the lookup
+OPENFGA_AUTH_MODEL_ID=                       # Optional; pins writes to this model (default: the store's latest)
+OPENFGA_LOCK_BUCKET=indexer-fga-locks        # NATS KV bucket with a TTL of at least 60s, for per-object write leases
+
 # FGA check cache (off by default; run.sh sets natskv, so set it yourself with make run)
 CACHE_BACKEND=none                           # natskv, valkey or none
 CACHE_BUCKET=fga-sync-cache                  # NATS KV bucket, shared with lfx-v2-fga-sync (natskv)

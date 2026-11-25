@@ -489,9 +489,29 @@ same conflict.
 Errors from storage,
 authentication or other dependencies of the index half are `transient`.
 
-Until the indexer has an OpenFGA connection, every request carrying `fga`
-replies `ERROR: transient: fga: fga writer is not configured`. Index-only
-requests are unaffected.
+The FGA half writes to the OpenFGA server at `OPENFGA_API_URL`, in the store
+named `OPENFGA_STORE_NAME` (default `lfx-core`, looked up in the background at
+startup) or `OPENFGA_STORE_ID`. Writes use the store's latest authorization
+model unless `OPENFGA_AUTH_MODEL_ID` pins one. Its write semantics are
+lfx-v2-fga-sync's:
+
+- The tuples are written on `fga.object_type`, which may differ from the
+  subject's object type (a `key_contact` request writes on
+  `project_membership`).
+- `relations` values are usernames; the indexer adds the `user:` prefix.
+- Tuples OpenFGA refuses with a validation error are dropped and the rest are
+  written, as fga-sync does.
+- The payloads fga-sync terminates as invalid reply `rejected`: an empty
+  `object_type`, an unknown `operation`, malformed `data`, a missing `uid` or
+  `username`, empty `relations` or an empty relation name on `member_put`,
+  and a `type:id` reference with an empty type or id. A reference value
+  without `:` is taken as an id of the reference type, unvalidated, as
+  fga-sync does. Every other OpenFGA failure is `transient` and replies
+  `ERROR: transient: fga: openfga request failed`; the detail is logged, not
+  returned, because it can carry the store id, the API URL or usernames.
+
+Without `OPENFGA_API_URL`, or until the store is found, every request carrying
+`fga` replies `ERROR: transient: fga: ...`. Index-only requests are unaffected.
 
 ### Ordering
 
@@ -506,6 +526,18 @@ requests are unaffected.
 - The queue group spreads one resource's requests across replicas, so across
   replicas ordering relies on the producer: wait for the reply to one request
   before sending the next request for the same resource.
+- Operations on one OpenFGA object (`fga.object_type:fga.data.uid`) run one at
+  a time across all replicas, even when they come from requests for different
+  resources. Each holds a lease in the NATS KV bucket `OPENFGA_LOCK_BUCKET`
+  (default `indexer-fga-locks`) from its first read to its last write, so two
+  full syncs of a shared object cannot interleave. A lease lives at most 30
+  seconds, and the bucket TTL must be at least 60 seconds; a request that
+  cannot get one before its timeout replies
+  `ERROR: transient: fga: another request is writing this object`, and one
+  that cannot reach the bucket, or finds its TTL below 60 seconds, replies
+  `ERROR: transient: fga: fga write lease unavailable`. The TTL is checked
+  when a lease is taken, so do not lower it below 60 seconds while the
+  indexer is running: a lowered TTL can expire leases already held.
 - Each replica runs at most `NATS_WORKER_COUNT` requests at a time; beyond that
   it stops taking new requests until one finishes.
 
@@ -534,7 +566,11 @@ cached before the change. A successful operation that changed nothing still
 invalidates: it may be the replay of a request whose invalidation failed. If
 the invalidation cannot be recorded the reply is
 `ERROR: transient: fga: cache invalidation failed`, and the replay records it.
-With `CACHE_BACKEND=none` there is no cache to invalidate.
+With `CACHE_BACKEND=none` there is no cache to invalidate, so lfx-v2-fga-sync's
+cache never learns of these writes. Before any producer sends `fga` on this
+subject, point the indexer at the same cache fga-sync uses: the same
+`CACHE_BACKEND`, and the same `CACHE_BUCKET` on the same NATS server for
+`natskv`, or the same `VALKEY_ADDR` for `valkey`.
 
 ### Idempotence and retry
 
