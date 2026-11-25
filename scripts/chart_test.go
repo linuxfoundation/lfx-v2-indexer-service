@@ -197,6 +197,48 @@ func TestCacheChartSettings(t *testing.T) {
 	}
 }
 
+func TestFGAChartSettings(t *testing.T) {
+	lockEnv := "name: OPENFGA_LOCK_BUCKET\n              value: \"indexer-fga-locks\""
+	for _, tt := range []struct {
+		name    string
+		flags   []string
+		wantErr string
+		want    []string
+		absent  []string
+	}{
+		{"defaults create the lock bucket", nil, "",
+			[]string{"kind: KeyValue", "bucket: indexer-fga-locks", "ttl: 60s", lockEnv,
+				"name: OPENFGA_API_URL\n              value: \"http://lfx-platform-openfga.lfx.svc.cluster.local:8080\""},
+			[]string{"OPENFGA_STORE_ID", "OPENFGA_AUTH_MODEL_ID"}},
+		{"no api url creates no bucket", []string{"--set-string", "openfga.apiUrl="}, "",
+			[]string{"name: OPENFGA_API_URL\n              value: \"\""},
+			[]string{"kind: KeyValue"}},
+		{"existing bucket", []string{"--set", "openfga.lockBucket.creation=false"}, "",
+			[]string{lockEnv},
+			[]string{"kind: KeyValue"}},
+		{"pinned store and model", []string{"--set-string", "openfga.storeId=store-1", "--set-string", "openfga.authModelId=model-1"}, "",
+			[]string{"name: OPENFGA_STORE_ID\n              value: \"store-1\"", "name: OPENFGA_AUTH_MODEL_ID\n              value: \"model-1\""},
+			nil},
+		{"empty ttl", []string{"--set-string", "openfga.lockBucket.ttl="}, "openfga.lockBucket.ttl is required", nil, nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			output, err := renderIndexerChartArgs(t, tt.flags...)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				require.Contains(t, output, tt.wantErr)
+				return
+			}
+			require.NoError(t, err, "%s", output)
+			for _, want := range tt.want {
+				require.Contains(t, output, want)
+			}
+			for _, absent := range tt.absent {
+				require.NotContains(t, output, absent)
+			}
+		})
+	}
+}
+
 // TestNetworkPolicyChartPorts rejects ports that are not 1-65535, because a
 // blank or null-like port renders as unspecified and allows all TCP egress.
 func TestNetworkPolicyChartPorts(t *testing.T) {

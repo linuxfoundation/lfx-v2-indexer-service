@@ -535,7 +535,9 @@ Without `OPENFGA_API_URL`, or until the store is found, every request carrying
   cannot get one before its timeout replies
   `ERROR: transient: fga: another request is writing this object`, and one
   that cannot reach the bucket, or finds its TTL below 60 seconds, replies
-  `ERROR: transient: fga: fga write lease unavailable`.
+  `ERROR: transient: fga: fga write lease unavailable`. The TTL is checked
+  when a lease is taken, so do not lower it below 60 seconds while the
+  indexer is running: a lowered TTL can expire leases already held.
 - Each replica runs at most `NATS_WORKER_COUNT` requests at a time; beyond that
   it stops taking new requests until one finishes.
 
