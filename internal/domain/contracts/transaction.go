@@ -37,6 +37,18 @@ type TransactionBody struct {
 	Contacts             []types.ContactBody `json:"contacts,omitempty"`
 }
 
+// InvalidTransactionError marks an index request that fails validation:
+// replaying the same payload fails the same way, so it must not be retried.
+// Dependency failures (storage unavailable, token validation, history reads)
+// are never wrapped; a stored identity that conflicts with the request is.
+type InvalidTransactionError struct {
+	Err error
+}
+
+func (e *InvalidTransactionError) Error() string { return e.Err.Error() }
+
+func (e *InvalidTransactionError) Unwrap() error { return e.Err }
+
 // LFXTransaction represents the input transaction data
 type LFXTransaction struct {
 	// Action is expected to be a past-tense ActionCreated, ActionUpdated or ActionDeleted.

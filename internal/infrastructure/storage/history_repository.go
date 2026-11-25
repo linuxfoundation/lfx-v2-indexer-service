@@ -141,7 +141,7 @@ func (r *HistoryRepository) readAndVerify(ctx context.Context, id string, record
 		found.Source.Fingerprint != record.Fingerprint ||
 		found.Source.ObjectID != record.ObjectID || found.Source.ObjectType != record.ObjectType ||
 		found.Source.ResourceRevision != record.ResourceRevision || found.Source.Action != record.Action {
-		return false, fmt.Errorf("history event identity reused with different content")
+		return false, &contracts.InvalidTransactionError{Err: fmt.Errorf("history event identity reused with different content")}
 	}
 	return true, nil
 }

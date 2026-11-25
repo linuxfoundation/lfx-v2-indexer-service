@@ -14,6 +14,14 @@ nats:
   connectionTimeout: "10s"
   # indexingSubject is the NATS subject for indexing messages
   indexingSubject: "lfx.index.>"
+  # indexerIndexSubject is the core-NATS request/reply subject for combined
+  # index and FGA requests. No stream captures it, and it must not overlap
+  # indexingSubject (validated at startup).
+  indexerIndexSubject: "lfx.indexer.index.>"
+  # requestTimeout bounds one request/reply delivery. Empty derives it from
+  # the ack wait inputs plus the 8s FGA call timeout (48.2s with the defaults);
+  # an explicit value must not be lower than that (validated at startup).
+  requestTimeout: ""
   # drainTimeout is the timeout for draining NATS connections. Must exceed
   # opensearch.timeout + opensearch.batchMaxWait plus a safety margin
   # (validated at startup) — a handler can be blocked in a BatchIndexer

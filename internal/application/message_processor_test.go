@@ -48,6 +48,11 @@ func (m *MockMessagingRepository) QueueSubscribeWithReply(ctx context.Context, s
 	return args.Error(0)
 }
 
+func (m *MockMessagingRepository) QueueSubscribeDispatch(ctx context.Context, subject, queue string, dispatch contracts.DispatchFunc) error {
+	args := m.Called(ctx, subject, queue, dispatch)
+	return args.Error(0)
+}
+
 func (m *MockMessagingRepository) Publish(ctx context.Context, subject string, data []byte) error {
 	args := m.Called(ctx, subject, data)
 	return args.Error(0)

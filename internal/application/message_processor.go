@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
@@ -39,6 +38,10 @@ type MessageProcessor struct {
 	// publisher policies and index access have been provisioned.
 	auditWorkflow      *AuditWorkflow
 	auditRequiredTypes map[string]bool
+	// The request/reply subscription is optional so the processor can run
+	// the JetStream path alone.
+	deliverySubject  string
+	deliveryDispatch contracts.DispatchFunc
 }
 
 // SetAuditWorkflow installs the guarded v2 path and the object types for
@@ -92,6 +95,12 @@ func (mp *MessageProcessor) Configure(index, queue, indexingSubject string) {
 	}
 }
 
+// ConfigureDelivery installs the request/reply dispatcher for subject.
+func (mp *MessageProcessor) ConfigureDelivery(subject string, dispatch contracts.DispatchFunc) {
+	mp.deliverySubject = subject
+	mp.deliveryDispatch = dispatch
+}
+
 // =================
 // MAIN USE CASE METHODS (workflow orchestration)
 // =================
@@ -109,7 +118,7 @@ func (mp *MessageProcessor) ProcessIndexingMessage(ctx context.Context, data []b
 	if mp.auditWorkflow != nil {
 		var discriminator map[string]json.RawMessage
 		if err := json.Unmarshal(data, &discriminator); err != nil {
-			return fmt.Errorf("invalid indexing message JSON")
+			return &rejectedError{fmt.Errorf("invalid indexing message JSON")}
 		}
 		if _, present := discriminator["schema_version"]; present {
 			if err := mp.validateAuditFencedType(discriminator["audit"], subject); err != nil {
@@ -123,15 +132,15 @@ func (mp *MessageProcessor) ProcessIndexingMessage(ctx context.Context, data []b
 			}
 			return mp.auditWorkflow.Process(ctx, data, subject)
 		}
-		if objectType, ok := strings.CutPrefix(subject, constants.IndexPrefix); ok && mp.auditRequiredTypes[objectType] {
-			return fmt.Errorf("audited resource type requires schema_version 2")
+		if objectType, ok := ObjectTypeFromSubject(subject); ok && mp.auditRequiredTypes[objectType] {
+			return &rejectedError{fmt.Errorf("audited resource type requires schema_version 2")}
 		}
 	}
 
 	// Create transaction from message data
 	transaction, err := mp.createTransaction(data, subject)
 	if err != nil {
-		return fmt.Errorf("%s: %w", constants.ErrCreateTransaction, err)
+		return &rejectedError{fmt.Errorf("%s: %w", constants.ErrCreateTransaction, err)}
 	}
 
 	// Process the transaction
@@ -168,12 +177,12 @@ func (mp *MessageProcessor) validateAuditFencedType(raw json.RawMessage, subject
 		Origin types.AuditOrigin `json:"origin"`
 	}
 	if err := json.Unmarshal(raw, &audit); err != nil {
-		return fmt.Errorf("invalid audit metadata")
+		return &rejectedError{fmt.Errorf("invalid audit metadata")}
 	}
 	if audit.Origin.RequiresLegacyFence() {
-		objectType, ok := strings.CutPrefix(subject, constants.IndexPrefix)
+		objectType, ok := ObjectTypeFromSubject(subject)
 		if !ok || !mp.auditRequiredTypes[objectType] {
-			return fmt.Errorf("mutation/reindex/sync resource type is not audit-required")
+			return &rejectedError{fmt.Errorf("mutation/reindex/sync resource type is not audit-required")}
 		}
 	}
 	return nil
@@ -191,8 +200,8 @@ func (mp *MessageProcessor) createTransaction(data []byte, subject string) (*con
 		return nil, fmt.Errorf("failed to unmarshal message data: %w", err)
 	}
 
-	// Extract object type from subject (V2: lfx.index.{object_type})
-	objectType, found := strings.CutPrefix(subject, constants.IndexPrefix)
+	// Extract object type from subject (lfx.index.{object_type} or lfx.indexer.index.{object_type})
+	objectType, found := ObjectTypeFromSubject(subject)
 	if !found {
 		return nil, fmt.Errorf("invalid V2 subject format: %s", subject)
 	}
@@ -231,10 +240,35 @@ func (mp *MessageProcessor) StartSubscriptions(ctx context.Context) error {
 		"subjects", mp.indexingSubject,
 		"queue", mp.queue)
 
+	if mp.deliveryDispatch != nil {
+		if err := mp.StartDeliverySubscription(ctx); err != nil {
+			return err
+		}
+	}
+
 	logger.Info("All NATS subscriptions started successfully",
 		"v2_subjects", mp.indexingSubject,
 		"queue", mp.queue)
 
+	return nil
+}
+
+// StartDeliverySubscription subscribes the request/reply dispatcher on core
+// NATS with the processor's queue group. No stream captures the subject.
+func (mp *MessageProcessor) StartDeliverySubscription(ctx context.Context) error {
+	logger := logging.FromContext(ctx, mp.logger)
+	if mp.deliveryDispatch == nil || mp.deliverySubject == "" {
+		return fmt.Errorf("request/reply delivery is not configured")
+	}
+	if err := mp.messagingRepo.QueueSubscribeDispatch(ctx, mp.deliverySubject, mp.queue, mp.deliveryDispatch); err != nil {
+		logging.LogError(logger, "Failed to subscribe to request/reply indexing", err,
+			"subject", mp.deliverySubject,
+			"queue", mp.queue)
+		return fmt.Errorf("failed to subscribe to %s: %w", mp.deliverySubject, err)
+	}
+	logger.Info("Request/reply indexing subscription successful",
+		"subject", mp.deliverySubject,
+		"queue", mp.queue)
 	return nil
 }
 

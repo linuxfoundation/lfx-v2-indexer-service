@@ -1,0 +1,230 @@
+// Copyright The Linux Foundation and each contributor to LFX.
+// SPDX-License-Identifier: MIT
+
+package messaging
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"log/slog"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/nats-io/nats-server/v2/server"
+	natsgo "github.com/nats-io/nats.go"
+	"github.com/stretchr/testify/require"
+
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
+)
+
+func startCoreNATS(t *testing.T) *natsgo.Conn {
+	t.Helper()
+	s, err := server.NewServer(&server.Options{Host: "127.0.0.1", Port: -1, NoLog: true, NoSigs: true})
+	require.NoError(t, err)
+	go s.Start()
+	require.True(t, s.ReadyForConnections(10*time.Second))
+	t.Cleanup(s.Shutdown)
+	nc, err := natsgo.Connect(s.ClientURL())
+	require.NoError(t, err)
+	t.Cleanup(nc.Close)
+	return nc
+}
+
+func newDispatchRepo(t *testing.T, nc *natsgo.Conn) *MessagingRepository {
+	t.Helper()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	return NewMessagingRepository(nc, nil, logger, 5*time.Second, constants.DefaultPendingMsgLimit, constants.DefaultPendingBytesLimit, constants.DefaultWorkerCount, constants.DefaultAckWait, 0)
+}
+
+func TestQueueSubscribeDispatch_CallsDispatchInDeliveryOrder(t *testing.T) {
+	nc := startCoreNATS(t)
+	repo := newDispatchRepo(t, nc)
+
+	var mu sync.Mutex
+	var seen []string
+	err := repo.QueueSubscribeDispatch(context.Background(), "lfx.indexer.index.>", "q", func(_ context.Context, data []byte, subject string, reply func([]byte) error, done func()) {
+		mu.Lock()
+		seen = append(seen, subject+"="+string(data))
+		mu.Unlock()
+		_ = reply([]byte("OK"))
+		done()
+	})
+	require.NoError(t, err)
+
+	publisher := startPublisher(t, nc)
+	for i := range 50 {
+		require.NoError(t, publisher.Publish("lfx.indexer.index.fixture", fmt.Appendf(nil, "%d", i)))
+	}
+	require.NoError(t, publisher.Flush())
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(seen) == 50
+	}, 5*time.Second, 10*time.Millisecond)
+	for i, got := range seen {
+		require.Equal(t, fmt.Sprintf("lfx.indexer.index.fixture=%d", i), got)
+	}
+}
+
+func TestQueueSubscribeDispatch_ReplyReachesRequesterOnce(t *testing.T) {
+	nc := startCoreNATS(t)
+	repo := newDispatchRepo(t, nc)
+
+	errs := make(chan error, 2)
+	err := repo.QueueSubscribeDispatch(context.Background(), "lfx.indexer.index.>", "q", func(_ context.Context, data []byte, _ string, reply func([]byte) error, done func()) {
+		go func() {
+			errs <- reply(append([]byte("echo:"), data...))
+			errs <- reply([]byte("second"))
+			done()
+		}()
+	})
+	require.NoError(t, err)
+
+	msg, err := startPublisher(t, nc).Request("lfx.indexer.index.fixture", []byte("hi"), 2*time.Second)
+	require.NoError(t, err)
+	require.Equal(t, "echo:hi", string(msg.Data))
+	require.NoError(t, <-errs)
+	require.NoError(t, <-errs)
+}
+
+// Work can continue after the reply (a timed-out half still publishing its
+// post-indexing event), so drain keeps the connection open until done.
+func TestQueueSubscribeDispatch_DrainWaitsForDone(t *testing.T) {
+	nc := startCoreNATS(t)
+	repo := newDispatchRepo(t, nc)
+
+	received := make(chan func([]byte) error, 1)
+	finished := make(chan func(), 1)
+	err := repo.QueueSubscribeDispatch(context.Background(), "lfx.indexer.index.>", "q", func(_ context.Context, _ []byte, _ string, reply func([]byte) error, done func()) {
+		received <- reply
+		finished <- done
+	})
+	require.NoError(t, err)
+
+	publisher := startPublisher(t, nc)
+	answered := make(chan string, 1)
+	go func() {
+		msg, err := publisher.Request("lfx.indexer.index.fixture", []byte("x"), 5*time.Second)
+		if err != nil {
+			answered <- "error: " + err.Error()
+			return
+		}
+		answered <- string(msg.Data)
+	}()
+	reply := <-received
+
+	drained := make(chan struct{})
+	go func() {
+		_ = repo.DrainWithTimeout()
+		close(drained)
+	}()
+	select {
+	case <-drained:
+		t.Fatal("drain returned before the dispatched message replied")
+	case <-time.After(300 * time.Millisecond):
+	}
+	require.NoError(t, reply([]byte("OK")))
+	require.Equal(t, "OK", <-answered, "a reply sent during shutdown must reach the requester")
+	select {
+	case <-drained:
+		t.Fatal("drain returned before the dispatched message finished")
+	case <-time.After(300 * time.Millisecond):
+	}
+	require.NoError(t, repo.Publish(context.Background(), "lfx.fixture.event", []byte("e")), "work after the reply can still publish")
+	(<-finished)()
+	select {
+	case <-drained:
+	case <-time.After(5 * time.Second):
+		t.Fatal("drain did not return after the message finished")
+	}
+}
+
+// A request arriving while drain waits for JetStream workers must not be
+// accepted, because it would only get what is left of the shared deadline.
+func TestQueueSubscribeDispatch_StopsBeforeJetStreamWait(t *testing.T) {
+	nc := startCoreNATS(t)
+	repo := newDispatchRepo(t, nc)
+
+	dispatched := make(chan struct{}, 1)
+	err := repo.QueueSubscribeDispatch(context.Background(), "lfx.indexer.index.>", "q", func(_ context.Context, _ []byte, _ string, reply func([]byte) error, done func()) {
+		dispatched <- struct{}{}
+		_ = reply([]byte("OK"))
+		done()
+	})
+	require.NoError(t, err)
+	publisher := startPublisher(t, nc)
+	sub := repo.dispatchSubs[0]
+
+	repo.jsWg.Add(1)
+	drained := make(chan struct{})
+	go func() {
+		_ = repo.DrainWithTimeout()
+		close(drained)
+	}()
+	require.Eventually(t, func() bool { return !sub.IsValid() }, 2*time.Second, 10*time.Millisecond,
+		"dispatch must stop while JetStream workers are still running")
+	_, err = publisher.Request("lfx.indexer.index.fixture", []byte("late"), 200*time.Millisecond)
+	require.Error(t, err)
+	require.Empty(t, dispatched)
+
+	repo.jsWg.Done()
+	select {
+	case <-drained:
+	case <-time.After(5 * time.Second):
+		t.Fatal("drain did not return after the JetStream worker finished")
+	}
+}
+
+// Accepted work outlives the connection, so drain still waits for it.
+func TestQueueSubscribeDispatch_DrainWaitsForDoneAfterConnectionClosed(t *testing.T) {
+	nc := startCoreNATS(t)
+	repo := newDispatchRepo(t, nc)
+
+	finished := make(chan func(), 1)
+	err := repo.QueueSubscribeDispatch(context.Background(), "lfx.indexer.index.>", "q", func(_ context.Context, _ []byte, _ string, _ func([]byte) error, done func()) {
+		finished <- done
+	})
+	require.NoError(t, err)
+	require.NoError(t, startPublisher(t, nc).Publish("lfx.indexer.index.fixture", []byte("x")))
+	done := <-finished
+	nc.Close()
+
+	drained := make(chan struct{})
+	go func() {
+		_ = repo.DrainWithTimeout()
+		close(drained)
+	}()
+	select {
+	case <-drained:
+		t.Fatal("drain returned before the dispatched message finished")
+	case <-time.After(300 * time.Millisecond):
+	}
+	done()
+	select {
+	case <-drained:
+	case <-time.After(5 * time.Second):
+		t.Fatal("drain did not return after the message finished")
+	}
+}
+
+func TestQueueSubscribeDispatch_RefusedWhileShuttingDown(t *testing.T) {
+	nc := startCoreNATS(t)
+	repo := newDispatchRepo(t, nc)
+	require.NoError(t, repo.DrainWithTimeout())
+
+	err := repo.QueueSubscribeDispatch(context.Background(), "lfx.indexer.index.>", "q", func(context.Context, []byte, string, func([]byte) error, func()) {})
+	require.ErrorContains(t, err, "shutting down")
+}
+
+func startPublisher(t *testing.T, subscriber *natsgo.Conn) *natsgo.Conn {
+	t.Helper()
+	// The server must have the subscription before another connection publishes.
+	require.NoError(t, subscriber.Flush())
+	nc, err := natsgo.Connect(subscriber.ConnectedUrl())
+	require.NoError(t, err)
+	t.Cleanup(nc.Close)
+	return nc
+}

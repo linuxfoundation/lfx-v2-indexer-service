@@ -37,6 +37,8 @@ type MessagingRepository struct {
 	mu                sync.RWMutex
 	wg                sync.WaitGroup // tracks all in-flight handler goroutines (core NATS + JetStream)
 	jsWg              sync.WaitGroup // tracks JetStream-only goroutines; waited before conn.Drain()
+	dispatchSubs      []*nats.Subscription
+	dispatchWg        sync.WaitGroup // tracks dispatched requests until they finish; waited before conn.Drain()
 	drainTimeout      time.Duration
 	isShuttingDown    bool
 	pendingMsgLimit   int
@@ -292,31 +294,7 @@ func (r *MessagingRepository) QueueSubscribeWithReply(ctx context.Context, subje
 			var replyFunc func([]byte) error
 			if replySubject != "" {
 				replyFunc = func(replyData []byte) error {
-					logger.Debug("Sending reply to NATS message", "reply_subject", replySubject, "reply_size", len(replyData))
-					// Create a Producer span for the reply and inject trace context into headers
-					replyCtx, replySpan := tracer.Start(spanCtx, "nats.reply.publish",
-						trace.WithSpanKind(trace.SpanKindProducer),
-						trace.WithAttributes(
-							attribute.String("messaging.system", "nats"),
-							attribute.String("messaging.destination.name", replySubject),
-							attribute.Int("messaging.message.body.size", len(replyData)),
-						),
-					)
-					defer replySpan.End()
-
-					replyMsg := nats.NewMsg(replySubject)
-					replyMsg.Header = make(nats.Header)
-					replyMsg.Data = replyData
-					otel.GetTextMapPropagator().Inject(replyCtx, natsHeaderCarrier(replyMsg.Header))
-
-					if err := r.conn.PublishMsg(replyMsg); err != nil {
-						replySpan.RecordError(err)
-						replySpan.SetStatus(codes.Error, err.Error())
-						logger.Error("Failed to send reply", "reply_subject", replySubject, "error", err.Error())
-						return err
-					}
-					replySpan.SetStatus(codes.Ok, "")
-					return nil
+					return r.publishReply(spanCtx, logger, replySubject, replyData)
 				}
 			}
 
@@ -347,6 +325,113 @@ func (r *MessagingRepository) QueueSubscribeWithReply(ctx context.Context, subje
 
 	r.logger.Info("NATS queue subscription with reply created successfully", "subject", subject, "queue", queue)
 	return nil
+}
+
+// publishReply sends a reply in a Producer span and injects its trace context.
+func (r *MessagingRepository) publishReply(ctx context.Context, logger *slog.Logger, replySubject string, replyData []byte) error {
+	logger.Debug("Sending reply to NATS message", "reply_subject", replySubject, "reply_size", len(replyData))
+	replyCtx, replySpan := tracer.Start(ctx, "nats.reply.publish",
+		trace.WithSpanKind(trace.SpanKindProducer),
+		trace.WithAttributes(
+			attribute.String("messaging.system", "nats"),
+			attribute.String("messaging.destination.name", replySubject),
+			attribute.Int("messaging.message.body.size", len(replyData)),
+		),
+	)
+	defer replySpan.End()
+
+	replyMsg := nats.NewMsg(replySubject)
+	replyMsg.Header = make(nats.Header)
+	replyMsg.Data = replyData
+	otel.GetTextMapPropagator().Inject(replyCtx, natsHeaderCarrier(replyMsg.Header))
+
+	if err := r.conn.PublishMsg(replyMsg); err != nil {
+		replySpan.RecordError(err)
+		replySpan.SetStatus(codes.Error, err.Error())
+		logger.Error("Failed to send reply", "reply_subject", replySubject, "error", err.Error())
+		return err
+	}
+	replySpan.SetStatus(codes.Ok, "")
+	return nil
+}
+
+// QueueSubscribeDispatch subscribes with a queue group and hands each message
+// to dispatch inside the NATS callback, without a goroutine, so delivery
+// order survives until the dispatcher. The processing span ends when
+// dispatch calls reply; the drain wait ends when it calls done.
+func (r *MessagingRepository) QueueSubscribeDispatch(ctx context.Context, subject string, queue string, dispatch contracts.DispatchFunc) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.isShuttingDown {
+		return fmt.Errorf("cannot queue subscribe with dispatch to %s: repository is shutting down", subject)
+	}
+
+	if !r.IsConnected() {
+		return fmt.Errorf("cannot queue subscribe with dispatch to %s: NATS connection not available", subject)
+	}
+
+	r.logger.InfoContext(ctx, "Creating NATS queue subscription with dispatch", "subject", subject, "queue", queue)
+
+	natsHandler := func(msg *nats.Msg) {
+		msgCtx := otel.GetTextMapPropagator().Extract(ctx, natsHeaderCarrier(msg.Header))
+		data := append([]byte(nil), msg.Data...)
+		r.dispatchWg.Add(1)
+		spanCtx, reply := r.dispatchReply(msgCtx, msg.Subject, msg.Reply, len(data))
+		var once sync.Once
+		dispatch(spanCtx, data, msg.Subject, reply, func() { once.Do(r.dispatchWg.Done) })
+	}
+
+	sub, err := r.conn.QueueSubscribe(subject, queue, natsHandler)
+	if err != nil {
+		r.logger.Error("Failed to queue subscribe with dispatch to NATS", "subject", subject, "queue", queue, "error", err.Error())
+		return fmt.Errorf("failed to queue subscribe with dispatch to subject %s with queue %s: %w", subject, queue, err)
+	}
+
+	if err := sub.SetPendingLimits(r.pendingMsgLimit, r.pendingBytesLimit); err != nil {
+		_ = sub.Unsubscribe()
+		return fmt.Errorf("failed to set pending limits on subscription %s: %w", subject, err)
+	}
+
+	r.subscriptions = append(r.subscriptions, sub)
+	r.dispatchSubs = append(r.dispatchSubs, sub)
+
+	r.logger.Info("NATS queue subscription with dispatch created successfully", "subject", subject, "queue", queue)
+	return nil
+}
+
+// dispatchReply starts the processing span for one dispatched message and
+// returns a reply function that publishes at most once, then ends the span.
+func (r *MessagingRepository) dispatchReply(msgCtx context.Context, msgSubject, replySubject string, size int) (context.Context, func([]byte) error) {
+	spanCtx, span := tracer.Start(msgCtx, "nats.process",
+		trace.WithSpanKind(trace.SpanKindConsumer),
+		trace.WithAttributes(
+			attribute.String("messaging.system", "nats"),
+			attribute.String("messaging.destination.name", msgSubject),
+			attribute.String("messaging.operation.type", "process"),
+			attribute.Int("messaging.message.body.size", size),
+		),
+	)
+	spanCtx, logger := logging.WithRequestID(spanCtx, r.logger)
+	logger.Debug("NATS queue message with dispatch received", "subject", msgSubject, "has_reply", replySubject != "")
+
+	var once sync.Once
+	return spanCtx, func(replyData []byte) error {
+		var err error
+		once.Do(func() {
+			defer span.End()
+			if replySubject != "" {
+				err = r.publishReply(spanCtx, logger, replySubject, replyData)
+			}
+			if err != nil {
+				span.RecordError(err)
+				span.SetStatus(codes.Error, err.Error())
+				return
+			}
+			span.SetStatus(codes.Ok, "")
+		})
+		return err
+	}
 }
 
 // Publish publishes a message to NATS
@@ -410,6 +495,44 @@ func (r *MessagingRepository) waitForHandlers(timeout time.Duration) bool {
 	}
 }
 
+// stopDispatch stops the dispatch subscriptions from accepting new requests.
+// A closed or draining connection has already stopped them.
+func (r *MessagingRepository) stopDispatch(subs []*nats.Subscription) {
+	if r.conn == nil || r.conn.IsClosed() || r.conn.IsDraining() {
+		return
+	}
+	for _, sub := range subs {
+		if err := sub.Drain(); err != nil {
+			r.logger.Warn("Failed to drain dispatch subscription", "subject", sub.Subject, "error", err.Error())
+		}
+	}
+}
+
+// waitDispatch waits, bounded by deadline, for every dispatched request to
+// finish, whatever the connection state, because accepted work outlives it.
+// The wait starts only once each subscription has stopped delivering, so no
+// dispatchWg.Add can race it.
+func (r *MessagingRepository) waitDispatch(subs []*nats.Subscription, deadline time.Time) {
+	if len(subs) == 0 {
+		return
+	}
+	for _, sub := range subs {
+		for sub.IsValid() && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	done := make(chan struct{})
+	go func() {
+		r.dispatchWg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Until(deadline)):
+		r.logger.Warn("Timed out waiting for dispatched requests to finish")
+	}
+}
+
 // waitForJetStreamWorkers waits for all goroutines tracked by r.jsWg to finish,
 // bounded by timeout. Returns true if it timed out.
 func (r *MessagingRepository) waitForJetStreamWorkers(timeout time.Duration) bool {
@@ -436,6 +559,7 @@ func (r *MessagingRepository) DrainWithTimeout() error {
 	r.mu.Lock()
 	r.isShuttingDown = true
 	totalSubscriptions := len(r.subscriptions)
+	dispatchSubs := r.dispatchSubs
 	consumeContexts := r.consumeContexts
 	r.consumeContexts = nil
 	r.mu.Unlock()
@@ -444,6 +568,10 @@ func (r *MessagingRepository) DrainWithTimeout() error {
 	// shutdown sequence — consumer stop plus connection drain — is
 	// bounded by drainTimeout.
 	deadline := time.Now().Add(r.drainTimeout)
+
+	// Stop accepting dispatch requests before any wait, so a request cannot
+	// arrive late and find the shared deadline already spent.
+	r.stopDispatch(dispatchSubs)
 
 	// Phase 1: Stop JetStream consumers and wait for each one to fully close.
 	//
@@ -479,6 +607,10 @@ func (r *MessagingRepository) DrainWithTimeout() error {
 	// It is safe to call jsWg.Wait() here because all consumers are fully closed
 	// (cc.Closed() returned above) so no new jsWg.Add(1) calls can fire.
 	jsWorkersTimedOut := r.waitForJetStreamWorkers(time.Until(deadline))
+
+	// Dispatched requests reply and publish post-indexing events after their
+	// NATS callback returns, so they too must finish before conn.Drain().
+	r.waitDispatch(dispatchSubs, deadline)
 
 	r.logger.Info("Starting NATS graceful drain sequence", "timeout", r.drainTimeout, "subscriptions", totalSubscriptions)
 
@@ -627,6 +759,7 @@ func (r *MessagingRepository) Close() error {
 
 	// Clear subscriptions array
 	r.subscriptions = nil
+	r.dispatchSubs = nil
 
 	logger.Info("Subscription cleanup completed",
 		"total_subscriptions", totalSubscriptions,

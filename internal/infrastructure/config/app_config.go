@@ -34,6 +34,11 @@ const auditMaxOpenSearchRequests = 6
 // drains and closes out from under it.
 const drainTimeoutSafetyMargin = 5 * time.Second
 
+// fgaCallTimeout bounds one OpenFGA write on the request/reply path, the same
+// HTTP timeout lfx-v2-fga-sync uses. The request timeout adds it to the ack
+// wait derivation because the FGA half runs alongside the index half.
+const fgaCallTimeout = 8 * time.Second
+
 // AppConfig represents the application configuration
 type AppConfig struct {
 	Server     ServerConfig     `json:"server"`
@@ -84,6 +89,12 @@ type NATSConfig struct {
 	// so multi-replica deployments can size it to aggregate worker
 	// capacity; see NATS_MAX_ACK_PENDING.
 	MaxAckPending int `json:"max_ack_pending"`
+	// IndexerIndexSubject is the core-NATS request/reply subject; see
+	// NATS_INDEXER_INDEX_SUBJECT. It must not overlap IndexingSubject.
+	IndexerIndexSubject string `json:"indexer_index_subject"`
+	// RequestTimeout bounds one request/reply delivery before it replies a
+	// transient timeout; see INDEXER_REQUEST_TIMEOUT.
+	RequestTimeout time.Duration `json:"request_timeout"`
 }
 
 // OpenSearchConfig contains OpenSearch configuration
@@ -156,7 +167,10 @@ func LoadConfig() (*AppConfig, error) {
 			// AckWait default is resolved below, once OpenSearch.Timeout is known.
 			AckWait: getEnvDurationWithLogging("NATS_ACK_WAIT", 0, envVarsUsed, defaultsUsed, logger),
 			// MaxAckPending default is resolved below, once WorkerCount is known.
-			MaxAckPending: getEnvIntWithLogging("NATS_MAX_ACK_PENDING", 0, envVarsUsed, defaultsUsed, logger),
+			MaxAckPending:       getEnvIntWithLogging("NATS_MAX_ACK_PENDING", 0, envVarsUsed, defaultsUsed, logger),
+			IndexerIndexSubject: getEnvStringWithLogging("NATS_INDEXER_INDEX_SUBJECT", constants.AllIndexerIndexSubjects, envVarsUsed, defaultsUsed, logger),
+			// RequestTimeout default is resolved below, once AckWait's inputs are known.
+			RequestTimeout: getEnvDurationWithLogging("INDEXER_REQUEST_TIMEOUT", 0, envVarsUsed, defaultsUsed, logger),
 		},
 		OpenSearch: OpenSearchConfig{
 			URL:          getEnvStringWithLogging("OPENSEARCH_URL", "http://localhost:9200", envVarsUsed, defaultsUsed, logger),
@@ -245,6 +259,14 @@ func LoadConfig() (*AppConfig, error) {
 		defaultsUsed["NATS_MAX_ACK_PENDING"] = true
 	}
 
+	switch {
+	case config.NATS.RequestTimeout < 0:
+		return nil, fmt.Errorf("INDEXER_REQUEST_TIMEOUT must not be negative, got: %v", config.NATS.RequestTimeout)
+	case config.NATS.RequestTimeout == 0:
+		config.NATS.RequestTimeout = config.minimumRequestTimeout()
+		defaultsUsed["INDEXER_REQUEST_TIMEOUT"] = true
+	}
+
 	// Log configuration summary
 	logger.Info("Configuration loading completed",
 		"env_vars_used", len(envVarsUsed),
@@ -265,6 +287,7 @@ func (c *AppConfig) Validate() error {
 	}{
 		{"server", c.validateServer},
 		{"nats", c.validateNATS},
+		{"indexer index", c.validateIndexerIndex},
 		{"opensearch", c.validateOpenSearch},
 		{"jwt", c.validateJWT},
 		{"logging", c.validateLogging},
@@ -408,6 +431,41 @@ func (c *AppConfig) validateNATS() error {
 	}
 
 	return nil
+}
+
+// validateIndexerIndex keeps the request/reply subject parseable and out of
+// the JetStream path, and its timeout no shorter than the derived default.
+func (c *AppConfig) validateIndexerIndex() error {
+	if !strings.HasPrefix(c.NATS.IndexerIndexSubject, constants.IndexerIndexPrefix) {
+		return fmt.Errorf("NATS indexer index subject must start with %s, got: %q", constants.IndexerIndexPrefix, c.NATS.IndexerIndexSubject)
+	}
+	if subjectsOverlap(c.NATS.IndexerIndexSubject, c.NATS.IndexingSubject) {
+		return fmt.Errorf("NATS indexer index subject %q must not overlap the indexing subject %q", c.NATS.IndexerIndexSubject, c.NATS.IndexingSubject)
+	}
+	if minimum := c.minimumRequestTimeout(); c.NATS.RequestTimeout < minimum {
+		return fmt.Errorf("indexer request timeout (%v) must be at least the ack wait derivation plus the FGA call timeout (%v)", c.NATS.RequestTimeout, minimum)
+	}
+	return nil
+}
+
+// minimumRequestTimeout lets the index half use its whole ack-wait budget
+// while the FGA half runs alongside it.
+func (c *AppConfig) minimumRequestTimeout() time.Duration {
+	return c.minimumAckWait() + fgaCallTimeout
+}
+
+// subjectsOverlap reports whether some subject matches both NATS patterns.
+func subjectsOverlap(a, b string) bool {
+	left, right := strings.Split(a, "."), strings.Split(b, ".")
+	for i := 0; i < len(left) && i < len(right); i++ {
+		if left[i] == ">" || right[i] == ">" {
+			return true
+		}
+		if left[i] != "*" && right[i] != "*" && left[i] != right[i] {
+			return false
+		}
+	}
+	return len(left) == len(right)
 }
 
 // minimumAckWait covers the larger legacy-batch or audited multi-request budget

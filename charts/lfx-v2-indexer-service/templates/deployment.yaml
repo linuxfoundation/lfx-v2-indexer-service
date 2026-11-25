@@ -101,6 +101,12 @@ spec:
               value: {{ .Values.nats.connectionTimeout }}
             - name: NATS_INDEXING_SUBJECT
               value: {{ .Values.nats.indexingSubject }}
+            - name: NATS_INDEXER_INDEX_SUBJECT
+              value: {{ .Values.nats.indexerIndexSubject | quote }}
+            {{- with .Values.nats.requestTimeout }}
+            - name: INDEXER_REQUEST_TIMEOUT
+              value: {{ . | quote }}
+            {{- end }}
             - name: NATS_QUEUE
               value: {{ .Values.messaging.queue }}
             - name: NATS_DRAIN_TIMEOUT

@@ -32,8 +32,10 @@ func baseValidConfig() *AppConfig {
 			WorkerCount:       10,
 			// Must exceed OpenSearch.Timeout (30s) + OpenSearch.BatchMaxWait
 			// (200ms) + ackWaitSafetyMargin (10s) = 40.2s.
-			AckWait:       45 * time.Second,
-			MaxAckPending: 10,
+			AckWait:             45 * time.Second,
+			MaxAckPending:       10,
+			IndexerIndexSubject: "lfx.indexer.index.>",
+			RequestTimeout:      30*time.Second + 200*time.Millisecond + 10*time.Second + 8*time.Second,
 		},
 		OpenSearch: OpenSearchConfig{
 			URL:          "http://opensearch:9200",
@@ -335,4 +337,78 @@ func TestLoadConfig_NegativeAckWaitIsRejected(t *testing.T) {
 	_, err := LoadConfig()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "NATS_ACK_WAIT")
+}
+
+func TestLoadConfig_IndexerIndexDefaults(t *testing.T) {
+	t.Setenv("NATS_INDEXER_INDEX_SUBJECT", "")
+	t.Setenv("INDEXER_REQUEST_TIMEOUT", "")
+	t.Setenv("OPENSEARCH_TIMEOUT", "")
+	t.Setenv("OPENSEARCH_BATCH_MAX_WAIT", "")
+
+	cfg, err := LoadConfig()
+	require.NoError(t, err)
+	assert.Equal(t, "lfx.indexer.index.>", cfg.NATS.IndexerIndexSubject)
+	assert.Equal(t, 48*time.Second+200*time.Millisecond, cfg.NATS.RequestTimeout,
+		"default request timeout should be the ack wait derivation plus the 8s FGA call timeout")
+	require.NoError(t, cfg.Validate())
+}
+
+func TestLoadConfig_NegativeRequestTimeoutIsRejected(t *testing.T) {
+	t.Setenv("INDEXER_REQUEST_TIMEOUT", "-1s")
+
+	_, err := LoadConfig()
+	require.ErrorContains(t, err, "INDEXER_REQUEST_TIMEOUT")
+}
+
+func TestValidateIndexerIndex(t *testing.T) {
+	cases := []struct {
+		name            string
+		subject         string
+		indexingSubject string
+		timeout         time.Duration
+		wantError       string
+	}{
+		{"default subject", "lfx.indexer.index.>", "lfx.index.>", 48200 * time.Millisecond, ""},
+		{"one object type", "lfx.indexer.index.committee", "lfx.index.>", 48200 * time.Millisecond, ""},
+		{"empty subject", "", "lfx.index.>", 48200 * time.Millisecond, "must start with"},
+		{"jetstream subject", "lfx.index.>", "lfx.index.>", 48200 * time.Millisecond, "must start with"},
+		{"overlaps a wildcard indexing subject", "lfx.indexer.index.>", "lfx.>", 48200 * time.Millisecond, "must not overlap"},
+		{"overlaps a token wildcard", "lfx.indexer.index.committee", "lfx.*.index.committee", 48200 * time.Millisecond, "must not overlap"},
+		{"timeout below the derived minimum", "lfx.indexer.index.>", "lfx.index.>", 48 * time.Second, "request timeout"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := baseValidConfig()
+			cfg.NATS.IndexerIndexSubject = tc.subject
+			cfg.NATS.IndexingSubject = tc.indexingSubject
+			cfg.NATS.RequestTimeout = tc.timeout
+			err := cfg.validateIndexerIndex()
+			if tc.wantError == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tc.wantError)
+		})
+	}
+}
+
+func TestSubjectsOverlap(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want bool
+	}{
+		{"lfx.indexer.index.>", "lfx.index.>", false},
+		{"lfx.indexer.index.>", "lfx.>", true},
+		{"lfx.indexer.index.>", ">", true},
+		{"lfx.indexer.index.a", "lfx.indexer.*.a", true},
+		{"lfx.indexer.index.a", "lfx.indexer.index.b", false},
+		{"lfx.indexer.index", "lfx.indexer.index.>", false},
+		{"lfx.indexer.index.a", "lfx.indexer.index.a.b", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.a+" vs "+tc.b, func(t *testing.T) {
+			assert.Equal(t, tc.want, subjectsOverlap(tc.a, tc.b))
+			assert.Equal(t, tc.want, subjectsOverlap(tc.b, tc.a))
+		})
+	}
 }
