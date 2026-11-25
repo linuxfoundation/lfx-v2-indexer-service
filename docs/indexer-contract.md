@@ -447,6 +447,9 @@ plus two optional fields.
   `indexing_config` and no `data`.
 - `fga` and `sync` are accepted only on this subject. On `lfx.index.*` an audit
   version 2 envelope carrying them is rejected as an unknown field.
+- A request with `fga` and `audit.origin` `historical_import` replies
+  `ERROR: rejected: fga: ...` before either half runs, because importing
+  history creates no FGA grants.
 
 ### Reply body
 

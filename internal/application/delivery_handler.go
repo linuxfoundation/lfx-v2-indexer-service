@@ -15,6 +15,7 @@ import (
 	"github.com/linuxfoundation/lfx-v2-indexer-service/internal/domain/contracts"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/constants"
 	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/logging"
+	"github.com/linuxfoundation/lfx-v2-indexer-service/pkg/types"
 )
 
 // cacheInvalidationTimeout bounds the cache invalidation and seed after a
@@ -227,8 +228,11 @@ type deliveryFields struct {
 	IndexingConfig *struct {
 		ObjectID string `json:"object_id"`
 	} `json:"indexing_config"`
-	FGA  json.RawMessage `json:"fga"`
-	Sync bool            `json:"sync"`
+	FGA   json.RawMessage `json:"fga"`
+	Sync  bool            `json:"sync"`
+	Audit *struct {
+		Origin string `json:"origin"`
+	} `json:"audit"`
 }
 
 func (f deliveryFields) isDelete() bool {
@@ -277,6 +281,10 @@ func parseDeliveryRequest(data []byte, subject string) (*deliveryRequest, *deliv
 	req := &deliveryRequest{subject: subject, objectType: objectType, sync: envelope.Sync}
 	if present(envelope.FGA) {
 		req.fga = envelope.FGA
+	}
+	// Imported history must never change live access.
+	if req.fga != nil && envelope.Audit != nil && envelope.Audit.Origin == string(types.AuditOriginHistoricalImport) {
+		return nil, rejected(halfFGA, "fga is not allowed with audit origin historical_import")
 	}
 	id, failure := objectID(envelope, req.fga)
 	if failure != nil {
