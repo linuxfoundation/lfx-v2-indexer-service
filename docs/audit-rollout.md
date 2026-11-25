@@ -177,7 +177,21 @@ coordinated with source exports, manifests, outboxes and backups.
    or delivery-receipt access. Set `opensearch.auth.existingSecret` for the restricted
    indexer runtime role, and `opensearch.auth.provisioningSecret` separately
    for the chart's short-lived mapping Jobs. Helm's auth flag alone does not
-   create roles or protect an open cluster.
+   create roles or protect an open cluster. One Secret per namespace can hold
+   both credential pairs: set `opensearch.auth.usernameKey`/`passwordKey` and
+   `provisioningUsernameKey`/`provisioningPasswordKey` (default `username`/`password`).
+
+   **Credentials are optional.** On a domain that does not enforce access control
+   yet, audit can run with `opensearch.auth.enabled=false`: the indexer and setup
+   Jobs use the domain unauthenticated, exactly as current-resource indexing does,
+   and the indexer logs a startup warning. The private history and delivery-receipt
+   indexes are then **protected only by network access**: any client that can reach
+   the domain can read them, bypassing the history query service's authorization.
+   Use this only where that exposure is accepted (for example, a development
+   environment with the same reach as its current-resource index), and do not
+   enable audit in an environment whose history must be private until its domain
+   enforces access control and the restricted roles above are in place. A partial
+   credential pair (username without password, or the reverse) is still rejected.
    Audit mapping checks, history/receipt operations, audited projections, and
    the shared janitor in audit-enabled deployments use a separate HTTP client
    without tracing instrumentation. It preserves the same runtime credentials,
@@ -200,7 +214,8 @@ coordinated with source exports, manifests, outboxes and backups.
    each chosen type. Even the first type must be marked required at this stage:
    disabled audit processing cannot consume its backfill, and enabled startup
    requires at least one required type with an approved mutation schema.
-   Enable all required private-index/projection-mapping hooks and OpenSearch auth.
+   Enable all required private-index/projection-mapping hooks, and OpenSearch auth
+   where the domain enforces access control (see step 2).
    Configure each timeout to cover the larger of its audited and legacy budgets:
    - ACK wait: `max(6 × OPENSEARCH_TIMEOUT + 45s, OPENSEARCH_TIMEOUT + OPENSEARCH_BATCH_MAX_WAIT) + 10s`.
    - Drain timeout: `max(6 × OPENSEARCH_TIMEOUT + 45s, OPENSEARCH_TIMEOUT + OPENSEARCH_BATCH_MAX_WAIT) + 5s`.

@@ -122,16 +122,25 @@ opensearch:
     # independently of audit.enabled.
     enabled: false
     # existingSecret is the name of an existing secret containing credentials.
-    # Required when enabled is true; the secret must have 'username' and
-    # 'password' keys. Plaintext credentials are not accepted here to avoid
+    # Required when enabled is true; the secret must have the usernameKey and
+    # passwordKey keys. Plaintext credentials are not accepted here to avoid
     # committing secrets to VCS in GitOps workflows.
     existingSecret: ""
+    # usernameKey and passwordKey are the keys in existingSecret holding the
+    # runtime credentials, so one Secret per namespace can hold several.
+    usernameKey: username
+    passwordKey: password
     # Separate existing Secret with index-admin privileges for the history,
     # audit-deliveries, and audited projection-mapping setup Jobs. The
     # current-resource index Job also prefers it over existingSecret when set.
     # The app's existingSecret should have indexer writer/read-back privileges,
-    # not index-admin privileges.
+    # not index-admin privileges. It may be the same Secret as existingSecret
+    # with different keys.
     provisioningSecret: ""
+    # provisioningUsernameKey and provisioningPasswordKey are the keys in
+    # provisioningSecret holding the provisioning credentials.
+    provisioningUsernameKey: username
+    provisioningPasswordKey: password
   # indexingJob is the configuration for the OpenSearch index creation job
   indexingJob:
     # enabled is a boolean to determine if the indexing job should be created.
@@ -194,6 +203,14 @@ heimdall:
 # Audited processing is off until all indexer replicas, the publisher's
 # approved immutable schema and the private OpenSearch index are ready.
 audit:
+  # OpenSearch credentials are optional for audit, as for current-resource
+  # indexing: with opensearch.auth.enabled false the indexer and setup Jobs use
+  # the domain unauthenticated, and the private resource-history-v1 and
+  # resource-audit-deliveries-v1 indexes are then protected only by network
+  # access, like the current-resource index. Enable opensearch.auth (with a
+  # restricted runtime role and a provisioningSecret) once the domain enforces
+  # access control. See docs/audit-rollout.md.
+  #
   # With the default 30s OpenSearch timeout, enabling audit requires at least
   # nats.ackWait=235s (or 0s for automatic derivation), drainTimeout=230s,
   # and app.terminationGracePeriodSeconds=235. This covers six OpenSearch

@@ -384,6 +384,9 @@ func (c *Container) initializeApplication() error {
 		c.Config.NATS.IndexingSubject,
 	)
 	if c.Config.Audit.Enabled {
+		if c.Config.OpenSearch.Username == "" && c.Logger != nil {
+			c.Logger.Warn("audited ingestion is running without OpenSearch credentials; the private history and audit delivery indexes are protected only by network access")
+		}
 		if err := storage.VerifyAuditMappings(context.Background(), c.AuditOpenSearchClient, c.Config.OpenSearch.Index, c.Config.OpenSearch.Timeout); err != nil {
 			return fmt.Errorf("audited index mappings not ready: %w", err)
 		}

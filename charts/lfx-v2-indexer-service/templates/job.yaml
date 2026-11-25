@@ -35,17 +35,23 @@ spec:
           {{- end }}
           {{- if .Values.opensearch.auth.enabled }}
           {{- $secretName := required "opensearch.auth.existingSecret or provisioningSecret is required when opensearch.auth.enabled is true" (default .Values.opensearch.auth.existingSecret .Values.opensearch.auth.provisioningSecret) }}
+          {{- $usernameKey := default "username" .Values.opensearch.auth.usernameKey }}
+          {{- $passwordKey := default "password" .Values.opensearch.auth.passwordKey }}
+          {{- if .Values.opensearch.auth.provisioningSecret }}
+          {{- $usernameKey = default "username" .Values.opensearch.auth.provisioningUsernameKey }}
+          {{- $passwordKey = default "password" .Values.opensearch.auth.provisioningPasswordKey }}
+          {{- end }}
           env:
             - name: OPENSEARCH_USERNAME
               valueFrom:
                 secretKeyRef:
                   name: {{ $secretName }}
-                  key: username
+                  key: {{ $usernameKey | quote }}
             - name: OPENSEARCH_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ $secretName }}
-                  key: password
+                  key: {{ $passwordKey | quote }}
           {{- end }}
           securityContext:
             allowPrivilegeEscalation: false

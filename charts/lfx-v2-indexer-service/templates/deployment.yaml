@@ -24,8 +24,7 @@ would reject those other equally valid overrides.
 apiVersion: apps/v1
 kind: Deployment
 {{- if .Values.audit.enabled }}
-{{- if not .Values.opensearch.auth.enabled }}{{ fail "audit.enabled requires opensearch.auth.enabled" }}{{- end }}
-{{- if empty .Values.opensearch.auth.provisioningSecret }}{{ fail "audit.enabled requires opensearch.auth.provisioningSecret for mapping Jobs" }}{{- end }}
+{{- if and .Values.opensearch.auth.enabled (empty .Values.opensearch.auth.provisioningSecret) }}{{ fail "audit.enabled with opensearch.auth.enabled requires opensearch.auth.provisioningSecret for mapping Jobs" }}{{- end }}
 {{- if not .Values.opensearch.history.indexingJob.enabled }}{{ fail "audit.enabled requires the history index setup job" }}{{- end }}
 {{- if not .Values.opensearch.auditDelivery.indexingJob.enabled }}{{ fail "audit.enabled requires the audit deliveries index setup job" }}{{- end }}
 {{- if not .Values.opensearch.auditProjectionMappingJob.enabled }}{{ fail "audit.enabled requires the audited projection mapping job" }}{{- end }}
@@ -137,12 +136,12 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: {{ $secretName }}
-                  key: username
+                  key: {{ default "username" .Values.opensearch.auth.usernameKey | quote }}
             - name: OPENSEARCH_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ $secretName }}
-                  key: password
+                  key: {{ default "password" .Values.opensearch.auth.passwordKey | quote }}
             {{- end }}
             {{- if .Values.audit.enabled }}
             - name: AUDIT_ENABLED

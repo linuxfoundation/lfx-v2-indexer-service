@@ -31,8 +31,8 @@ func TestAuditConfig_RequiredTypeGrammar(t *testing.T) {
 	}
 }
 
-// TestAuditConfig_FailClosed requires explicit publisher policy and private
-// credentials before audited ingestion can be enabled.
+// TestAuditConfig_FailClosed requires explicit publisher policy before audited
+// ingestion can be enabled. Credentials are optional but never partial.
 func TestAuditConfig_FailClosed(t *testing.T) {
 	for _, tt := range []struct {
 		name      string
@@ -42,10 +42,15 @@ func TestAuditConfig_FailClosed(t *testing.T) {
 	}{
 		{name: "disabled by default"},
 		{name: "missing policy", env: map[string]string{"AUDIT_ENABLED": "true", "AUDIT_REQUIRED_TYPES": "fixture_resource", "OPENSEARCH_USERNAME": "fixture", "OPENSEARCH_PASSWORD": "fixture"}, wantError: "AUDIT_POLICY_FILE", wantTypes: 1},
-		{name: "missing credentials", env: map[string]string{"AUDIT_ENABLED": "true", "AUDIT_REQUIRED_TYPES": "fixture_resource", "AUDIT_POLICY_FILE": "/fixtures/policy.json"}, wantError: "authenticated OpenSearch credentials", wantTypes: 1},
+		{name: "without credentials", env: map[string]string{"AUDIT_ENABLED": "true", "AUDIT_REQUIRED_TYPES": "fixture_resource", "AUDIT_POLICY_FILE": "/fixtures/policy.json"}, wantTypes: 1},
+		{name: "username without password", env: map[string]string{"AUDIT_ENABLED": "true", "AUDIT_REQUIRED_TYPES": "fixture_resource", "AUDIT_POLICY_FILE": "/fixtures/policy.json", "OPENSEARCH_USERNAME": "fixture"}, wantError: "set together", wantTypes: 1},
+		{name: "password without username", env: map[string]string{"AUDIT_ENABLED": "true", "AUDIT_REQUIRED_TYPES": "fixture_resource", "AUDIT_POLICY_FILE": "/fixtures/policy.json", "OPENSEARCH_PASSWORD": "fixture"}, wantError: "set together", wantTypes: 1},
 		{name: "valid", env: map[string]string{"AUDIT_ENABLED": "true", "AUDIT_REQUIRED_TYPES": "fixture_resource", "AUDIT_POLICY_FILE": "/fixtures/policy.json", "OPENSEARCH_USERNAME": "fixture", "OPENSEARCH_PASSWORD": "fixture"}, wantTypes: 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			// Never inherit credentials from the caller's environment.
+			t.Setenv("OPENSEARCH_USERNAME", "")
+			t.Setenv("OPENSEARCH_PASSWORD", "")
 			for key, value := range tt.env {
 				t.Setenv(key, value)
 			}

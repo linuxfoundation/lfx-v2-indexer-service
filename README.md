@@ -357,8 +357,10 @@ NATS_PENDING_BYTES_LIMIT=536870912           # Max pending bytes buffered per su
 OPENSEARCH_TIMEOUT=30s                       # Response header timeout for direct (non-batched) calls — body reads are not bounded there. Batch flushes (BatchIndexer) apply it as an end-to-end deadline covering the whole bulk request, body reads included
 OPENSEARCH_BATCH_MAX_SIZE=50                 # Max documents buffered before a bulk flush
 OPENSEARCH_BATCH_MAX_WAIT=200ms              # Max time to wait before flushing a partial batch
-# Optional for all OpenSearch traffic, required when AUDIT_ENABLED=true.
-# Supply OPENSEARCH_USERNAME / OPENSEARCH_PASSWORD from a secret, not source control.
+# Optional for all OpenSearch traffic, including AUDIT_ENABLED=true (without them the
+# private audit indexes are protected only by network access; see docs/audit-rollout.md).
+# Set both or neither. Supply OPENSEARCH_USERNAME / OPENSEARCH_PASSWORD from a secret,
+# not source control.
 
 # Audited history (disabled by default; see docs/audit-rollout.md)
 AUDIT_ENABLED=false
