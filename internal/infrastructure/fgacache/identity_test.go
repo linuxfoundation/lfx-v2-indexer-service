@@ -45,7 +45,7 @@ func runIdentityConformance(t *testing.T, fresh func(*testing.T) identityBackend
 			assert.True(t, hit)
 			assert.Equal(t, result, got)
 
-			_, err = c.Invalidate(ctx)
+			_, err = invalidate(ctx, c)
 			require.NoError(t, err)
 			got, hit, err = c.GetIdentity(ctx, "testuser01")
 			require.NoError(t, err)

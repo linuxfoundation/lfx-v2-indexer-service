@@ -288,17 +288,22 @@ func (s *valkeyStore) Set(ctx context.Context, results map[string]bool, m contra
 }
 
 // Invalidate returns the counter its own HINCRBY produced, never a later
-// writer's.
-func (s *valkeyStore) Invalidate(ctx context.Context) (contracts.InvalidationMarker, error) {
+// writer's. Each invalidation raises the counter by exactly one within a
+// generation, so it was the only one since before when it raised before's
+// counter by one.
+func (s *valkeyStore) Invalidate(
+	ctx context.Context, before contracts.InvalidationMarker,
+) (contracts.InvalidationMarker, bool, error) {
 	client, err := s.connected(ctx)
 	if err != nil {
-		return contracts.InvalidationMarker{}, err
+		return contracts.InvalidationMarker{}, false, err
 	}
 	m, err := runMarker(ctx, client, raiseMarker)
 	if err != nil {
-		return contracts.InvalidationMarker{}, fmt.Errorf("raise invalidation marker: %w", err)
+		return contracts.InvalidationMarker{}, false, fmt.Errorf("raise invalidation marker: %w", err)
 	}
-	return m, nil
+	onlyMine := m.Generation() == before.Generation() && m.Counter() == before.Counter()+1
+	return m, onlyMine, nil
 }
 
 func (s *valkeyStore) Seed(ctx context.Context, relationKeys []string, m contracts.InvalidationMarker) error {

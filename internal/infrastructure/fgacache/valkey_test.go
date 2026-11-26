@@ -95,7 +95,7 @@ func TestValkey_EntriesExpireAndTheMarkerNever(t *testing.T) {
 	m, err := s.CurrentMarker(ctx)
 	require.NoError(t, err)
 	require.NoError(t, s.Set(ctx, map[string]bool{"obj:1#viewer@user:a": true, "obj:1#viewer@user:b": false}, m))
-	seedMarker, err := s.Invalidate(ctx)
+	seedMarker, err := invalidate(ctx, s)
 	require.NoError(t, err)
 	require.NoError(t, s.Seed(ctx, []string{"obj:1#writer@user:a"}, seedMarker))
 
@@ -250,15 +250,34 @@ func TestValkey_MissingMarkerStartsANewGeneration(t *testing.T) {
 	again, err := s.CurrentMarker(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, m, again, "reading does not move the marker")
-	raised, err := s.Invalidate(ctx)
+	raised, err := invalidate(ctx, s)
 	require.NoError(t, err)
 	assert.Equal(t, contracts.NewCounterMarker(m.Generation(), 1), raised)
 
 	require.NoError(t, raw.Do(ctx, raw.B().Flushdb().Build()).Error())
-	raisedAfterLoss, err := s.Invalidate(ctx)
+	raisedAfterLoss, err := invalidate(ctx, s)
 	require.NoError(t, err)
 	assert.NotEqual(t, m.Generation(), raisedAfterLoss.Generation())
 	assert.Equal(t, int64(1), raisedAfterLoss.Counter())
+}
+
+// After Valkey loses its contents the first invalidation has counter 1 again,
+// which must not pass for the one after a marker read at counter 0.
+func TestValkey_InvalidationAfterLossIsNotOnlyMine(t *testing.T) {
+	addr := valkeyAddr(t)
+	ctx := testContext(t)
+	s := freshValkeyStore(t, addr)
+	raw := rawValkey(t, addr)
+
+	before, err := s.CurrentMarker(ctx)
+	require.NoError(t, err)
+	require.Zero(t, before.Counter())
+	require.NoError(t, raw.Do(ctx, raw.B().Flushdb().Build()).Error())
+
+	m, onlyMine, err := s.Invalidate(ctx, before)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), m.Counter())
+	assert.False(t, onlyMine)
 }
 
 // A check reads the marker, computes "allowed", and is delayed. Access is
@@ -294,7 +313,7 @@ func TestValkey_ResultFromBeforeLostContentsNeverBecomesFresh(t *testing.T) {
 
 			beforeCheck, err := s.CurrentMarker(ctx)
 			require.NoError(t, err)
-			_, err = s.Invalidate(ctx)
+			_, err = invalidate(ctx, s)
 			require.NoError(t, err)
 			tt.lose(t, s, raw, beforeCheck)
 
@@ -348,7 +367,7 @@ func TestValkey_StalledHandshakeHonorsCallerDeadline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	_, err := s.Invalidate(ctx)
+	_, err := invalidate(ctx, s)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.Less(t, time.Since(start), 200*time.Millisecond)
 
@@ -416,6 +435,6 @@ func TestValkeyStore_ConnectsWithURLAddress(t *testing.T) {
 	s := newValkeyStore(cfg)
 	t.Cleanup(s.close)
 	require.NoError(t, s.connect(testContext(t)))
-	_, err := s.Invalidate(testContext(t))
+	_, err := invalidate(testContext(t), s)
 	require.NoError(t, err)
 }

@@ -60,7 +60,7 @@ func runConformance(t *testing.T, b conformanceBackend) {
 		require.NoError(t, err)
 		require.NoError(t, c.Set(ctx, map[string]bool{"obj:3#writer@user:a": true}, before))
 
-		_, err = c.Invalidate(ctx)
+		_, err = invalidate(ctx, c)
 		require.NoError(t, err)
 
 		after, err := c.CurrentMarker(ctx)
@@ -73,7 +73,7 @@ func runConformance(t *testing.T, b conformanceBackend) {
 	t.Run("seed after invalidation is fresh", func(t *testing.T) {
 		ctx := testContext(t)
 		c := b.fresh(t)
-		m, err := c.Invalidate(ctx)
+		m, err := invalidate(ctx, c)
 		require.NoError(t, err)
 		require.NoError(t, c.Seed(ctx, []string{"obj:4#writer@user:a"}, m))
 
@@ -91,7 +91,7 @@ func runConformance(t *testing.T, b conformanceBackend) {
 		require.NoError(t, err)
 
 		// Another writer revokes access while this check is talking to OpenFGA.
-		_, err = c.Invalidate(ctx)
+		_, err = invalidate(ctx, c)
 		require.NoError(t, err)
 
 		require.NoError(t, c.Set(ctx, map[string]bool{"obj:6#writer@user:a": true}, beforeCheck))
@@ -133,19 +133,70 @@ func runConformance(t *testing.T, b conformanceBackend) {
 			go func() {
 				defer wg.Done()
 				for range 5 {
-					_, err := c.Invalidate(ctx)
+					_, err := invalidate(ctx, c)
 					assert.NoError(t, err)
 				}
 			}()
 		}
 		wg.Wait()
 
-		latest, err := c.Invalidate(ctx)
+		latest, err := invalidate(ctx, c)
 		require.NoError(t, err)
 		got, err := c.Get(ctx, keys, latest)
 		require.NoError(t, err)
 		assert.Empty(t, got, "every entry was written before the latest invalidation")
 	})
+
+	for _, existing := range []bool{false, true} {
+		name := map[bool]string{false: "no marker yet", true: "existing marker"}[existing]
+
+		t.Run("invalidation is only mine when none landed since the marker, "+name, func(t *testing.T) {
+			ctx := testContext(t)
+			c := b.fresh(t)
+			if existing {
+				_, err := invalidate(ctx, c)
+				require.NoError(t, err)
+			}
+			before, err := c.CurrentMarker(ctx)
+			require.NoError(t, err)
+
+			m, onlyMine, err := c.Invalidate(ctx, before)
+			require.NoError(t, err)
+			assert.True(t, onlyMine)
+			require.NoError(t, c.Seed(ctx, []string{"obj:7#writer@user:a"}, m))
+			current, err := c.CurrentMarker(ctx)
+			require.NoError(t, err)
+			got, err := c.Get(ctx, []string{"obj:7#writer@user:a"}, current)
+			require.NoError(t, err)
+			assert.Equal(t, map[string]bool{"obj:7#writer@user:a": true}, got)
+		})
+
+		t.Run("invalidation is not only mine when another landed since the marker, "+name, func(t *testing.T) {
+			ctx := testContext(t)
+			c := b.fresh(t)
+			if existing {
+				_, err := invalidate(ctx, c)
+				require.NoError(t, err)
+			}
+			before, err := c.CurrentMarker(ctx)
+			require.NoError(t, err)
+
+			// Another writer invalidates while this one is writing to OpenFGA,
+			// and a check caches a result after it.
+			other, err := invalidate(ctx, c)
+			require.NoError(t, err)
+			require.NoError(t, c.Set(ctx, map[string]bool{"obj:8#writer@user:a": true}, other))
+
+			_, onlyMine, err := c.Invalidate(ctx, before)
+			require.NoError(t, err)
+			assert.False(t, onlyMine)
+			current, err := c.CurrentMarker(ctx)
+			require.NoError(t, err)
+			got, err := c.Get(ctx, []string{"obj:8#writer@user:a"}, current)
+			require.NoError(t, err)
+			assert.Empty(t, got, "the marker still advances when the invalidation was overtaken")
+		})
+	}
 
 	t.Run("health check", func(t *testing.T) {
 		ctx := testContext(t)
@@ -155,6 +206,13 @@ func runConformance(t *testing.T, b conformanceBackend) {
 		defer cancel()
 		assert.Error(t, b.unreachable(t).HealthCheck(shortCtx))
 	})
+}
+
+// invalidate records an invalidation for a writer that read no marker first,
+// as tests that only need the marker to advance do.
+func invalidate(ctx context.Context, c contracts.FGACache) (contracts.InvalidationMarker, error) {
+	m, _, err := c.Invalidate(ctx, contracts.InvalidationMarker{})
+	return m, err
 }
 
 func testContext(t *testing.T) context.Context {

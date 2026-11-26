@@ -14,12 +14,15 @@ import (
 const meterName = "github.com/linuxfoundation/lfx-v2-indexer-service/internal/infrastructure/fgacache"
 
 // cacheMetrics counts how the cache answered. Hits and misses count relation
-// keys; errors and bypasses count calls.
+// keys; errors, bypasses, and overtaken invalidations count calls. A write
+// whose marker read failed is passed an empty marker, so it counts as
+// overtaken whenever an invalidation exists.
 type cacheMetrics struct {
-	hits     metric.Int64Counter
-	misses   metric.Int64Counter
-	errors   metric.Int64Counter
-	bypasses metric.Int64Counter
+	hits      metric.Int64Counter
+	misses    metric.Int64Counter
+	errors    metric.Int64Counter
+	bypasses  metric.Int64Counter
+	overtakes metric.Int64Counter
 }
 
 // defaultMetrics uses the global provider, which forwards to whichever
@@ -35,6 +38,9 @@ func newCacheMetrics(provider metric.MeterProvider) *cacheMetrics {
 		misses:   newCounter(meter, "fga_cache.misses", "{key}", "Relation keys absent or stale in the FGA cache"),
 		errors:   newCounter(meter, "fga_cache.errors", "{call}", "FGA cache calls that failed in the store"),
 		bypasses: newCounter(meter, "fga_cache.bypasses", "{call}", "FGA cache calls skipped because the cache was down or saturated"),
+		overtakes: newCounter(meter, "fga_cache.invalidations_overtaken", "{call}",
+			"FGA invalidations that could not show they were the only one since the write's marker read; "+
+				"their seeds are skipped"),
 	}
 }
 
@@ -57,4 +63,8 @@ func (m *cacheMetrics) storeError(ctx context.Context) {
 
 func (m *cacheMetrics) bypass(ctx context.Context) {
 	m.bypasses.Add(ctx, 1)
+}
+
+func (m *cacheMetrics) overtaken(ctx context.Context) {
+	m.overtakes.Add(ctx, 1)
 }

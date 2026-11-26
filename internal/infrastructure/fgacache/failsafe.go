@@ -224,14 +224,19 @@ func (c *failSafe) Set(ctx context.Context, results map[string]bool, m contracts
 // Invalidate always reaches the store, even while this replica believes it is
 // down and without waiting for the budget: the store is shared with
 // lfx-v2-fga-sync, so a skipped invalidation would leave its entries fresh.
-func (c *failSafe) Invalidate(ctx context.Context) (contracts.InvalidationMarker, error) {
+func (c *failSafe) Invalidate(
+	ctx context.Context, before contracts.InvalidationMarker,
+) (contracts.InvalidationMarker, bool, error) {
 	callCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	m, err := c.inner.Invalidate(callCtx)
+	m, onlyMine, err := c.inner.Invalidate(callCtx, before)
 	if err := c.result(ctx, err); err != nil {
-		return contracts.InvalidationMarker{}, err
+		return contracts.InvalidationMarker{}, false, err
 	}
-	return m, nil
+	if !onlyMine {
+		c.metrics.overtaken(ctx)
+	}
+	return m, onlyMine, nil
 }
 
 func (c *failSafe) Seed(ctx context.Context, relationKeys []string, m contracts.InvalidationMarker) error {
