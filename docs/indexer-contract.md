@@ -574,6 +574,36 @@ subject, point the indexer at the same cache fga-sync uses: the same
 `CACHE_BACKEND`, and the same `CACHE_BUCKET` on the same NATS server for
 `natskv`, or the same `VALKEY_ADDR` for `valkey`.
 
+The indexer records only the global `inv` marker, but it also writes the
+tuples it granted to the cache. On `natskv` it skips those entries, or removes
+them, when one of fga-sync's narrower markers for them (`inv.t.<type>`,
+`inv.u.<type>.<user>`) was written during the operation, or when
+`OPENFGA_AUTH_MODEL_ID` is set and `inv.model` names another model. fga-sync in
+scoped invalidation mode records a revocation only in those markers, so an
+entry written over one would undo it. Once `inv.model` has named another
+model, the entries stay skipped while the marker is missing, until it names
+the pinned model again or the indexer restarts.
+
+### Moving from `lfx.fga-sync.*`
+
+lfx-v2-fga-sync keeps serving `lfx.fga-sync.update_access`, `delete_access`,
+`member_put` and `member_remove` until every producer has moved; this service
+does not subscribe to them. A producer moves an object type's FGA messages to
+the `fga` block in one release and stops publishing them to `lfx.fga-sync.*`
+in the same release, so only one service writes that type's tuples. The
+object types and their operations are listed in
+[fga-protected-types.md](fga-protected-types.md).
+
+The release alone does not make the indexer the only writer. fga-sync keeps
+`lfx.fga-sync.*` messages in the `fga-sync-events` stream and retries a failed
+one for about 94 minutes, so a legacy grant still queued, or published by a
+replica on the old release, can land after a revocation sent through `fga`
+and restore the access. Before the first `fga` message for an object type, no
+replica may still publish that type to `lfx.fga-sync.*`, and fga-sync's
+consumer must have no message pending or awaiting acknowledgement. Until
+then the producer holds that type's changes and sends them through `fga`
+once both hold; it must not drop them.
+
 ### Idempotence and retry
 
 Replaying an identical request converges: OpenSearch overwrites by document id,

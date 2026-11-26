@@ -73,7 +73,7 @@ func TestNATSKV_Conformance(t *testing.T) {
 		fresh: func(t *testing.T) contracts.FGACache {
 			name := newBucketName()
 			createBucket(t, js, name)
-			c := newNATSKVStore(js, name)
+			c := newNATSKVStore(js, name, "")
 			require.NoError(t, c.connect(testContext(t)))
 			return c
 		},
@@ -82,7 +82,7 @@ func TestNATSKV_Conformance(t *testing.T) {
 			goneJS := connectJetStream(t, gone)
 			name := newBucketName()
 			createBucket(t, goneJS, name)
-			c := newNATSKVStore(goneJS, name)
+			c := newNATSKVStore(goneJS, name, "")
 			require.NoError(t, c.connect(testContext(t)))
 			gone.Shutdown()
 			return c
@@ -95,7 +95,7 @@ func TestNATSKV_InvalidationWrittenByFGASyncHidesOlderEntries(t *testing.T) {
 	js := connectJetStream(t, startJetStream(t))
 	name := newBucketName()
 	kv := createBucket(t, js, name)
-	c := newNATSKVStore(js, name)
+	c := newNATSKVStore(js, name, "")
 	require.NoError(t, c.connect(ctx))
 
 	m, err := c.CurrentMarker(ctx)
@@ -118,7 +118,7 @@ func TestNATSKV_EntryWrittenByFGASyncIsReadable(t *testing.T) {
 	js := connectJetStream(t, startJetStream(t))
 	name := newBucketName()
 	kv := createBucket(t, js, name)
-	c := newNATSKVStore(js, name)
+	c := newNATSKVStore(js, name, "")
 	require.NoError(t, c.connect(ctx))
 
 	relationKey := RelationKey("project:00000000-0000-4000-8000-000000000001", "writer", "user:example-user")
@@ -140,7 +140,7 @@ func TestNATSKV_InvalidateMarkerIsItsOwnWrite(t *testing.T) {
 		name := newBucketName()
 		kv, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: name, History: 20, TTL: 3 * time.Hour})
 		require.NoError(t, err)
-		c := newNATSKVStore(js, name)
+		c := newNATSKVStore(js, name, "")
 		require.NoError(t, c.connect(ctx))
 
 		// Writer A grants and invalidates; writer B revokes and invalidates
@@ -166,7 +166,7 @@ func TestNATSKV_InvalidateMarkerIsItsOwnWrite(t *testing.T) {
 		ctx := testContext(t)
 		name := newBucketName()
 		kv := createBucket(t, js, name)
-		c := newNATSKVStore(js, name)
+		c := newNATSKVStore(js, name, "")
 		require.NoError(t, c.connect(ctx))
 
 		revA, err := kv.Put(ctx, InvalidationKey, []byte("1"))
@@ -191,7 +191,7 @@ func TestNATSKV_SetDoesNotPublishResultsFromBeforeAnInvalidation(t *testing.T) {
 	js := connectJetStream(t, startJetStream(t))
 	name := newBucketName()
 	kv := createBucket(t, js, name)
-	c := newNATSKVStore(js, name)
+	c := newNATSKVStore(js, name, "")
 	require.NoError(t, c.connect(ctx))
 
 	beforeCheck, err := c.CurrentMarker(ctx)
@@ -211,7 +211,7 @@ func TestNATSKV_SetRemovesResultsWhenInvalidatedDuringTheWrites(t *testing.T) {
 	js := connectJetStream(t, startJetStream(t))
 	name := newBucketName()
 	kv := createBucket(t, js, name)
-	c := newNATSKVStore(js, name)
+	c := newNATSKVStore(js, name, "")
 	require.NoError(t, c.connect(ctx))
 
 	beforeCheck, err := c.CurrentMarker(ctx)
@@ -272,7 +272,7 @@ func newFaultStore(t *testing.T) (*natsKVStore, jetstream.KeyValue, *faultKV) {
 	js := connectJetStream(t, startJetStream(t))
 	name := newBucketName()
 	kv := createBucket(t, js, name)
-	c := newNATSKVStore(js, name)
+	c := newNATSKVStore(js, name, "")
 	require.NoError(t, c.connect(testContext(t)))
 	fault := &faultKV{KeyValue: kv}
 	c.kv = fault
@@ -407,7 +407,7 @@ func TestNATSKV_InvalidateReturnsMarkerOfItsWrite(t *testing.T) {
 	name := newBucketName()
 	kv, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: name, History: 20, TTL: 3 * time.Hour})
 	require.NoError(t, err)
-	c := newNATSKVStore(js, name)
+	c := newNATSKVStore(js, name, "")
 	require.NoError(t, c.connect(ctx))
 
 	first, err := invalidate(ctx, c)
@@ -426,7 +426,7 @@ func TestNATSKV_OnlyExactTrueOrFalseIsAResult(t *testing.T) {
 	js := connectJetStream(t, startJetStream(t))
 	name := newBucketName()
 	kv := createBucket(t, js, name)
-	c := newNATSKVStore(js, name)
+	c := newNATSKVStore(js, name, "")
 	require.NoError(t, c.connect(ctx))
 
 	for _, value := range []string{"1", "T", "TRUE", "yes"} {
@@ -447,7 +447,7 @@ func TestNATSKV_MissingBucketBypassesThenRecovers(t *testing.T) {
 	name := newBucketName()
 	logger, buf := newTestLogger()
 
-	c := newFailSafe(newNATSKVStore(js, name), time.Second, 50*time.Millisecond, logger)
+	c := newFailSafe(newNATSKVStore(js, name, ""), time.Second, 50*time.Millisecond, logger)
 	defer c.Close()
 
 	_, err := c.CurrentMarker(ctx)

@@ -239,9 +239,16 @@ func (c *failSafe) Invalidate(
 	return m, onlyMine, nil
 }
 
+// Seed counts a seed skipped because a marker moved during the write as an
+// overtaken invalidation; the store is healthy, so it is not an error.
 func (c *failSafe) Seed(ctx context.Context, relationKeys []string, m contracts.InvalidationMarker) error {
 	return c.call(ctx, func(ctx context.Context) error {
-		return c.inner.Seed(ctx, relationKeys, m)
+		err := c.inner.Seed(ctx, relationKeys, m)
+		if errors.Is(err, errSeedOvertaken) {
+			c.metrics.overtaken(ctx)
+			return nil
+		}
+		return err
 	})
 }
 

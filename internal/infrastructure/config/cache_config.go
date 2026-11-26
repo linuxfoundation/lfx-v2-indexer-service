@@ -31,6 +31,10 @@ type CacheConfig struct {
 	RetryInterval time.Duration `json:"retry_interval"`
 	Bucket        string        `json:"bucket"`
 	TTL           time.Duration `json:"ttl"`
+	// AuthModelID is the authorization model the FGA writer pins, from
+	// OPENFGA_AUTH_MODEL_ID. When set, NATS KV seeds are skipped while
+	// lfx-v2-fga-sync has announced another model.
+	AuthModelID string `json:"auth_model_id"`
 
 	ValkeyAddr     string `json:"valkey_addr"`
 	ValkeyTLS      bool   `json:"valkey_tls"`
@@ -46,9 +50,10 @@ type CacheConfig struct {
 // loadCacheConfig reads the CACHE_* and VALKEY_* settings.
 func loadCacheConfig() CacheConfig {
 	c := CacheConfig{
-		Backend:    os.Getenv("CACHE_BACKEND"),
-		Bucket:     os.Getenv("CACHE_BUCKET"),
-		ValkeyAddr: os.Getenv("VALKEY_ADDR"),
+		Backend:     os.Getenv("CACHE_BACKEND"),
+		Bucket:      os.Getenv("CACHE_BUCKET"),
+		ValkeyAddr:  os.Getenv("VALKEY_ADDR"),
+		AuthModelID: os.Getenv("OPENFGA_AUTH_MODEL_ID"),
 	}
 	if c.Backend == "" {
 		c.Backend = CacheBackendNone
