@@ -19,6 +19,7 @@ var ErrCacheBypassed = errors.New("fga cache bypassed")
 type InvalidationMarker struct {
 	at         time.Time
 	revision   uint64
+	startSeq   uint64
 	generation string
 	counter    int64
 }
@@ -38,6 +39,18 @@ func (m InvalidationMarker) WithRevision(revision uint64) InvalidationMarker {
 // Revision returns the store revision set by WithRevision.
 func (m InvalidationMarker) Revision() uint64 {
 	return m.revision
+}
+
+// WithStartSeq returns m carrying the store's last sequence when it was read,
+// for backends whose Seed checks which markers were written after it.
+func (m InvalidationMarker) WithStartSeq(seq uint64) InvalidationMarker {
+	m.startSeq = seq
+	return m
+}
+
+// StartSeq returns the store sequence set by WithStartSeq.
+func (m InvalidationMarker) StartSeq() uint64 {
+	return m.startSeq
 }
 
 // NewCounterMarker returns a marker for backends that compare an
@@ -97,7 +110,9 @@ type FGACache interface {
 	// marker returned by the Invalidate that followed that write. Seed only
 	// when that Invalidate reported onlyMine: another invalidation in between
 	// may belong to a later change to the same tuples, such as a removal,
-	// which the seed would undo.
+	// which the seed would undo. A backend shared with lfx-v2-fga-sync also
+	// skips the seed when one of fga-sync's narrower markers for the keys
+	// moved during the write.
 	Seed(ctx context.Context, relationKeys []string, m InvalidationMarker) error
 
 	// HealthCheck reports whether the store is reachable. It is never part

@@ -96,7 +96,7 @@ func TestNATSKV_Identity(t *testing.T) {
 	runIdentityConformance(t, func(t *testing.T) identityBackend {
 		name := newBucketName()
 		createBucket(t, js, name)
-		return newNATSKVStore(js, name)
+		return newNATSKVStore(js, name, "")
 	})
 }
 
@@ -159,7 +159,7 @@ func TestNATSKV_IdentityExpiry(t *testing.T) {
 	js := connectJetStream(t, startJetStream(t))
 	name := newBucketName()
 	kv := createBucket(t, js, name)
-	s := newNATSKVStore(js, name)
+	s := newNATSKVStore(js, name, "")
 	key, err := identityKey("testuser01")
 	require.NoError(t, err)
 	for _, found := range []bool{false, true} {

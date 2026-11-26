@@ -6,6 +6,7 @@ A high-performance, indexer service for the LFX V2 platform that processes resou
 > The authoritative generic indexer event contract lives in
 > [`docs/indexer-contract.md`](docs/indexer-contract.md). Caller examples live
 > in [`docs/client-guide.md`](docs/client-guide.md).
+> FGA-protected object types are listed in [`docs/fga-protected-types.md`](docs/fga-protected-types.md).
 
 > **Audit envelope version 2:** public types and preflight validators are defined
 > in [`docs/audit-v2-contract.md`](docs/audit-v2-contract.md). Processing is
@@ -435,7 +436,7 @@ The cache exports these OpenTelemetry counters:
 | `fga_cache.misses` | Relation keys absent or stale in the cache |
 | `fga_cache.errors` | Calls that failed in the store; the cache is then bypassed until it recovers |
 | `fga_cache.bypasses` | Calls that skipped the store because the cache was down or saturated |
-| `fga_cache.invalidations_overtaken` | Invalidations that could not show they were the only one since the write's marker read (another invalidation landed, or the conditional write failed); their seeds are skipped. Seeds skipped after a failed marker read are usually counted here too |
+| `fga_cache.invalidations_overtaken` | Invalidations that could not show they were the only one since the write's marker read (another invalidation landed, or the conditional write failed); their seeds are skipped. Also counts `natskv` seeds skipped or removed because a scoped fga-sync marker for their keys moved, or `inv.model` names another model than the pinned one. Seeds skipped after a failed marker read are usually counted here too |
 
 In the Helm chart, set `cache.backend` (default `none`) and the other `cache.*`
 values. A local Helm install that should use the cache sets

@@ -36,6 +36,9 @@ const repairTimeout = time.Second
 type natsKVStore struct {
 	js     jetstream.JetStream
 	bucket string
+	// modelID is the authorization model the FGA writer pins; empty when it
+	// writes with the store's latest model.
+	modelID string
 
 	mu sync.RWMutex
 	kv jetstream.KeyValue
@@ -51,8 +54,12 @@ type natsKVStore struct {
 	afterWrites func()
 }
 
-func newNATSKVStore(js jetstream.JetStream, bucket string) *natsKVStore {
-	return &natsKVStore{js: js, bucket: bucket}
+// errSeedOvertaken means a seed was skipped, or what it wrote was removed,
+// because a marker that applies to its keys moved during the write.
+var errSeedOvertaken = errors.New("fga cache seed overtaken by an invalidation")
+
+func newNATSKVStore(js jetstream.JetStream, bucket, modelID string) *natsKVStore {
+	return &natsKVStore{js: js, bucket: bucket, modelID: modelID}
 }
 
 func (s *natsKVStore) connect(ctx context.Context) error {
@@ -105,11 +112,28 @@ func (s *natsKVStore) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
+// CurrentMarker also records the bucket's last sequence, read first: every
+// marker written after it has a higher revision, which is how Seed tells that
+// a marker moved during the write that followed. The sequence comes from a
+// stream handle of its own: kv.Status rewrites stream info that concurrent
+// Gets on the shared handle read.
 func (s *natsKVStore) CurrentMarker(ctx context.Context) (contracts.InvalidationMarker, error) {
 	kv, err := s.bound(ctx)
 	if err != nil {
 		return contracts.InvalidationMarker{}, err
 	}
+	stream, err := s.js.Stream(ctx, "KV_"+s.bucket)
+	if err != nil {
+		return contracts.InvalidationMarker{}, fmt.Errorf("KV bucket %q stream info: %w", s.bucket, err)
+	}
+	m, err := s.invMarker(ctx, kv)
+	if err != nil {
+		return contracts.InvalidationMarker{}, err
+	}
+	return m.WithStartSeq(stream.CachedInfo().State.LastSeq), nil
+}
+
+func (s *natsKVStore) invMarker(ctx context.Context, kv jetstream.KeyValue) (contracts.InvalidationMarker, error) {
 	entry, err := kv.Get(ctx, InvalidationKey)
 	switch {
 	case errors.Is(err, jetstream.ErrKeyNotFound):
@@ -162,7 +186,7 @@ func (s *natsKVStore) Set(ctx context.Context, results map[string]bool, m contra
 	if err != nil {
 		return err
 	}
-	current, err := s.CurrentMarker(ctx)
+	current, err := s.invMarker(ctx, kv)
 	if err != nil {
 		return err
 	}
@@ -188,7 +212,7 @@ func (s *natsKVStore) Set(ctx context.Context, results map[string]bool, m contra
 		// The failed Put may be stored after any marker read made now.
 		return errors.Join(writeErr, s.hide(ctx, kv, attempted))
 	}
-	current, err = s.CurrentMarker(ctx)
+	current, err = s.invMarker(ctx, kv)
 	if err == nil && !current.Time().After(m.Time()) {
 		return nil
 	}
@@ -256,7 +280,7 @@ func (s *natsKVStore) Invalidate(
 	if err != nil {
 		return contracts.InvalidationMarker{}, false, err
 	}
-	return m, onlyMine, nil
+	return m.WithStartSeq(before.StartSeq()), onlyMine, nil
 }
 
 // markerAt returns the marker written at revision. When a later invalidation
@@ -272,7 +296,7 @@ func (s *natsKVStore) markerAt(ctx context.Context, kv jetstream.KeyValue, revis
 	if !errors.Is(err, jetstream.ErrKeyNotFound) {
 		return contracts.InvalidationMarker{}, fmt.Errorf("read own invalidation marker: %w", err)
 	}
-	current, err := s.CurrentMarker(ctx)
+	current, err := s.invMarker(ctx, kv)
 	if err != nil {
 		return contracts.InvalidationMarker{}, err
 	}
@@ -282,10 +306,69 @@ func (s *natsKVStore) markerAt(ctx context.Context, kv jetstream.KeyValue, revis
 	return contracts.NewTimeMarker(current.Time().Add(-time.Nanosecond)), nil
 }
 
+// Seed checks lfx-v2-fga-sync's scoped markers for the keys, and inv.model,
+// before and after its writes, as Set does for inv: fga-sync's lookups honor
+// them, so a revocation recorded only there must not be undone by the seed.
+// m.StartSeq is the bucket sequence read before the write.
 func (s *natsKVStore) Seed(ctx context.Context, relationKeys []string, m contracts.InvalidationMarker) error {
+	kv, err := s.bound(ctx)
+	if err != nil {
+		return err
+	}
+	markers := scopedMarkerKeys(relationKeys)
+	overtaken, err := s.seedOvertaken(ctx, kv, markers, m.StartSeq())
+	if err != nil {
+		return err
+	}
+	if overtaken {
+		return errSeedOvertaken
+	}
 	results := make(map[string]bool, len(relationKeys))
+	cacheKeys := make([]string, 0, len(relationKeys))
 	for _, relationKey := range relationKeys {
 		results[relationKey] = true
+		cacheKeys = append(cacheKeys, CacheKey(relationKey))
 	}
-	return s.Set(ctx, results, m)
+	if err := s.Set(ctx, results, m); err != nil {
+		return err
+	}
+	overtaken, err = s.seedOvertaken(ctx, kv, markers, m.StartSeq())
+	if err == nil && !overtaken {
+		return nil
+	}
+	if hideErr := s.hide(ctx, kv, cacheKeys); hideErr != nil || err != nil {
+		return errors.Join(err, hideErr)
+	}
+	return errSeedOvertaken
+}
+
+// seedOvertaken reports whether a marker in markers was written after
+// startSeq, or inv.model names another model than the pinned one. A missing
+// marker has not moved, and a missing inv.model matches every model.
+func (s *natsKVStore) seedOvertaken(
+	ctx context.Context, kv jetstream.KeyValue, markers []string, startSeq uint64,
+) (bool, error) {
+	for _, key := range markers {
+		entry, err := kv.Get(ctx, key)
+		if errors.Is(err, jetstream.ErrKeyNotFound) {
+			continue
+		}
+		if err != nil {
+			return false, fmt.Errorf("read scoped invalidation marker: %w", err)
+		}
+		if entry.Revision() > startSeq {
+			return true, nil
+		}
+	}
+	if s.modelID == "" {
+		return false, nil
+	}
+	entry, err := kv.Get(ctx, ModelMarkerKey)
+	switch {
+	case errors.Is(err, jetstream.ErrKeyNotFound):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("read model marker: %w", err)
+	}
+	return string(entry.Value()) != s.modelID, nil
 }

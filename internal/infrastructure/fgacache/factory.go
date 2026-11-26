@@ -45,7 +45,7 @@ func New(cfg config.CacheConfig, nc *natsgo.Conn, logger *slog.Logger) *Cache {
 			logger.Warn("FGA cache turned off: JetStream unavailable", "error", err.Error())
 			return off()
 		}
-		c := newFailSafe(newNATSKVStore(js, cfg.Bucket), cfg.Timeout, cfg.RetryInterval, logger)
+		c := newFailSafe(newNATSKVStore(js, cfg.Bucket, cfg.AuthModelID), cfg.Timeout, cfg.RetryInterval, logger)
 		return &Cache{FGACache: c, IdentityCache: c, Backend: cfg.Backend, close: c.Close}
 	case config.CacheBackendValkey:
 		store := newValkeyStore(cfg)
