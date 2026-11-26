@@ -39,6 +39,10 @@ type natsKVStore struct {
 	// modelID is the authorization model the FGA writer pins; empty when it
 	// writes with the store's latest model.
 	modelID string
+	// sawOtherModel is set once inv.model has named another model, and cleared
+	// only when it names modelID, so a marker that then expires or is deleted
+	// keeps blocking seeds, as lfx-v2-fga-sync's modelFence does.
+	sawOtherModel atomic.Bool
 
 	mu sync.RWMutex
 	kv jetstream.KeyValue
@@ -344,7 +348,8 @@ func (s *natsKVStore) Seed(ctx context.Context, relationKeys []string, m contrac
 
 // seedOvertaken reports whether a marker in markers was written after
 // startSeq, or inv.model names another model than the pinned one. A missing
-// marker has not moved, and a missing inv.model matches every model.
+// marker has not moved, and a missing inv.model matches every model unless
+// another model has been seen since modelID was last announced.
 func (s *natsKVStore) seedOvertaken(
 	ctx context.Context, kv jetstream.KeyValue, markers []string, startSeq uint64,
 ) (bool, error) {
@@ -366,9 +371,11 @@ func (s *natsKVStore) seedOvertaken(
 	entry, err := kv.Get(ctx, ModelMarkerKey)
 	switch {
 	case errors.Is(err, jetstream.ErrKeyNotFound):
-		return false, nil
+		return s.sawOtherModel.Load(), nil
 	case err != nil:
 		return false, fmt.Errorf("read model marker: %w", err)
 	}
-	return string(entry.Value()) != s.modelID, nil
+	other := string(entry.Value()) != s.modelID
+	s.sawOtherModel.Store(other)
+	return other, nil
 }

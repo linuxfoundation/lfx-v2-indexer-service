@@ -592,6 +592,15 @@ in the same release, so only one service writes that type's tuples. The
 object types and their operations are listed in
 [fga-protected-types.md](fga-protected-types.md).
 
+The release alone does not make the indexer the only writer. fga-sync keeps
+`lfx.fga-sync.*` messages in the `fga-sync-events` stream and retries a failed
+one for about 94 minutes, so a legacy grant still queued, or published by a
+replica on the old release, can land after a revocation sent through `fga`
+and restore the access. Before the first `fga` message for an object type, no
+replica may still publish that type to `lfx.fga-sync.*`, and fga-sync's
+consumer must have no message pending or awaiting acknowledgement. Until
+then the producer holds that type's changes or keeps its `fga` path off.
+
 ### Idempotence and retry
 
 Replaying an identical request converges: OpenSearch overwrites by document id,

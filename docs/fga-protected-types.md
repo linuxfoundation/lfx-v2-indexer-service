@@ -73,7 +73,7 @@ FGA contract: [docs/fga-contract.md](https://github.com/linuxfoundation/lfx-v2-v
 
 | Object type | Operations |
 |-------------|------------|
-| `vote` | `update_access`, `delete_access` |
+| `vote` | `update_access`, `delete_access`, `member_put`, `member_remove` |
 | `vote_response` | `update_access`, `delete_access` |
 
 ### Surveys: `lfx-v2-survey-service`
@@ -101,11 +101,12 @@ FGA contract: [docs/fga-contract.md](https://github.com/linuxfoundation/lfx-v2-m
 | Object type | Operations |
 |-------------|------------|
 | `b2b_org` | `update_access`, `delete_access` |
-| `project_membership` | `member_put`, `member_remove` |
+| `project_membership` | `update_access`, `delete_access`, `member_put`, `member_remove` |
 
-> `project_membership` only carries the `key_contact` relation, managed via
-> `member_put`/`member_remove`; the member service does not issue `update_access`
-> or `delete_access` for `project_membership` objects directly.
+> `project_membership` carries its `b2b_org` and `project` references through
+> `update_access` and its `key_contact` relation through
+> `member_put`/`member_remove`; `delete_access` removes a purged membership's
+> tuples.
 
 ---
 

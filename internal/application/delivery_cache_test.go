@@ -212,14 +212,24 @@ func TestDeliveryCache_FailedMarkerReadStillInvalidatesWithoutSeeding(t *testing
 // marker: its tuples are in OpenFGA, so entries cached before them are stale.
 func TestDeliveryCache_InvalidatesAfterTheRequestDeadline(t *testing.T) {
 	cache, kv, _ := natsKVCache(t)
+	replied := make(chan struct{})
 	writer := &fakeFGAWriter{
 		result: contracts.FGAWriteResult{Changed: true},
-		during: func() { time.Sleep(200 * time.Millisecond) },
+		during: func() { <-replied },
 	}
 	h := NewDeliveryHandler(&fakeIndex{}, writer, cache, 50*time.Millisecond, discardLogger())
 	before := invRevision(t, kv)
 
-	reply, atReply := deliverObservingInv(t, h, kv)
+	req, failure := parseDeliveryRequest(indexRequest(t, fgaOnly), deliverySubject)
+	require.Nil(t, failure)
+	var reply string
+	var atReply uint64
+	h.Handle(context.Background(), req, func(body []byte) error {
+		reply = string(body)
+		atReply = invRevision(t, kv)
+		close(replied)
+		return nil
+	})
 	require.Equal(t, "ERROR: transient: fga: timeout", reply)
 	require.Equal(t, before, atReply, "the reply goes out at the deadline, before the write lands")
 	require.Greater(t, invRevision(t, kv), before, "the marker must advance once the late write lands")

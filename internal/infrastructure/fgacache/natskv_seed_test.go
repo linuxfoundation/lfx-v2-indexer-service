@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -112,6 +113,36 @@ func TestNATSKV_SeedHonorsFGASyncModelMarker(t *testing.T) {
 	}
 }
 
+// Once another model has been announced, a missing inv.model keeps blocking
+// seeds until the pinned model is announced again (fga-sync's sawOther).
+func TestNATSKV_SeedStaysBlockedWhenAnotherModelsMarkerGoesMissing(t *testing.T) {
+	ctx := testContext(t)
+	js := connectJetStream(t, startJetStream(t))
+	name := newBucketName()
+	kv := createBucket(t, js, name)
+	c := newNATSKVStore(js, name, "model-a")
+	require.NoError(t, c.connect(ctx))
+	seed := func() error {
+		before, err := c.CurrentMarker(ctx)
+		require.NoError(t, err)
+		m, _, err := c.Invalidate(ctx, before)
+		require.NoError(t, err)
+		return c.Seed(ctx, []string{seededKey}, m)
+	}
+
+	putMarker(ModelMarkerKey, "model-b")(ctx, kv)
+	require.ErrorIs(t, seed(), errSeedOvertaken)
+
+	require.NoError(t, kv.Delete(ctx, ModelMarkerKey))
+	require.ErrorIs(t, seed(), errSeedOvertaken, "a missing marker after another model was seen")
+
+	putMarker(ModelMarkerKey, "model-a")(ctx, kv)
+	require.NoError(t, seed())
+
+	require.NoError(t, kv.Delete(ctx, ModelMarkerKey))
+	require.NoError(t, seed(), "a missing marker once the pinned model was announced again")
+}
+
 // A scoped marker written while the seed's entries are being written leaves
 // them readable until Seed re-reads the markers and removes them.
 func TestNATSKV_SeedRemovesEntriesWhenAMarkerMovesDuringItsWrites(t *testing.T) {
@@ -158,6 +189,43 @@ func TestNATSKV_SeedSkipsWhenAScopedMarkerCannotBeRead(t *testing.T) {
 	require.NoError(t, err)
 
 	c.kv = markerReadFailsKV{kv}
+	err = c.Seed(ctx, []string{seededKey}, m)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, errSeedOvertaken, "an unreadable marker is a store error, not an overtaken seed")
+
+	_, err = kv.Get(ctx, CacheKey(seededKey))
+	assert.ErrorIs(t, err, jetstream.ErrKeyNotFound)
+}
+
+// laterMarkerReadFailsKV fails reads of fga-sync's scoped markers after the
+// first one.
+type laterMarkerReadFailsKV struct {
+	jetstream.KeyValue
+	reads *atomic.Int32
+}
+
+func (kv laterMarkerReadFailsKV) Get(ctx context.Context, key string) (jetstream.KeyValueEntry, error) {
+	if strings.HasPrefix(key, typeMarkerPrefix) && kv.reads.Add(1) > 1 {
+		return nil, errors.New("marker read failed")
+	}
+	return kv.KeyValue.Get(ctx, key)
+}
+
+// A marker read that fails after the writes cannot tell whether a revocation
+// landed during them, so the written entries are removed.
+func TestNATSKV_SeedRemovesEntriesWhenAMarkerCannotBeReadAfterItsWrites(t *testing.T) {
+	ctx := testContext(t)
+	js := connectJetStream(t, startJetStream(t))
+	name := newBucketName()
+	kv := createBucket(t, js, name)
+	c := newNATSKVStore(js, name, "")
+	require.NoError(t, c.connect(ctx))
+	before, err := c.CurrentMarker(ctx)
+	require.NoError(t, err)
+	m, _, err := c.Invalidate(ctx, before)
+	require.NoError(t, err)
+
+	c.kv = laterMarkerReadFailsKV{KeyValue: kv, reads: new(atomic.Int32)}
 	err = c.Seed(ctx, []string{seededKey}, m)
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, errSeedOvertaken, "an unreadable marker is a store error, not an overtaken seed")
