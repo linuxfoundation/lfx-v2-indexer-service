@@ -143,6 +143,18 @@ func TestNATSKV_SeedStaysBlockedWhenAnotherModelsMarkerGoesMissing(t *testing.T)
 	require.NoError(t, seed(), "a missing marker once the pinned model was announced again")
 }
 
+// Concurrent seed checks can record their inv.model reads out of order; a
+// read of an older revision must not lift a block set by a newer one.
+func TestNATSKV_OlderModelObservationDoesNotLiftTheBlock(t *testing.T) {
+	c := newNATSKVStore(nil, "", "model-a")
+	c.observeModel(5, true)
+	c.observeModel(4, false)
+	assert.True(t, c.sawOtherModel)
+
+	c.observeModel(6, false)
+	assert.False(t, c.sawOtherModel)
+}
+
 // A scoped marker written while the seed's entries are being written leaves
 // them readable until Seed re-reads the markers and removes them.
 func TestNATSKV_SeedRemovesEntriesWhenAMarkerMovesDuringItsWrites(t *testing.T) {

@@ -580,7 +580,9 @@ them, when one of fga-sync's narrower markers for them (`inv.t.<type>`,
 `inv.u.<type>.<user>`) was written during the operation, or when
 `OPENFGA_AUTH_MODEL_ID` is set and `inv.model` names another model. fga-sync in
 scoped invalidation mode records a revocation only in those markers, so an
-entry written over one would undo it.
+entry written over one would undo it. Once `inv.model` has named another
+model, the entries stay skipped while the marker is missing, until it names
+the pinned model again or the indexer restarts.
 
 ### Moving from `lfx.fga-sync.*`
 
@@ -599,7 +601,8 @@ replica on the old release, can land after a revocation sent through `fga`
 and restore the access. Before the first `fga` message for an object type, no
 replica may still publish that type to `lfx.fga-sync.*`, and fga-sync's
 consumer must have no message pending or awaiting acknowledgement. Until
-then the producer holds that type's changes or keeps its `fga` path off.
+then the producer holds that type's changes and sends them through `fga`
+once both hold; it must not drop them.
 
 ### Idempotence and retry
 

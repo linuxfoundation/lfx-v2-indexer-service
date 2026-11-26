@@ -41,8 +41,12 @@ type natsKVStore struct {
 	modelID string
 	// sawOtherModel is set once inv.model has named another model, and cleared
 	// only when it names modelID, so a marker that then expires or is deleted
-	// keeps blocking seeds, as lfx-v2-fga-sync's modelFence does.
-	sawOtherModel atomic.Bool
+	// keeps blocking seeds, as lfx-v2-fga-sync's modelFence does. Seeds check
+	// concurrently, so modelRevision orders the observations: one older than
+	// the last recorded must not overwrite it.
+	modelMu       sync.Mutex
+	modelRevision uint64
+	sawOtherModel bool
 
 	mu sync.RWMutex
 	kv jetstream.KeyValue
@@ -371,11 +375,23 @@ func (s *natsKVStore) seedOvertaken(
 	entry, err := kv.Get(ctx, ModelMarkerKey)
 	switch {
 	case errors.Is(err, jetstream.ErrKeyNotFound):
-		return s.sawOtherModel.Load(), nil
+		s.modelMu.Lock()
+		defer s.modelMu.Unlock()
+		return s.sawOtherModel, nil
 	case err != nil:
 		return false, fmt.Errorf("read model marker: %w", err)
 	}
 	other := string(entry.Value()) != s.modelID
-	s.sawOtherModel.Store(other)
+	s.observeModel(entry.Revision(), other)
 	return other, nil
+}
+
+func (s *natsKVStore) observeModel(revision uint64, other bool) {
+	s.modelMu.Lock()
+	defer s.modelMu.Unlock()
+	if revision < s.modelRevision {
+		return
+	}
+	s.modelRevision = revision
+	s.sawOtherModel = other
 }
